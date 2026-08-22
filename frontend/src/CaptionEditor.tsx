@@ -4,7 +4,13 @@ import { clamp, frameIndexForTime, spriteBackgroundStyle, timeToX, xToTime } fro
 import type { Caption, FilmstripMeta, Gif, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
-const FONTS = ['Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
+// "Impact" (SPEC.md §4's example) is proprietary and often not installed
+// (browser or libass, which burns in captions) — silent OS-level font
+// substitution is unreliable across environments, so "Anton" (a free,
+// visually similar bold display font — see backend font-provisioning
+// notes) is offered as an explicit, real option and the default, while
+// Impact stays selectable for anyone whose system does have it.
+const FONTS = ['Anton, sans-serif', 'Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
 const MIN_CAPTION_DURATION = 0.25
 const MIN_GIF_RANGE = 0.1
 const BASE_TIMELINE_WIDTH = 700
