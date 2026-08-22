@@ -8,8 +8,10 @@ vi.mock('./api', () => ({
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
   thumbnailUrl: (id: string) => `/api/videos/${id}/thumbnail`,
+  videoFileUrl: (id: string) => `/api/videos/${id}/file`,
   getFilmstripMeta: vi.fn(),
   createExport: vi.fn(),
+  subscribeExportProgress: vi.fn(),
 }))
 
 import { getFilmstripMeta, listVideos } from './api'

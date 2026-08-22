@@ -137,6 +137,102 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
 }
 
 #[tokio::test]
+async fn video_file_serves_full_content_and_honors_range_requests() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes.clone());
+
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), StatusCode::CREATED);
+    let uploaded: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = uploaded["id"].as_str().unwrap();
+
+    // No Range header -> the whole file, 200.
+    let full_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/file"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full_response.status(), StatusCode::OK);
+    assert_eq!(
+        full_response.headers().get("accept-ranges").unwrap(),
+        "bytes"
+    );
+    let full_bytes = axum::body::to_bytes(full_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(full_bytes.len(), video_bytes.len());
+
+    // A byte-range request -> 206 Partial Content with just that slice —
+    // this is what makes `<video>` seeking fast/smooth instead of
+    // re-downloading the whole file on every seek.
+    let range_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/file"))
+                .header("range", "bytes=0-99")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(range_response.status(), StatusCode::PARTIAL_CONTENT);
+    let range_bytes = axum::body::to_bytes(range_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(range_bytes.len(), 100);
+    assert_eq!(&range_bytes[..], &video_bytes[0..100]);
+}
+
+#[tokio::test]
+async fn video_file_for_unknown_video_returns_404() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/api/videos/00000000-0000-0000-0000-000000000000/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn get_unknown_video_returns_404() {
     let test_app = spawn_app().await;
 

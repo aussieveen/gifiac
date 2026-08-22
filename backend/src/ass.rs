@@ -36,9 +36,11 @@ pub fn generate_ass(
         let style_name = format!("cap{i}");
         let pos_x = (caption.x * frame_width as f64).round() as i64;
         let pos_y = (caption.y * frame_height as f64).round() as i64;
+        let (margin_l, margin_r) = ass_margins(caption.x, caption.width, frame_width);
+        let (outline_colour, outline_width) = ass_outline(&caption.outline_color);
 
         styles.push_str(&format!(
-            "Style: {name},{font},{size},{color},&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,{align},10,10,10,1\n",
+            "Style: {name},{font},{size},{color},&H000000FF,{outline_colour},&H00000000,0,0,0,0,100,100,0,0,1,{outline_width},0,{align},{margin_l},{margin_r},10,1\n",
             name = style_name,
             font = ass_font_name(&caption.font_family),
             size = caption.font_size.round() as i64,
@@ -101,6 +103,31 @@ fn ass_color(hex: &str) -> String {
     format!("&H00{b}{g}{r}").to_uppercase()
 }
 
+/// ASS wraps text based on `PlayResX - MarginL - MarginR`, regardless of
+/// where `\pos` anchors the caption — so to get a wrap box that's
+/// `width` wide and centered on `x` (matching the frontend's resizable
+/// caption box, itself centered at `x`), the margins have to be derived
+/// from both, not just hardcoded. Clamps to the frame edges if the box
+/// would otherwise overflow them.
+fn ass_margins(x: f64, width: f64, frame_width: i64) -> (i64, i64) {
+    let half = (width / 2.0).max(0.0);
+    let left_edge = (x - half).clamp(0.0, 1.0);
+    let right_edge = (x + half).clamp(0.0, 1.0);
+    let margin_l = (left_edge * frame_width as f64).round() as i64;
+    let margin_r = ((1.0 - right_edge) * frame_width as f64).round() as i64;
+    (margin_l, margin_r)
+}
+
+/// `None` = no outline (optional per user request): zero-width outline is
+/// invisible regardless of colour, so the colour value doesn't matter in
+/// that case — still emits a valid ASS colour rather than an empty field.
+fn ass_outline(outline_color: &Option<String>) -> (String, i64) {
+    match outline_color {
+        Some(color) => (ass_color(color), 2),
+        None => ("&H00000000".to_string(), 0),
+    }
+}
+
 fn ass_alignment(align: CaptionAlign) -> u8 {
     // Middle row (4/5/6) so the vertical anchor matches the frontend's
     // always-vertically-centered `transform: translate(-50%, -50%)`.
@@ -145,6 +172,8 @@ mod tests {
             align: CaptionAlign::Center,
             x: 0.5,
             y: 0.88,
+            width: 0.6,
+            outline_color: Some("#000000".to_string()),
         }
     }
 
@@ -254,5 +283,65 @@ mod tests {
         assert!(ass.contains("[Script Info]"));
         assert!(ass.contains("[V4+ Styles]"));
         assert!(ass.contains("[Events]"));
+    }
+
+    #[test]
+    fn ass_margins_centers_the_wrap_box_around_x() {
+        // width=0.6 centered at x=0.5 on a 640-wide frame -> a 384px box
+        // with 128px on each side.
+        assert_eq!(ass_margins(0.5, 0.6, 640), (128, 128));
+    }
+
+    #[test]
+    fn ass_margins_clamps_to_the_frame_edge_instead_of_going_negative() {
+        // A box centered near the left edge would want a negative left
+        // margin; clamp to 0 instead of producing a nonsensical value.
+        let (margin_l, margin_r) = ass_margins(0.1, 0.6, 640);
+        assert_eq!(margin_l, 0);
+        assert_eq!(margin_r, 384); // (1 - (0.1+0.3)) * 640
+    }
+
+    #[test]
+    fn ass_outline_is_invisible_but_present_when_none() {
+        assert_eq!(ass_outline(&None), ("&H00000000".to_string(), 0));
+    }
+
+    #[test]
+    fn ass_outline_uses_the_requested_color_and_a_visible_width_when_some() {
+        assert_eq!(
+            ass_outline(&Some("#ff0000".to_string())),
+            ("&H000000FF".to_string(), 2)
+        );
+    }
+
+    #[test]
+    fn generate_ass_reflects_caption_width_in_the_style_margins() {
+        let mut c = caption("c1", 0.0, 1.0, "hi");
+        c.width = 0.6;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // x=0.5, width=0.6, frame_width=640 -> margins of 128,128 (see
+        // ass_margins_centers_the_wrap_box_around_x).
+        assert!(ass.contains(",128,128,10,1"));
+    }
+
+    #[test]
+    fn generate_ass_omits_the_outline_when_outline_color_is_none() {
+        let mut c = caption("c1", 0.0, 1.0, "hi");
+        c.outline_color = None;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // Outline width 0 right after BorderStyle=1.
+        assert!(ass.contains(",1,0,0,5,"));
+    }
+
+    #[test]
+    fn generate_ass_applies_the_requested_outline_color() {
+        let mut c = caption("c1", 0.0, 1.0, "hi");
+        c.outline_color = Some("#ff0000".to_string());
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // PrimaryColour, SecondaryColour, then OutlineColour = red-in-ABGR.
+        assert!(ass.contains("&H00FFFFFF,&H000000FF,&H000000FF,&H00000000"));
     }
 }

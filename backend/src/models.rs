@@ -36,6 +36,9 @@ pub struct FilmstripMeta {
 
 /// Caption data structure per SPEC.md §4 — camelCase on the wire, produced
 /// by the frontend editor and consumed here by the ASS subtitle generator.
+/// `width` and `outline_color` extend the original spec (user-requested:
+/// a resizable text box so long captions can be kept on one line, and an
+/// optional colored outline).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Caption {
@@ -49,6 +52,21 @@ pub struct Caption {
     pub align: CaptionAlign,
     pub x: f64,
     pub y: f64,
+    /// Caption box width, as a 0-1 fraction of the frame width, centered
+    /// on `x`. Controls where text wraps — a wider box fits more text on
+    /// one line. Defaulted (rather than required) so a request that omits
+    /// it — an older client, a hand-built request — still deserializes.
+    #[serde(default = "default_caption_width")]
+    pub width: f64,
+    /// `None` = no outline (optional, per user request — not every
+    /// caption should be forced to have one). `#[serde(default)]` so a
+    /// missing key means "no outline" rather than a deserialize error.
+    #[serde(default)]
+    pub outline_color: Option<String>,
+}
+
+fn default_caption_width() -> f64 {
+    0.6
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createExport, getFilmstripMeta, listVideos, subscribeExportProgress, thumbnailUrl, uploadVideo } from './api'
+import { createExport, getFilmstripMeta, listVideos, subscribeExportProgress, thumbnailUrl, uploadVideo, videoFileUrl } from './api'
 import type { Caption } from './types'
 
 class FakeEventSource {
@@ -93,6 +93,12 @@ describe('thumbnailUrl', () => {
   })
 })
 
+describe('videoFileUrl', () => {
+  it('builds the raw video file path for a video id', () => {
+    expect(videoFileUrl('abc')).toBe('/api/videos/abc/file')
+  })
+})
+
 describe('createExport', () => {
   it('POSTs JSON with the snake_case export fields and camelCase captions', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ export_id: 'e1' }))
@@ -109,6 +115,8 @@ describe('createExport', () => {
         align: 'center',
         x: 0.5,
         y: 0.88,
+        width: 0.6,
+        outlineColor: '#000000',
       },
     ]
 

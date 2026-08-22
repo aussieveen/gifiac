@@ -1,6 +1,8 @@
 // Caption data structure per SPEC.md §4 — produced by the editor, consumed
 // by the export pipeline and the API. Field names are camelCase exactly as
-// given there.
+// given there. `width` and `outlineColor` extend the original spec
+// (user-requested: a resizable text box so long captions can be kept on
+// one line, and an optional colored outline).
 export interface Caption {
   id: string
   startTime: number // seconds, relative to the source clip
@@ -12,6 +14,8 @@ export interface Caption {
   align: 'left' | 'center' | 'right'
   x: number // 0-1 fractional position within the frame
   y: number // 0-1 fractional position within the frame
+  width: number // 0-1 fractional box width, centered on x — controls text wrap
+  outlineColor: string | null // hex, or null for no outline
 }
 
 // `videos` row shape returned by the backend (SPEC.md §2) — snake_case,

@@ -2,11 +2,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Multipart, Path as AxPath, State};
+use axum::extract::{Multipart, Path as AxPath, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use tokio::io::AsyncWriteExt;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 use uuid::Uuid;
 
 use crate::db;
@@ -145,6 +147,26 @@ pub async fn get_thumbnail(
         .await
         .map_err(|_| AppError::NotFound)?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
+/// Streams the raw source video, delegating to `tower_http`'s `ServeFile`
+/// so HTTP Range requests work (required for smooth seeking in an HTML5
+/// `<video>` element — the caption editor's live preview plays this
+/// directly, per the "play the clip with captions to line up timing"
+/// feature).
+pub async fn get_video_file(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    request: Request,
+) -> Result<Response, AppError> {
+    let (uuid, video) = load_video(&state, &id).await?;
+    let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
+
+    // ServeFile's Service is Infallible — a missing/unreadable file
+    // produces a 404/500 *response*, not an Err, so `.unwrap()` here can
+    // never actually panic.
+    let response = ServeFile::new(video_path).oneshot(request).await.unwrap();
+    Ok(response.into_response())
 }
 
 pub async fn get_filmstrip_meta(

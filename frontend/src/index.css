@@ -52,6 +52,13 @@ button {
 
 /* ---------- preview + style panel ---------- */
 
+.preview-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .preview-frame {
   position: relative;
   border-radius: 4px;
@@ -59,26 +66,51 @@ button {
   flex-shrink: 0;
   user-select: none;
   background-color: #0d0e12;
-  background-repeat: no-repeat;
+}
+
+.preview-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none; /* dragging captions shouldn't trigger native video controls/selection */
+}
+
+.preview-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .preview-caption {
   position: absolute;
   transform: translate(-50%, -50%);
-  text-shadow:
-    2px 2px 0 #000,
-    -2px -2px 0 #000,
-    2px -2px 0 #000,
-    -2px 2px 0 #000;
   white-space: pre-wrap;
-  max-width: 90%;
-  text-align: center;
   cursor: move;
   padding: 2px 6px;
+  box-sizing: border-box;
 }
 
 .preview-caption.selected {
   outline: 1px dashed #f5c518;
+}
+
+.preview-caption-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+  background: rgba(245, 197, 24, 0.6);
+}
+
+.preview-caption-handle.left {
+  left: -10px;
+}
+
+.preview-caption-handle.right {
+  right: -10px;
 }
 
 .va-top {

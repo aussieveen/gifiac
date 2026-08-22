@@ -31,6 +31,10 @@ export function thumbnailUrl(id: string): string {
   return `/api/videos/${id}/thumbnail`
 }
 
+export function videoFileUrl(id: string): string {
+  return `/api/videos/${id}/file`
+}
+
 // Body shape per SPEC.md §5 "Exports": snake_case fields at the top level
 // (matching the `gifs` table columns), a camelCase `captions` array
 // (matching the caption data structure in §4).

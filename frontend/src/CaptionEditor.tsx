@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { createExport, subscribeExportProgress } from './api'
-import { clamp, frameIndexForTime, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
+import { createExport, subscribeExportProgress, videoFileUrl } from './api'
+import { clamp, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
@@ -13,20 +13,30 @@ import { useWindowDrag } from './useWindowDrag'
 const FONTS = ['Anton, sans-serif', 'Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
 const MIN_CAPTION_DURATION = 0.25
 const MIN_GIF_RANGE = 0.1
+const DEFAULT_CAPTION_WIDTH = 0.6
+const MIN_CAPTION_WIDTH = 0.05
+const MAX_CAPTION_WIDTH = 1
 const BASE_TIMELINE_WIDTH = 700
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3]
 const DEFAULT_ZOOM_INDEX = 2 // ZOOM_LEVELS[2] === 1
-// The backend renders film-strip frames at the same scaled-down width the
-// export pipeline burns captions into (see backend/src/scale.rs
-// MAX_WIDTH), so displaying the sprite at 1:1 is both crisp *and* what
-// makes caption font-size/position in this preview match the real export
-// pixel-for-pixel — no separate preview-only scale factor needed.
+// The live preview box is sized from the film-strip's frame dimensions
+// (see backend/src/scale.rs MAX_WIDTH) — the same scaled-down size the
+// export pipeline burns captions into — so caption font-size/position in
+// this preview matches the real export pixel-for-pixel, even though the
+// preview itself plays the actual <video> (full source resolution,
+// CSS-scaled to fit the box) rather than a cropped film-strip frame.
 const PREVIEW_SCALE = 1
 
 interface Props {
   video: Video
   filmstrip: FilmstripMeta
   onBack: () => void
+}
+
+/** Mirrors the backend's optional ASS outline: `null` renders no border. */
+function outlineTextShadow(outlineColor: string | null): string {
+  if (!outlineColor) return 'none'
+  return `2px 2px 0 ${outlineColor}, -2px -2px 0 ${outlineColor}, 2px -2px 0 ${outlineColor}, -2px 2px 0 ${outlineColor}`
 }
 
 function newCaptionId(): string {
@@ -49,6 +59,8 @@ function defaultCaption(id: string, start: number, end: number): Caption {
     // "defaults to bottom-center on creation" — SPEC.md §4.
     x: 0.5,
     y: 0.88,
+    width: DEFAULT_CAPTION_WIDTH,
+    outlineColor: '#000000',
   }
 }
 
@@ -71,6 +83,12 @@ interface PositionDrag {
   origX: number
   origY: number
 }
+interface WidthDrag {
+  id: string
+  edge: 'left' | 'right'
+  startX: number
+  origWidth: number
+}
 
 export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const duration = video.duration_seconds
@@ -86,8 +104,10 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
 
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const exportUnsubscribeRef = useRef<(() => void) | null>(null)
 
   // A component unmounting mid-export (e.g. "back to library" clicked
@@ -163,9 +183,35 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     startRangeWindowDrag({ edge, startX: e.clientX, orig: gifRange[edge] })
   }
 
+  function seekTo(time: number) {
+    setCurrentTime(time)
+    if (videoRef.current) videoRef.current.currentTime = time
+  }
+
   function scrubTo(e: React.MouseEvent<HTMLDivElement>) {
+    // Scrubbing implies "let me look at this exact frame" — pause first so
+    // playback doesn't immediately carry the playhead away from it again.
+    videoRef.current?.pause()
     const rect = e.currentTarget.getBoundingClientRect()
-    setCurrentTime(xToTime(e.clientX - rect.left, duration, timelineWidth))
+    seekTo(xToTime(e.clientX - rect.left, duration, timelineWidth))
+  }
+
+  function togglePlayback() {
+    const video = videoRef.current
+    if (!video) return
+    // Driven off `isPlaying` (updated via onPlay/onPause) rather than
+    // `video.paused` directly, so this stays correct even if something
+    // else pauses the element without going through this state.
+    if (isPlaying) {
+      video.pause()
+    } else {
+      video.play()
+    }
+  }
+
+  function handleVideoTimeUpdate() {
+    const video = videoRef.current
+    if (video) setCurrentTime(video.currentTime)
   }
 
   const startPositionWindowDrag = useWindowDrag<PositionDrag>((e, drag) => {
@@ -193,8 +239,28 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     })
   }
 
+  // Symmetric resize around the fixed center x — dragging either edge
+  // changes only width, matching how the box is always centered on x
+  // (translate(-50%, -50%)), so a delta on one edge moves the box's total
+  // width by twice that delta.
+  const startWidthWindowDrag = useWindowDrag<WidthDrag>((e, drag) => {
+    const box = previewRef.current
+    if (!box) return
+    const rect = box.getBoundingClientRect()
+    if (rect.width === 0) return
+    const deltaFraction = (e.clientX - drag.startX) / rect.width
+    const sign = drag.edge === 'right' ? 1 : -1
+    const newWidth = clamp(drag.origWidth + sign * deltaFraction * 2, MIN_CAPTION_WIDTH, MAX_CAPTION_WIDTH)
+    updateCaption(drag.id, { width: newWidth })
+  })
+
+  function startWidthDrag(e: React.MouseEvent, caption: Caption, edge: WidthDrag['edge']) {
+    e.stopPropagation()
+    setSelectedId(caption.id)
+    startWidthWindowDrag({ id: caption.id, edge, startX: e.clientX, origWidth: caption.width })
+  }
+
   const activeCaptions = captions.filter((c) => currentTime >= c.startTime && currentTime <= c.endTime)
-  const frameIndex = frameIndexForTime(currentTime, filmstrip.interval, filmstrip.frameCount)
   const previewWidth = filmstrip.frameWidth * PREVIEW_SCALE
   const previewHeight = filmstrip.frameHeight * PREVIEW_SCALE
 
@@ -247,15 +313,17 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
       </p>
 
       <div className="va-top">
-        <div
-          className="preview-frame"
-          ref={previewRef}
-          style={{
-            width: previewWidth,
-            height: previewHeight,
-            ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, PREVIEW_SCALE),
-          }}
-        >
+        <div className="preview-col">
+        <div className="preview-frame" ref={previewRef} style={{ width: previewWidth, height: previewHeight }}>
+          <video
+            ref={videoRef}
+            src={videoFileUrl(video.id)}
+            className="preview-video"
+            preload="auto"
+            onTimeUpdate={handleVideoTimeUpdate}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+          />
           {activeCaptions.map((c) => (
             <div
               key={c.id}
@@ -264,15 +332,31 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
               style={{
                 left: `${c.x * 100}%`,
                 top: `${c.y * 100}%`,
+                width: `${c.width * 100}%`,
                 fontFamily: c.fontFamily,
                 fontSize: c.fontSize,
                 color: c.color,
                 textAlign: c.align,
+                textShadow: outlineTextShadow(c.outlineColor),
               }}
             >
               {c.text}
+              {selectedId === c.id && (
+                <>
+                  <div className="preview-caption-handle left" onMouseDown={(e) => startWidthDrag(e, c, 'left')} />
+                  <div className="preview-caption-handle right" onMouseDown={(e) => startWidthDrag(e, c, 'right')} />
+                </>
+              )}
             </div>
           ))}
+        </div>
+
+        <div className="preview-controls">
+          <button className="va-btn" onClick={togglePlayback}>
+            {isPlaying ? '⏸ Pause' : '▶ Play'}
+          </button>
+          <span className="va-hint">{currentTime.toFixed(2)}s</span>
+        </div>
         </div>
 
         <div className="va-style-panel">
@@ -321,6 +405,24 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                     {a}
                   </button>
                 ))}
+              </div>
+              <div className="va-style-row">
+                <label className="va-hint">
+                  <input
+                    type="checkbox"
+                    checked={selected.outlineColor !== null}
+                    onChange={(e) => patchStyle({ outlineColor: e.target.checked ? (selected.outlineColor ?? '#000000') : null })}
+                  />{' '}
+                  Outline
+                </label>
+                {selected.outlineColor !== null && (
+                  <input
+                    aria-label="Outline color"
+                    type="color"
+                    value={selected.outlineColor}
+                    onChange={(e) => patchStyle({ outlineColor: e.target.value })}
+                  />
+                )}
               </div>
               <label className="va-hint">
                 <input type="checkbox" checked={applyToAll} onChange={(e) => setApplyToAll(e.target.checked)} /> All

@@ -15,6 +15,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(videos::list_videos).post(videos::upload_video),
         )
         .route("/videos/{id}", get(videos::get_video))
+        .route("/videos/{id}/file", get(videos::get_video_file))
         .route("/videos/{id}/thumbnail", get(videos::get_thumbnail))
         .route("/videos/{id}/filmstrip", get(videos::get_filmstrip_meta))
         .route(

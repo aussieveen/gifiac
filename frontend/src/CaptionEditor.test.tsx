@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CaptionEditor } from './CaptionEditor'
@@ -7,6 +7,7 @@ import type { FilmstripMeta, Video } from './types'
 vi.mock('./api', () => ({
   createExport: vi.fn(),
   subscribeExportProgress: vi.fn(),
+  videoFileUrl: (id: string) => `/api/videos/${id}/file`,
 }))
 
 import { createExport, subscribeExportProgress } from './api'
@@ -68,6 +69,59 @@ describe('CaptionEditor', () => {
     await user.type(textarea, 'Whoa!')
 
     expect(screen.getByText('Whoa!', { selector: '.va-track-pill' })).toBeInTheDocument()
+  })
+
+  it('defaults new captions to a visible black outline and a resizable box width', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+
+    await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
+    const payload = vi.mocked(createExport).mock.calls[0][0]
+    expect(payload.captions[0]).toMatchObject({ width: 0.6, outlineColor: '#000000' })
+  })
+
+  it('unchecking Outline hides the color picker and sends outlineColor: null', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    await user.click(screen.getByRole('checkbox', { name: /outline/i }))
+    expect(screen.queryByLabelText('Outline color')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(createExport).mock.calls[0][0].captions[0].outlineColor).toBeNull()
+  })
+
+  it('re-checking Outline after unchecking it brings the color picker back', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    const outlineCheckbox = screen.getByRole('checkbox', { name: /outline/i })
+    await user.click(outlineCheckbox)
+    await user.click(outlineCheckbox)
+
+    expect(screen.getByLabelText('Outline color')).toBeInTheDocument()
+  })
+
+  it('only shows width-resize handles on the selected caption', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    // The second (most recently added) caption is selected by default.
+    const previewCaptions = document.querySelectorAll('.preview-caption')
+    expect(previewCaptions).toHaveLength(2)
+    expect(previewCaptions[0].querySelectorAll('.preview-caption-handle')).toHaveLength(0)
+    expect(previewCaptions[1].querySelectorAll('.preview-caption-handle')).toHaveLength(2)
   })
 
   it('deleting a caption removes its track and clears the style panel', async () => {
@@ -213,5 +267,61 @@ describe('CaptionEditor', () => {
 
     await user.click(screen.getByRole('button', { name: /back to library/i }))
     expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('plays and pauses the underlying video element via the Play/Pause button', async () => {
+    // jsdom doesn't implement real media playback — stub the two methods
+    // the component calls and drive isPlaying via the play/pause events
+    // exactly as a real <video> element would fire them.
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLVideoElement) {
+      this.dispatchEvent(new Event('play'))
+      return Promise.resolve()
+    })
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLVideoElement) {
+      this.dispatchEvent(new Event('pause'))
+    })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+
+    const button = screen.getByRole('button', { name: '▶ Play' })
+    await user.click(button)
+    expect(playSpy).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '⏸ Pause' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '⏸ Pause' }))
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '▶ Play' })).toBeInTheDocument()
+
+    playSpy.mockRestore()
+    pauseSpy.mockRestore()
+  })
+
+  it('reflects the video element\'s playback position as it plays', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 3.25, configurable: true })
+    act(() => {
+      videoEl.dispatchEvent(new Event('timeupdate'))
+    })
+
+    expect(screen.getByText('3.25s')).toBeInTheDocument()
+  })
+
+  it('pauses the video and seeks it when the film-strip is clicked', () => {
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    const strip = document.querySelector('.va-filmstrip') as HTMLElement
+    // jsdom's real layout is all zeros; stub a 700px-wide strip so a click
+    // at clientX=350 (its midpoint) maps to a real, checkable time.
+    vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 700 } as DOMRect)
+
+    fireEvent.click(strip, { clientX: 350 })
+
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+    expect(videoEl.currentTime).toBeCloseTo(video.duration_seconds / 2, 1)
+
+    pauseSpy.mockRestore()
   })
 })
