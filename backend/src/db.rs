@@ -5,6 +5,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use crate::models::{NewVideo, Video};
 
+const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
+
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -22,50 +24,38 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 pub async fn insert_video(pool: &SqlitePool, video: &NewVideo, uploaded_at: &str) -> Result<Video> {
-    sqlx::query_as::<_, Video>(
-        r#"
-        INSERT INTO videos
-            (id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at
-        "#,
-    )
-    .bind(&video.id)
-    .bind(&video.original_filename)
-    .bind(&video.extension)
-    .bind(video.file_size_bytes)
-    .bind(video.duration_seconds)
-    .bind(video.width)
-    .bind(video.height)
-    .bind(uploaded_at)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    let sql = format!(
+        "INSERT INTO videos ({VIDEO_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING {VIDEO_COLUMNS}"
+    );
+    sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
+        .bind(&video.id)
+        .bind(&video.original_filename)
+        .bind(&video.extension)
+        .bind(video.file_size_bytes)
+        .bind(video.duration_seconds)
+        .bind(video.width)
+        .bind(video.height)
+        .bind(uploaded_at)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn get_video(pool: &SqlitePool, id: &str) -> Result<Option<Video>> {
-    sqlx::query_as::<_, Video>(
-        r#"
-        SELECT id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at
-        FROM videos WHERE id = ?
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(Into::into)
+    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos WHERE id = ?");
+    sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<Video>> {
-    sqlx::query_as::<_, Video>(
-        r#"
-        SELECT id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at
-        FROM videos ORDER BY uploaded_at DESC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(Into::into)
+    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos ORDER BY uploaded_at DESC");
+    sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

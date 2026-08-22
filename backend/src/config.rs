@@ -16,6 +16,8 @@ impl Config {
             db_path: std::env::var("GIFIAC_DB_PATH")
                 .unwrap_or_else(|_| "/data/gifiac.db".to_string())
                 .into(),
+            // Fixed per SPEC.md §10 — host-side port mapping is left to the
+            // deployment tooling, so this is intentionally not env-driven.
             port: 8080,
         }
     }

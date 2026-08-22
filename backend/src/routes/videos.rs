@@ -17,6 +17,30 @@ use crate::models::{FilmstripMeta, NewVideo, Video};
 use crate::paths;
 use crate::state::AppState;
 
+/// Looks up a video by its (string) path-param id, parsing it as a UUID
+/// along the way so callers that need the id for path derivation don't
+/// have to parse it a second time.
+async fn load_video(state: &AppState, id: &str) -> Result<(Uuid, Video), AppError> {
+    let uuid = Uuid::parse_str(id).map_err(|_| AppError::NotFound)?;
+    let video = db::get_video(&state.pool, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok((uuid, video))
+}
+
+/// Best-effort removal of a partially-written upload after probing or
+/// thumbnailing fails, so failed uploads don't accumulate as orphan files.
+async fn remove_partial_upload(video_path: &std::path::Path, reason: &str) {
+    if let Err(err) = tokio::fs::remove_file(video_path).await {
+        tracing::warn!(
+            path = %video_path.display(),
+            %reason,
+            error = %err,
+            "failed to clean up partial upload"
+        );
+    }
+}
+
 pub async fn upload_video(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
@@ -64,7 +88,7 @@ pub async fn upload_video(
     let probe = match probe_result {
         Ok(probe) => probe,
         Err(err) => {
-            let _ = tokio::fs::remove_file(&video_path).await;
+            remove_partial_upload(&video_path, "ffmpeg probe failed").await;
             return Err(AppError::BadRequest(format!(
                 "failed to probe uploaded video: {err}"
             )));
@@ -75,7 +99,7 @@ pub async fn upload_video(
     if let Err(err) =
         ffmpeg::generate_thumbnail(&video_path, &thumb_path, probe.duration_seconds).await
     {
-        let _ = tokio::fs::remove_file(&video_path).await;
+        remove_partial_upload(&video_path, "thumbnail generation failed").await;
         return Err(AppError::Internal(anyhow::anyhow!(
             "failed to generate thumbnail: {err}"
         )));
@@ -106,9 +130,7 @@ pub async fn get_video(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Video>, AppError> {
-    let video = db::get_video(&state.pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let (_, video) = load_video(&state, &id).await?;
     Ok(Json(video))
 }
 
@@ -116,10 +138,7 @@ pub async fn get_thumbnail(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
-    db::get_video(&state.pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let (uuid, _video) = load_video(&state, &id).await?;
 
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
     let bytes = tokio::fs::read(&thumb_path)
@@ -132,9 +151,7 @@ pub async fn get_filmstrip_meta(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<FilmstripMeta>, AppError> {
-    let video = db::get_video(&state.pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let (_, video) = load_video(&state, &id).await?;
     let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
 
     Ok(Json(FilmstripMeta {
@@ -152,13 +169,21 @@ pub async fn get_filmstrip_image(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
-    let video = db::get_video(&state.pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let (uuid, video) = load_video(&state, &id).await?;
 
     let sprite_path = paths::filmstrip_sprite_path(&state.config.video_dir, &uuid);
-    if !tokio::fs::try_exists(&sprite_path).await.unwrap_or(false) {
+    let sprite_exists = match tokio::fs::try_exists(&sprite_path).await {
+        Ok(exists) => exists,
+        Err(err) => {
+            tracing::warn!(
+                path = %sprite_path.display(),
+                error = %err,
+                "failed to check filmstrip cache, regenerating"
+            );
+            false
+        }
+    };
+    if !sprite_exists {
         let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
         let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
         ffmpeg::generate_filmstrip_sprite(&video_path, &sprite_path, &layout)

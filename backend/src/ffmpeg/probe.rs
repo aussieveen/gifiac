@@ -1,18 +1,24 @@
 use std::path::Path;
-use std::sync::Once;
+use std::sync::OnceLock;
 
 use thiserror::Error;
 
-static FFMPEG_INIT: Once = Once::new();
+// A plain `Once` + `expect()` would panic every upload request after the
+// first if initialization ever failed (poisoning the `Once`). Cache the
+// `Result` instead so a bad environment surfaces as a normal `ProbeError`.
+static FFMPEG_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
-fn ensure_ffmpeg_initialized() {
-    FFMPEG_INIT.call_once(|| {
-        ffmpeg_next::init().expect("failed to initialize ffmpeg library");
-    });
+fn ensure_ffmpeg_initialized() -> Result<(), ProbeError> {
+    FFMPEG_INIT
+        .get_or_init(|| ffmpeg_next::init().map_err(|e| e.to_string()))
+        .clone()
+        .map_err(ProbeError::Init)
 }
 
 #[derive(Debug, Error)]
 pub enum ProbeError {
+    #[error("failed to initialize ffmpeg library: {0}")]
+    Init(String),
     #[error("failed to open video file: {0}")]
     Open(#[source] ffmpeg_next::Error),
     #[error("no video stream found")]
@@ -32,7 +38,7 @@ pub struct ProbeResult {
 /// synchronous ffmpeg-next bindings) — callers on an async runtime should
 /// run this inside `spawn_blocking`.
 pub fn probe_video(path: &Path) -> Result<ProbeResult, ProbeError> {
-    ensure_ffmpeg_initialized();
+    ensure_ffmpeg_initialized()?;
 
     let input = ffmpeg_next::format::input(path).map_err(ProbeError::Open)?;
 
