@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CaptionEditor } from './CaptionEditor'
@@ -6,9 +6,11 @@ import type { FilmstripMeta, Video } from './types'
 
 vi.mock('./api', () => ({
   createExport: vi.fn(),
+  subscribeExportProgress: vi.fn(),
 }))
 
-import { createExport } from './api'
+import { createExport, subscribeExportProgress } from './api'
+import type { ExportProgressHandlers } from './api'
 
 const video: Video = {
   id: 'v1',
@@ -33,6 +35,8 @@ const filmstrip: FilmstripMeta = {
 
 beforeEach(() => {
   vi.mocked(createExport).mockReset()
+  vi.mocked(subscribeExportProgress).mockReset()
+  vi.mocked(subscribeExportProgress).mockReturnValue(() => {})
 })
 
 describe('CaptionEditor', () => {
@@ -95,7 +99,7 @@ describe('CaptionEditor', () => {
     }
   })
 
-  it('keeps Make GIF disabled until a name is entered, then submits the export payload', async () => {
+  it('keeps Make GIF disabled until a name is entered, then submits the export payload and subscribes to progress', async () => {
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
@@ -118,10 +122,46 @@ describe('CaptionEditor', () => {
     expect(payload.captions).toHaveLength(1)
     expect(payload.captions[0]).toMatchObject({ text: 'New caption', x: 0.5, y: 0.88 })
 
-    await screen.findByText(/export requested/i)
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalledWith('exp-1', expect.anything()))
+    expect(makeGifButton).toBeDisabled() // still submitting until progress reports complete/error
   })
 
-  it('shows an error message when the export request fails', async () => {
+  it('shows live progress and the completed gif once the SSE stream reports it', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    act(() => handlers.onProgress?.('encoding_gif', 42))
+    await screen.findByText(/encoding_gif.*42%/)
+
+    act(() =>
+      handlers.onComplete?.({
+        id: 'g1',
+        video_id: 'v1',
+        name: 'my clip',
+        caption_text: '',
+        captions_json: null,
+        gif_range_start: 0,
+        gif_range_end: 8,
+        width: 480,
+        height: 270,
+        created_at: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    await screen.findByText(/"my clip" is ready \(480×270\)/)
+    expect(screen.getByRole('button', { name: 'Make GIF' })).toBeEnabled()
+  })
+
+  it('shows an error message when the initial export request fails', async () => {
     vi.mocked(createExport).mockRejectedValue(new Error('/api/exports failed (404): not found'))
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
@@ -130,6 +170,40 @@ describe('CaptionEditor', () => {
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
 
     await screen.findByText(/not found/i)
+  })
+
+  it('shows an error message when the SSE stream reports a pipeline failure', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    act(() => handlers.onError?.('ffmpeg exploded'))
+
+    await screen.findByText('ffmpeg exploded')
+    expect(screen.getByRole('button', { name: 'Make GIF' })).toBeEnabled()
+  })
+
+  it('unsubscribes from export progress on unmount', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    const unsubscribe = vi.fn()
+    vi.mocked(subscribeExportProgress).mockReturnValue(unsubscribe)
+    const user = userEvent.setup()
+    const { unmount } = render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    unmount()
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
   it('calls onBack when the back link is clicked', async () => {

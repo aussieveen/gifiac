@@ -1,12 +1,15 @@
+pub mod ass;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod exports;
 pub mod ffmpeg;
 pub mod filmstrip_layout;
 pub mod models;
 pub mod paths;
 pub mod routes;
 pub mod state;
+pub mod storage;
 
 use std::sync::Arc;
 
@@ -23,7 +26,21 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let pool = db::create_pool(&config.db_path).await?;
     db::run_migrations(&pool).await?;
 
-    Ok(Arc::new(AppState { pool, config }))
+    let r2 = storage::R2Config::from_env()?;
+    let storage = storage::Storage::new(
+        &r2.endpoint_url(),
+        &r2.bucket_name,
+        &r2.public_base_url,
+        &r2.access_key_id,
+        &r2.secret_access_key,
+    );
+
+    Ok(Arc::new(AppState {
+        pool,
+        config,
+        storage,
+        export_jobs: Default::default(),
+    }))
 }
 
 pub fn build_app(state: Arc<AppState>) -> Router {

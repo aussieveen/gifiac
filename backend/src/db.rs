@@ -3,9 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-use crate::models::{NewVideo, Video};
+use crate::models::{Gif, NewGif, NewVideo, Video};
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, created_at";
 
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
@@ -54,6 +55,26 @@ pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<Video>> {
     let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos ORDER BY uploaded_at DESC");
     sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Result<Gif> {
+    let sql = format!(
+        "INSERT INTO gifs ({GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
+    );
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(&gif.id)
+        .bind(&gif.video_id)
+        .bind(&gif.name)
+        .bind(&gif.caption_text)
+        .bind(&gif.captions_json)
+        .bind(gif.gif_range_start)
+        .bind(gif.gif_range_end)
+        .bind(gif.width)
+        .bind(gif.height)
+        .bind(created_at)
+        .fetch_one(pool)
         .await
         .map_err(Into::into)
 }
@@ -126,5 +147,62 @@ mod tests {
         let videos = list_videos(&pool).await.unwrap();
         let ids: Vec<&str> = videos.iter().map(|v| v.id.as_str()).collect();
         assert_eq!(ids, vec!["newer", "older"]);
+    }
+
+    #[tokio::test]
+    async fn insert_gif_round_trips_including_nullable_fields() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        let gif = insert_gif(
+            &pool,
+            &NewGif {
+                id: "g1".to_string(),
+                video_id: Some("v1".to_string()),
+                name: "My GIF".to_string(),
+                caption_text: "hello world".to_string(),
+                captions_json: Some("[]".to_string()),
+                gif_range_start: 1.0,
+                gif_range_end: 4.0,
+                width: 480,
+                height: 270,
+            },
+            "2026-08-22T00:00:01Z",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(gif.id, "g1");
+        assert_eq!(gif.video_id.as_deref(), Some("v1"));
+        assert_eq!(gif.name, "My GIF");
+        assert_eq!(gif.width, 480);
+    }
+
+    #[tokio::test]
+    async fn insert_gif_allows_null_video_id_and_captions_json_for_imports() {
+        let pool = test_pool().await;
+
+        let gif = insert_gif(
+            &pool,
+            &NewGif {
+                id: "imported".to_string(),
+                video_id: None,
+                name: "imported.gif".to_string(),
+                caption_text: String::new(),
+                captions_json: None,
+                gif_range_start: 0.0,
+                gif_range_end: 0.0,
+                width: 200,
+                height: 200,
+            },
+            "2026-08-22T00:00:01Z",
+        )
+        .await
+        .unwrap();
+
+        assert!(gif.video_id.is_none());
+        assert!(gif.captions_json.is_none());
     }
 }

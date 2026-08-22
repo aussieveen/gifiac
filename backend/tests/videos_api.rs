@@ -1,93 +1,10 @@
-use std::path::PathBuf;
-use std::process::Command;
-use std::sync::Arc;
-
-use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use gifiac_backend::config::Config;
-use gifiac_backend::db;
-use gifiac_backend::state::AppState;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-/// Spins up the real router against a scratch video dir + throwaway sqlite
-/// file so tests exercise actual FFmpeg probing/thumbnail/filmstrip
-/// generation, not mocks.
-struct TestApp {
-    app: Router,
-    video_dir: PathBuf,
-    _tempdir: TempDir,
-}
-
-async fn spawn_app() -> TestApp {
-    let tempdir = TempDir::new().unwrap();
-    let video_dir = tempdir.path().join("videos");
-    std::fs::create_dir_all(&video_dir).unwrap();
-    let db_path = tempdir.path().join("gifiac.db");
-
-    let config = Config {
-        video_dir: video_dir.clone(),
-        db_path,
-        port: 0,
-    };
-
-    let pool = db::create_pool(&config.db_path).await.unwrap();
-    db::run_migrations(&pool).await.unwrap();
-
-    let state = Arc::new(AppState { pool, config });
-    let app = gifiac_backend::build_app(state);
-
-    TestApp {
-        app,
-        video_dir,
-        _tempdir: tempdir,
-    }
-}
-
-/// Generates a tiny synthetic test clip (solid color, no audio) with the
-/// system `ffmpeg` binary so tests don't need to ship a fixture video file.
-fn make_test_video(dir: &std::path::Path, duration_seconds: f64) -> PathBuf {
-    let path = dir.join("source.mp4");
-    let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            &format!("color=c=blue:s=320x240:d={duration_seconds}"),
-            "-pix_fmt",
-            "yuv420p",
-            path.to_str().unwrap(),
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("failed to run ffmpeg to build test fixture");
-    assert!(status.success(), "ffmpeg fixture generation failed");
-    path
-}
-
-fn multipart_body(
-    field_name: &str,
-    filename: &str,
-    content_type: &str,
-    bytes: Vec<u8>,
-) -> (String, Vec<u8>) {
-    let boundary = "----gifiac-test-boundary".to_string();
-    let mut body = Vec::new();
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
-    body.extend_from_slice(&bytes);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    (boundary, body)
-}
+mod common;
+use common::{make_test_video, multipart_body, spawn_app};
 
 #[tokio::test]
 async fn upload_probes_generates_thumbnail_and_lists_the_video() {

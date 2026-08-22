@@ -37,3 +37,18 @@ export interface FilmstripMeta {
   interval: number
   imageUrl: string
 }
+
+// `gifs` row shape (SPEC.md §2) — snake_case, matching the SQLite column
+// names, same convention as `Video`.
+export interface Gif {
+  id: string
+  video_id: string | null
+  name: string
+  caption_text: string
+  captions_json: string | null
+  gif_range_start: number
+  gif_range_end: number
+  width: number
+  height: number
+  created_at: string
+}

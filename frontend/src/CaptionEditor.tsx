@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react'
-import { createExport } from './api'
+import { useEffect, useRef, useState } from 'react'
+import { createExport, subscribeExportProgress } from './api'
 import { clamp, frameIndexForTime, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 const FONTS = ['Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
@@ -77,9 +77,17 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const [name, setName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportId, setExportId] = useState<string | null>(null)
+  const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
+  const [completedGif, setCompletedGif] = useState<Gif | null>(null)
 
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const exportUnsubscribeRef = useRef<(() => void) | null>(null)
+
+  // A component unmounting mid-export (e.g. "back to library" clicked
+  // while exporting) must stop the SSE subscription instead of leaving it
+  // calling back into torn-down state setters — same leak class fixed in
+  // useWindowDrag.
+  useEffect(() => () => exportUnsubscribeRef.current?.(), [])
 
   const timelineWidth = BASE_TIMELINE_WIDTH * ZOOM_LEVELS[zoomIndex]
   const selected = captions.find((c) => c.id === selectedId) ?? null
@@ -192,6 +200,8 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     if (!trimmedName) return
     setSubmitting(true)
     setExportError(null)
+    setCompletedGif(null)
+    setExportProgress(null)
     try {
       const result = await createExport({
         video_id: video.id,
@@ -200,10 +210,21 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
         gif_range_start: Number(gifRange.start.toFixed(2)),
         gif_range_end: Number(gifRange.end.toFixed(2)),
       })
-      setExportId(result.export_id)
+      exportUnsubscribeRef.current = subscribeExportProgress(result.export_id, {
+        onProgress: (stage, percent) => setExportProgress({ stage, percent }),
+        onComplete: (gif) => {
+          setCompletedGif(gif)
+          setExportProgress(null)
+          setSubmitting(false)
+        },
+        onError: (message) => {
+          setExportError(message)
+          setExportProgress(null)
+          setSubmitting(false)
+        },
+      })
     } catch (err) {
       setExportError(err instanceof Error ? err.message : String(err))
-    } finally {
       setSubmitting(false)
     }
   }
@@ -395,8 +416,17 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
         </div>
       </div>
 
+      {exportProgress && (
+        <p className="va-hint">
+          {exportProgress.stage} — {exportProgress.percent}%
+        </p>
+      )}
       {exportError && <p className="export-error">{exportError}</p>}
-      {exportId && <p className="export-success">Export requested — id {exportId}.</p>}
+      {completedGif && (
+        <p className="export-success">
+          "{completedGif.name}" is ready ({completedGif.width}×{completedGif.height}).
+        </p>
+      )}
     </div>
   )
 }

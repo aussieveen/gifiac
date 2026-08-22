@@ -1,6 +1,32 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createExport, getFilmstripMeta, listVideos, thumbnailUrl, uploadVideo } from './api'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createExport, getFilmstripMeta, listVideos, subscribeExportProgress, thumbnailUrl, uploadVideo } from './api'
 import type { Caption } from './types'
+
+class FakeEventSource {
+  static instances: FakeEventSource[] = []
+  url: string
+  closed = false
+  private listeners: Record<string, Array<(e: MessageEvent) => void>> = {}
+
+  constructor(url: string) {
+    this.url = url
+    FakeEventSource.instances.push(this)
+  }
+
+  addEventListener(type: string, handler: (e: MessageEvent) => void) {
+    ;(this.listeners[type] ??= []).push(handler)
+  }
+
+  close() {
+    this.closed = true
+  }
+
+  emit(type: string, data?: string) {
+    for (const handler of this.listeners[type] ?? []) {
+      handler({ data } as MessageEvent)
+    }
+  }
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -106,5 +132,84 @@ describe('createExport', () => {
       gif_range_start: 1,
       gif_range_end: 4,
     })
+  })
+})
+
+describe('subscribeExportProgress', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  it('opens a connection to the export id\'s progress endpoint', () => {
+    subscribeExportProgress('exp1', {})
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+    expect(FakeEventSource.instances[0].url).toBe('/api/exports/exp1/progress')
+  })
+
+  it('reports each stage event with its stage name and percent', () => {
+    const onProgress = vi.fn()
+    subscribeExportProgress('exp1', { onProgress })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('encoding_gif', JSON.stringify({ percent: 42 }))
+
+    expect(onProgress).toHaveBeenCalledWith('encoding_gif', 42)
+  })
+
+  it('reports every documented pipeline stage', () => {
+    const onProgress = vi.fn()
+    subscribeExportProgress('exp1', { onProgress })
+    const source = FakeEventSource.instances[0]
+
+    for (const stage of ['palette_gen', 'encoding_gif', 'encoding_mp4', 'encoding_webm', 'uploading']) {
+      source.emit(stage, JSON.stringify({ percent: 10 }))
+    }
+
+    expect(onProgress).toHaveBeenCalledTimes(5)
+  })
+
+  it('reports the completed gif and closes the connection', () => {
+    const onComplete = vi.fn()
+    subscribeExportProgress('exp1', { onComplete })
+    const source = FakeEventSource.instances[0]
+    const gif = { id: 'g1', name: 'x' }
+
+    source.emit('complete', JSON.stringify(gif))
+
+    expect(onComplete).toHaveBeenCalledWith(gif)
+    expect(source.closed).toBe(true)
+  })
+
+  it('reports a pipeline failure and closes the connection', () => {
+    const onError = vi.fn()
+    subscribeExportProgress('exp1', { onError })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('error', JSON.stringify({ message: 'ffmpeg exploded' }))
+
+    expect(onError).toHaveBeenCalledWith('ffmpeg exploded')
+    expect(source.closed).toBe(true)
+  })
+
+  it('ignores a native connection-drop error event (no JSON data)', () => {
+    const onError = vi.fn()
+    subscribeExportProgress('exp1', { onError })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('error', undefined)
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(source.closed).toBe(false)
+  })
+
+  it('returns an unsubscribe function that closes the connection', () => {
+    const unsubscribe = subscribeExportProgress('exp1', {})
+    const source = FakeEventSource.instances[0]
+
+    unsubscribe()
+
+    expect(source.closed).toBe(true)
   })
 })
