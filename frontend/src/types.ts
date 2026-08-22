@@ -43,7 +43,10 @@ export interface FilmstripMeta {
 }
 
 // `gifs` row shape (SPEC.md §2) — snake_case, matching the SQLite column
-// names, same convention as `Video`.
+// names, same convention as `Video`. The `_url` fields are derived by the
+// backend (never stored — SPEC.md §9) and only present on responses from
+// the archive endpoints (`GET/PATCH /api/gifs...`), not on the export
+// pipeline's SSE `complete` event, hence optional here.
 export interface Gif {
   id: string
   video_id: string | null
@@ -55,4 +58,7 @@ export interface Gif {
   width: number
   height: number
   created_at: string
+  gif_url?: string
+  mp4_url?: string
+  webm_url?: string
 }

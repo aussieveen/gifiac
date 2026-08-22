@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createExport, getFilmstripMeta, listVideos, subscribeExportProgress, thumbnailUrl, uploadVideo, videoFileUrl } from './api'
+import {
+  createExport,
+  deleteGif,
+  getFilmstripMeta,
+  getGif,
+  listGifs,
+  listVideos,
+  renameGif,
+  subscribeExportProgress,
+  thumbnailUrl,
+  uploadVideo,
+  videoFileUrl,
+} from './api'
 import type { Caption } from './types'
 
 class FakeEventSource {
@@ -140,6 +152,79 @@ describe('createExport', () => {
       gif_range_start: 1,
       gif_range_end: 4,
     })
+  })
+})
+
+describe('listGifs', () => {
+  it('GETs /api/gifs with no query string when q is omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listGifs()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs', undefined)
+  })
+
+  it('appends an encoded q param when a search term is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listGifs('cat & dog')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs?q=cat%20%26%20dog', undefined)
+  })
+
+  it('omits the query string when q is only whitespace', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listGifs('   ')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs', undefined)
+  })
+})
+
+describe('getGif', () => {
+  it('GETs the single-gif endpoint', async () => {
+    const gif = { id: 'g1' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(gif))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getGif('g1')).resolves.toEqual(gif)
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs/g1', undefined)
+  })
+})
+
+describe('renameGif', () => {
+  it('PATCHes the name as JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'g1', name: 'new name' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renameGif('g1', 'new name')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/gifs/g1')
+    expect(init.method).toBe('PATCH')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'new name' })
+  })
+})
+
+describe('deleteGif', () => {
+  it('DELETEs the gif', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteGif('g1')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs/g1', { method: 'DELETE' })
+  })
+
+  it('throws on a non-ok status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteGif('g1')).rejects.toThrow(/500/)
   })
 })
 

@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
+import { Archive } from './Archive'
 import { getFilmstripMeta } from './api'
 import { CaptionEditor } from './CaptionEditor'
 import type { FilmstripMeta, Video } from './types'
 import { VideoPicker } from './VideoPicker'
 
+type View = 'videos' | 'archive'
+
 export default function App() {
+  const [view, setView] = useState<View>('videos')
   const [video, setVideo] = useState<Video | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -33,28 +37,64 @@ export default function App() {
     setLoadError(null)
   }
 
+  const nav = (
+    <nav className="app-nav">
+      <button className={`app-nav-btn ${view === 'videos' ? 'active' : ''}`} onClick={() => setView('videos')}>
+        New GIF
+      </button>
+      <button className={`app-nav-btn ${view === 'archive' ? 'active' : ''}`} onClick={() => setView('archive')}>
+        Archive
+      </button>
+    </nav>
+  )
+
+  if (view === 'archive') {
+    return (
+      <>
+        {nav}
+        <Archive />
+      </>
+    )
+  }
+
   if (!video) {
-    return <VideoPicker onSelect={setVideo} />
+    return (
+      <>
+        {nav}
+        <VideoPicker onSelect={setVideo} />
+      </>
+    )
   }
 
   if (loadError) {
     return (
-      <div className="page">
-        <button className="back-link" onClick={backToLibrary}>
-          ← back to library
-        </button>
-        <p className="export-error">Failed to load film-strip: {loadError}</p>
-      </div>
+      <>
+        {nav}
+        <div className="page">
+          <button className="back-link" onClick={backToLibrary}>
+            ← back to library
+          </button>
+          <p className="export-error">Failed to load film-strip: {loadError}</p>
+        </div>
+      </>
     )
   }
 
   if (!filmstrip) {
     return (
-      <div className="page">
-        <p className="va-hint">Loading film-strip…</p>
-      </div>
+      <>
+        {nav}
+        <div className="page">
+          <p className="va-hint">Loading film-strip…</p>
+        </div>
+      </>
     )
   }
 
-  return <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToLibrary} />
+  return (
+    <>
+      {nav}
+      <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToLibrary} />
+    </>
+  )
 }

@@ -79,6 +79,72 @@ pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Re
         .map_err(Into::into)
 }
 
+/// SPEC.md §5: `q` matches `name` and `caption_text` **together** — one
+/// combined filter, no separate name/tag params. `None`/empty returns
+/// everything, newest first, no pagination (v1).
+pub async fn list_gifs(pool: &SqlitePool, q: Option<&str>) -> Result<Vec<Gif>> {
+    match q.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => {
+            let sql = format!(
+                "SELECT {GIF_COLUMNS} FROM gifs WHERE name LIKE ? ESCAPE '\\' OR caption_text LIKE ? ESCAPE '\\' ORDER BY created_at DESC"
+            );
+            let pattern = format!("%{}%", escape_like(q));
+            sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+                .bind(&pattern)
+                .bind(&pattern)
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+        None => {
+            let sql = format!("SELECT {GIF_COLUMNS} FROM gifs ORDER BY created_at DESC");
+            sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+    }
+}
+
+/// Escapes SQLite `LIKE` wildcards (`%`, `_`) in user-supplied search text,
+/// paired with `ESCAPE '\'` at the call site, so a search containing them
+/// is matched literally instead of as a pattern.
+fn escape_like(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+pub async fn get_gif(pool: &SqlitePool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = ?");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Renames a GIF in place (SPEC.md §5 `PATCH /api/gifs/{id}` — no
+/// re-export needed). Returns `None` if no row matched, so the route can
+/// tell "renamed" apart from "doesn't exist" without a separate lookup.
+pub async fn rename_gif(pool: &SqlitePool, id: &str, name: &str) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET name = ? WHERE id = ? RETURNING {GIF_COLUMNS}");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(name)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Returns `true` if a row was actually deleted, so the route can 404 on a
+/// nonexistent id rather than reporting a no-op delete as success.
+pub async fn delete_gif(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM gifs WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +270,104 @@ mod tests {
 
         assert!(gif.video_id.is_none());
         assert!(gif.captions_json.is_none());
+    }
+
+    fn sample_gif(id: &str, name: &str, caption_text: &str) -> NewGif {
+        NewGif {
+            id: id.to_string(),
+            video_id: None,
+            name: name.to_string(),
+            caption_text: caption_text.to_string(),
+            captions_json: None,
+            gif_range_start: 0.0,
+            gif_range_end: 1.0,
+            width: 480,
+            height: 270,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_gifs_with_no_query_returns_everything_newest_first() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("older", "a", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("newer", "b", ""), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+
+        let gifs = list_gifs(&pool, None).await.unwrap();
+        let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, vec!["newer", "older"]);
+    }
+
+    #[tokio::test]
+    async fn list_gifs_matches_name_or_caption_text() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("g1", "Cat jumping", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("g2", "Dog running", "cat sound"), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("g3", "Bird flying", ""), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        let gifs = list_gifs(&pool, Some("cat")).await.unwrap();
+        let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, vec!["g2", "g1"]); // matched via caption_text and name respectively, newest first
+    }
+
+    #[tokio::test]
+    async fn list_gifs_treats_a_blank_query_as_no_filter() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("g1", "a", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        let gifs = list_gifs(&pool, Some("   ")).await.unwrap();
+        assert_eq!(gifs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_gif_returns_none_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(get_gif(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn rename_gif_updates_the_name_and_returns_the_updated_row() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("g1", "old name", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        let renamed = rename_gif(&pool, "g1", "new name").await.unwrap().unwrap();
+        assert_eq!(renamed.name, "new name");
+        assert_eq!(get_gif(&pool, "g1").await.unwrap().unwrap().name, "new name");
+    }
+
+    #[tokio::test]
+    async fn rename_gif_returns_none_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(rename_gif(&pool, "missing", "x").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_gif_removes_the_row_and_reports_success() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("g1", "a", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        assert!(delete_gif(&pool, "g1").await.unwrap());
+        assert!(get_gif(&pool, "g1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_gif_reports_false_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(!delete_gif(&pool, "missing").await.unwrap());
     }
 }

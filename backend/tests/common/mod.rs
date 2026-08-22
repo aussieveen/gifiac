@@ -95,6 +95,138 @@ pub fn make_test_video(dir: &std::path::Path, duration_seconds: f64) -> PathBuf 
     path
 }
 
+/// Parses a raw SSE response body (`event: X\ndata: Y\n\n` blocks) into
+/// `(event, data)` pairs, in the order they were sent. Shared by any test
+/// that needs to drive an export job to completion, not just the export
+/// pipeline's own tests.
+pub fn parse_sse_events(body: &str) -> Vec<(String, String)> {
+    body.split("\n\n")
+        .filter(|block| !block.trim().is_empty())
+        .map(|block| {
+            let mut event = String::new();
+            let mut data = String::new();
+            for line in block.lines() {
+                if let Some(rest) = line.strip_prefix("event: ") {
+                    event = rest.to_string();
+                } else if let Some(rest) = line.strip_prefix("data: ") {
+                    data = rest.to_string();
+                }
+            }
+            (event, data)
+        })
+        .collect()
+}
+
+/// Uploads a synthetic test video, then runs a real export job to
+/// completion (draining its SSE stream) and returns the resulting `gifs`
+/// row — a real GIF with real R2 objects, for tests that need a GIF to
+/// already exist (archive listing/rename/delete) rather than testing the
+/// export pipeline itself.
+#[allow(dead_code)]
+pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> serde_json::Value {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 3.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), StatusCode::CREATED);
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+
+    let captions = if caption_text.is_empty() {
+        serde_json::json!([])
+    } else {
+        serde_json::json!([{
+            "id": "c1",
+            "startTime": 0.0,
+            "endTime": 1.0,
+            "text": caption_text,
+            "fontFamily": "Impact, sans-serif",
+            "fontSize": 28,
+            "color": "#ffffff",
+            "align": "center",
+            "x": 0.5,
+            "y": 0.88
+        }])
+    };
+    let request_body = serde_json::json!({
+        "video_id": video["id"],
+        "name": name,
+        "captions": captions,
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.0
+    });
+    let create_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let export_id = accepted["export_id"].as_str().unwrap().to_string();
+
+    let progress_response = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        test_app.app.clone().oneshot(
+            Request::builder()
+                .uri(format!("/api/exports/{export_id}/progress"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("SSE stream did not close within the timeout")
+    .unwrap();
+    let body_bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        axum::body::to_bytes(progress_response.into_body(), usize::MAX),
+    )
+    .await
+    .expect("reading the SSE body did not finish within the timeout")
+    .unwrap();
+    let body_text = String::from_utf8(body_bytes.to_vec()).unwrap();
+    let events = parse_sse_events(&body_text);
+    let (last_event, last_data) = events.last().expect("expected at least one SSE event");
+    assert_eq!(last_event, "complete", "export did not complete: {events:?}");
+    serde_json::from_str(last_data).unwrap()
+}
+
 pub fn multipart_body(
     field_name: &str,
     filename: &str,

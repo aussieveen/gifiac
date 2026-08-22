@@ -12,9 +12,12 @@ vi.mock('./api', () => ({
   getFilmstripMeta: vi.fn(),
   createExport: vi.fn(),
   subscribeExportProgress: vi.fn(),
+  listGifs: vi.fn(),
+  renameGif: vi.fn(),
+  deleteGif: vi.fn(),
 }))
 
-import { getFilmstripMeta, listVideos } from './api'
+import { getFilmstripMeta, listGifs, listVideos } from './api'
 
 const video: Video = {
   id: 'v1',
@@ -42,6 +45,7 @@ const otherVideo: Video = { ...video, id: 'v2', original_filename: 'other.mp4' }
 beforeEach(() => {
   vi.mocked(listVideos).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
+  vi.mocked(listGifs).mockReset()
 })
 
 describe('App', () => {
@@ -94,5 +98,33 @@ describe('App', () => {
     // (and clip.mp4's now-stale film-strip data) must not render at all.
     expect(screen.queryByRole('button', { name: 'Make GIF' })).not.toBeInTheDocument()
     expect(await screen.findByText(/loading film-strip/i)).toBeInTheDocument()
+  })
+
+  it('the Archive nav tab switches to the archive view', async () => {
+    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<App />)
+    await screen.findByText('Gifiac')
+    await user.click(screen.getByRole('button', { name: 'Archive' }))
+
+    await screen.findByText(/no gifs yet/i)
+    expect(listGifs).toHaveBeenCalled()
+  })
+
+  it('the New GIF nav tab returns from the archive view to the video picker', async () => {
+    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<App />)
+    await screen.findByText('Gifiac')
+    await user.click(screen.getByRole('button', { name: 'Archive' }))
+    await screen.findByText(/no gifs yet/i)
+
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+
+    await screen.findByText('Gifiac')
   })
 })

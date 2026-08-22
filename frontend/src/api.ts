@@ -100,3 +100,30 @@ export function subscribeExportProgress(exportId: string, handlers: ExportProgre
 
   return () => source.close()
 }
+
+// Archive endpoints per SPEC.md §5/§8.
+
+export function listGifs(q?: string): Promise<Gif[]> {
+  const query = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+  return request<Gif[]>(`/api/gifs${query}`)
+}
+
+export function getGif(id: string): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}`)
+}
+
+export function renameGif(id: string, name: string): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function deleteGif(id: string): Promise<void> {
+  const response = await fetch(`/api/gifs/${id}`, { method: 'DELETE' })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`/api/gifs/${id} failed (${response.status}): ${body || response.statusText}`)
+  }
+}
