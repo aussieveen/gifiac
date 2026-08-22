@@ -38,12 +38,14 @@ pub fn generate_ass(
         let pos_y = (caption.y * frame_height as f64).round() as i64;
         let (margin_l, margin_r) = ass_margins(caption.x, caption.width, frame_width);
         let (outline_colour, outline_width) = ass_outline(&caption.outline_color);
+        let font_name = ass_font_name(&caption.font_family);
+        let font_size = caption.font_size * ass_font_size_multiplier(&font_name);
 
         styles.push_str(&format!(
             "Style: {name},{font},{size},{color},&H000000FF,{outline_colour},&H00000000,0,0,0,0,100,100,0,0,1,{outline_width},0,{align},{margin_l},{margin_r},10,1\n",
             name = style_name,
-            font = ass_font_name(&caption.font_family),
-            size = caption.font_size.round() as i64,
+            font = font_name,
+            size = font_size.round() as i64,
             color = ass_color(&caption.color),
             align = ass_alignment(caption.align),
         ));
@@ -74,6 +76,27 @@ pub fn generate_ass(
          Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
          {events}"
     )
+}
+
+/// libass sizes text from the font file's own design metrics (units-per-em
+/// and ascent/descent from the font tables), which can diverge sharply from
+/// how a browser's Canvas/DOM text renderer sizes the *same* nominal
+/// "Fontsize" for the *same* font file. Measured directly: rendering "MY
+/// TURN" through the real subtitles-burn-in pipeline (libass, PlayResX
+/// 480/PlayResY 198) at Fontsize 32 and 64 and trimming the actual ink
+/// pixels gave 60x16 and 118x32; measuring the identical string via
+/// Canvas2D `measureText().actualBoundingBox*` at the same 32px/64px sizes
+/// in Chrome (same "Anton" font file) gave ink boxes of 102.7x29 and
+/// 205.4x56 — a consistent ~1.75x gap across both sizes and both
+/// dimensions (not an additive offset), so a caption that looks a given
+/// size in the live preview burns in visibly smaller without this
+/// correction. Other fonts haven't shown this gap and stay uncorrected
+/// until measured the same way.
+fn ass_font_size_multiplier(font_name: &str) -> f64 {
+    match font_name {
+        "Anton" => 1.75,
+        _ => 1.0,
+    }
 }
 
 /// `frame_family` is a CSS font stack like `"Impact, sans-serif"`; ASS
@@ -333,6 +356,26 @@ mod tests {
 
         // Outline width 0 right after BorderStyle=1.
         assert!(ass.contains(",1,0,0,5,"));
+    }
+
+    #[test]
+    fn generate_ass_scales_up_anton_fontsize_to_match_the_browser_preview() {
+        let mut c = caption("c1", 0.0, 1.0, "hi");
+        c.font_family = "Anton, sans-serif".to_string();
+        c.font_size = 64.0;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        assert!(ass.contains("Style: cap0,Anton,112,")); // 64 * 1.75 = 112
+    }
+
+    #[test]
+    fn generate_ass_leaves_other_fonts_fontsize_unscaled() {
+        let mut c = caption("c1", 0.0, 1.0, "hi");
+        c.font_family = "Georgia".to_string();
+        c.font_size = 64.0;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        assert!(ass.contains("Style: cap0,Georgia,64,"));
     }
 
     #[test]

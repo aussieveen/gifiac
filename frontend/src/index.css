@@ -1,3 +1,17 @@
+/* Self-hosted so the caption preview renders the same glyphs the backend
+   burns in via libass — relying on the OS to have "Anton" installed would
+   make the preview's font (and therefore its text wrapping/sizing) silently
+   diverge from the export whenever the browser's environment doesn't have
+   it, even though the export always does (see backend font-provisioning
+   notes). Font file + OFL.txt license from Google Fonts (SIL OFL 1.1). */
+@font-face {
+  font-family: 'Anton';
+  src: url('/fonts/Anton-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
 * {
   box-sizing: border-box;
 }
