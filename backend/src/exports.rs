@@ -67,12 +67,19 @@ async fn run_pipeline(
     let mp4_path = tmp_dir.path().join("out.mp4");
     let webm_path = tmp_dir.path().join("out.webm");
 
+    // The captions are burned in *after* the video is scaled down (see
+    // captioned_scale_filter's doc comment), so the ASS file's
+    // PlayResX/PlayResY — and thus caption font size and \pos() placement
+    // — must be the scaled output size, not the source's native
+    // resolution, to match what the frontend's live preview (built from
+    // the same scaled_dimensions) shows.
+    let (output_width, output_height) = crate::scale::scaled_dimensions(video.width, video.height);
     let ass = generate_ass(
         &request.captions,
         request.gif_range_start,
         request.gif_range_end,
-        video.width,
-        video.height,
+        output_width,
+        output_height,
     );
     tokio::fs::write(&ass_path, ass).await?;
 

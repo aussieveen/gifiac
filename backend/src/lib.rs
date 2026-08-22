@@ -8,6 +8,7 @@ pub mod filmstrip_layout;
 pub mod models;
 pub mod paths;
 pub mod routes;
+pub mod scale;
 pub mod state;
 pub mod storage;
 

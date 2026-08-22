@@ -1,29 +1,38 @@
 use std::path::Path;
 
+use crate::scale::MAX_WIDTH;
+
 use super::{FfmpegCliError, run_ffmpeg_with_progress};
 
-/// Provisional caps per SPEC.md §6 — "tunable constants, not hardcoded
+/// Provisional FPS cap per SPEC.md §6 — "tunable constants, not hardcoded
 /// values", expected to be revisited once real exported output has been
-/// reviewed.
+/// reviewed. The matching width cap lives in `crate::scale::MAX_WIDTH`,
+/// shared with the film-strip sprite so both agree on frame geometry.
 pub const EXPORT_FPS: u32 = 15;
-pub const EXPORT_MAX_WIDTH: u32 = 480;
 
-/// `scale='min(iw,W)':-2` scales down to `EXPORT_MAX_WIDTH` but never up
+/// `scale='min(iw,W)':-2` scales down to `MAX_WIDTH` but never up
 /// (`min(iw, W)`), and `-2` keeps the height even (required by libx264 /
 /// libvpx-vp9) while preserving aspect ratio.
 fn scale_filter() -> String {
-    format!("scale='min(iw\\,{EXPORT_MAX_WIDTH})':-2:flags=lanczos")
+    format!("scale='min(iw\\,{MAX_WIDTH})':-2:flags=lanczos")
 }
 
-/// The `-vf`/`-lavfi` prefix shared by every output format: burn in
-/// captions, then apply the shared fps/scale caps. Each caller appends its
-/// own suffix (`palettegen`, `paletteuse`, or nothing for a plain encode).
+/// The `-vf`/`-lavfi` prefix shared by every output format: scale first,
+/// *then* burn in captions, so the ASS file's `PlayResX`/`PlayResY` (set
+/// to the scaled output size — see `crate::scale::scaled_dimensions`) match
+/// the resolution libass actually renders text against. Burning captions
+/// before the scale (the original order) rendered them against the
+/// source's native resolution while the frontend's live preview sizes
+/// captions against the much-smaller film-strip frame, so caption font
+/// size and line-wrapping came out very different between preview and
+/// export. Each caller appends its own suffix (`palettegen`, `paletteuse`,
+/// or nothing for a plain encode).
 fn captioned_scale_filter(ass_path: &Path) -> String {
     format!(
-        "subtitles={ass},fps={fps},{scale}",
-        ass = escape_filter_path(ass_path),
+        "fps={fps},{scale},subtitles={ass}",
         fps = EXPORT_FPS,
         scale = scale_filter(),
+        ass = escape_filter_path(ass_path),
     )
 }
 

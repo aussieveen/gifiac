@@ -10,11 +10,12 @@ const MIN_GIF_RANGE = 0.1
 const BASE_TIMELINE_WIDTH = 700
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3]
 const DEFAULT_ZOOM_INDEX = 2 // ZOOM_LEVELS[2] === 1
-// The backend always renders film-strip frames at a fixed 160px native
-// width (see backend/src/filmstrip_layout.rs SPRITE_FRAME_WIDTH); scale
-// that up for a readable live-preview box instead of hardcoding a preview
-// size unrelated to the sprite.
-const PREVIEW_SCALE = 3
+// The backend renders film-strip frames at the same scaled-down width the
+// export pipeline burns captions into (see backend/src/scale.rs
+// MAX_WIDTH), so displaying the sprite at 1:1 is both crisp *and* what
+// makes caption font-size/position in this preview match the real export
+// pixel-for-pixel — no separate preview-only scale factor needed.
+const PREVIEW_SCALE = 1
 
 interface Props {
   video: Video

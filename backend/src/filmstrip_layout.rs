@@ -2,8 +2,9 @@
 //! the FFmpeg invocation that actually renders the sprite so the layout
 //! rules can be tested without touching a video file.
 
+use crate::scale::scaled_dimensions;
+
 pub const FILMSTRIP_INTERVAL_SECONDS: f64 = 0.25;
-const SPRITE_FRAME_WIDTH: u32 = 160;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FilmstripLayout {
@@ -31,6 +32,10 @@ impl FilmstripIntervalMillis {
 /// source dimensions. One frame is sampled every `FILMSTRIP_INTERVAL_SECONDS`;
 /// the grid is laid out as close to square as possible so the resulting
 /// sprite image doesn't end up absurdly wide or tall.
+///
+/// Frame dimensions are the same [`scaled_dimensions`] the export pipeline
+/// uses, so the live preview (built from these frames) shows captions at
+/// the same relative size/position they'll actually burn in at.
 pub fn compute_filmstrip_layout(
     duration_seconds: f64,
     video_width: i64,
@@ -42,21 +47,14 @@ pub fn compute_filmstrip_layout(
     let cols = (f64::from(frame_count).sqrt().ceil() as u32).max(1);
     let rows = frame_count.div_ceil(cols);
 
-    let frame_height = if video_width > 0 && video_height > 0 {
-        ((SPRITE_FRAME_WIDTH as f64) * (video_height as f64) / (video_width as f64)).round() as u32
-    } else {
-        // Fall back to a 16:9 assumption if probing somehow yielded no
-        // dimensions; this keeps the grid math total instead of panicking.
-        (SPRITE_FRAME_WIDTH * 9) / 16
-    }
-    .max(1);
+    let (frame_width, frame_height) = scaled_dimensions(video_width, video_height);
 
     FilmstripLayout {
         frame_count,
         cols,
         rows,
-        frame_width: SPRITE_FRAME_WIDTH,
-        frame_height,
+        frame_width: frame_width as u32,
+        frame_height: frame_height as u32,
         interval: FilmstripIntervalMillis((FILMSTRIP_INTERVAL_SECONDS * 1000.0).round() as u32),
     }
 }
@@ -71,8 +69,8 @@ mod tests {
         assert_eq!(layout.frame_count, 40);
         assert_eq!(layout.cols, 7);
         assert_eq!(layout.rows, 6);
-        assert_eq!(layout.frame_width, 160);
-        assert_eq!(layout.frame_height, 90);
+        assert_eq!(layout.frame_width, 480);
+        assert_eq!(layout.frame_height, 270);
         assert_eq!(layout.interval.seconds(), 0.25);
     }
 
@@ -99,15 +97,15 @@ mod tests {
     #[test]
     fn missing_dimensions_fall_back_to_16_9() {
         let layout = compute_filmstrip_layout(10.0, 0, 0);
-        assert_eq!(layout.frame_width, 160);
-        assert_eq!(layout.frame_height, 90);
+        assert_eq!(layout.frame_width, 480);
+        assert_eq!(layout.frame_height, 270);
     }
 
     #[test]
     fn portrait_video_scales_height_up() {
         let layout = compute_filmstrip_layout(1.0, 1080, 1920);
-        assert_eq!(layout.frame_width, 160);
-        assert_eq!(layout.frame_height, 284);
+        assert_eq!(layout.frame_width, 480);
+        assert_eq!(layout.frame_height, 854);
     }
 
     #[test]
