@@ -43,3 +43,26 @@ export function spriteTileOffset(
     backgroundPositionY: -row * grid.frameHeight || 0,
   }
 }
+
+export interface SpriteSheetGrid extends SpriteGrid {
+  rows: number
+}
+
+/**
+ * The full CSS background-* shorthand for cropping one sprite-sheet frame,
+ * scaled up or down by `scale`. Shared by the live preview and the
+ * film-strip scrubber so their tile math can't drift apart.
+ */
+export function spriteBackgroundStyle(
+  frameIndex: number,
+  grid: SpriteSheetGrid,
+  imageUrl: string,
+  scale: number,
+): { backgroundImage: string; backgroundSize: string; backgroundPosition: string } {
+  const tile = spriteTileOffset(frameIndex, grid)
+  return {
+    backgroundImage: `url(${imageUrl})`,
+    backgroundSize: `${grid.cols * grid.frameWidth * scale}px ${grid.rows * grid.frameHeight * scale}px`,
+    backgroundPosition: `${tile.backgroundPositionX * scale}px ${tile.backgroundPositionY * scale}px`,
+  }
+}

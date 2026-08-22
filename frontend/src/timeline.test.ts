@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, frameIndexForTime, spriteTileOffset, timeToX, xToTime } from './timeline'
+import { clamp, frameIndexForTime, spriteBackgroundStyle, spriteTileOffset, timeToX, xToTime } from './timeline'
 
 describe('clamp', () => {
   it('passes values already in range through unchanged', () => {
@@ -84,6 +84,26 @@ describe('spriteTileOffset', () => {
     expect(spriteTileOffset(9, { cols: 7, frameWidth: 160, frameHeight: 90 })).toEqual({
       backgroundPositionX: -320,
       backgroundPositionY: -90,
+    })
+  })
+})
+
+describe('spriteBackgroundStyle', () => {
+  const grid = { cols: 7, rows: 6, frameWidth: 160, frameHeight: 90 }
+
+  it('builds a CSS background shorthand for a frame at native scale', () => {
+    expect(spriteBackgroundStyle(3, grid, '/sprite.jpg', 1)).toEqual({
+      backgroundImage: 'url(/sprite.jpg)',
+      backgroundSize: '1120px 540px',
+      backgroundPosition: '-480px 0px',
+    })
+  })
+
+  it('scales both the full sheet size and the tile offset together', () => {
+    expect(spriteBackgroundStyle(3, grid, '/sprite.jpg', 3)).toEqual({
+      backgroundImage: 'url(/sprite.jpg)',
+      backgroundSize: '3360px 1620px',
+      backgroundPosition: '-1440px 0px',
     })
   })
 })

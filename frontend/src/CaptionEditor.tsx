@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { createExport } from './api'
-import { clamp, frameIndexForTime, spriteTileOffset, timeToX, xToTime } from './timeline'
+import { clamp, frameIndexForTime, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Video } from './types'
+import { useWindowDrag } from './useWindowDrag'
 
 const FONTS = ['Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
 const MIN_CAPTION_DURATION = 0.25
@@ -79,9 +80,6 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const [exportId, setExportId] = useState<string | null>(null)
 
   const previewRef = useRef<HTMLDivElement | null>(null)
-  const pillDragRef = useRef<PillDrag | null>(null)
-  const rangeDragRef = useRef<RangeDrag | null>(null)
-  const positionDragRef = useRef<PositionDrag | null>(null)
 
   const timelineWidth = BASE_TIMELINE_WIDTH * ZOOM_LEVELS[zoomIndex]
   const selected = captions.find((c) => c.id === selectedId) ?? null
@@ -112,19 +110,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     }
   }
 
-  function startPillDrag(e: React.MouseEvent, id: string, kind: PillDragKind) {
-    e.stopPropagation()
-    const cap = captions.find((c) => c.id === id)
-    if (!cap) return
-    setSelectedId(id)
-    pillDragRef.current = { kind, id, startX: e.clientX, orig: cap }
-    window.addEventListener('mousemove', onPillDrag)
-    window.addEventListener('mouseup', endPillDrag)
-  }
-
-  function onPillDrag(e: MouseEvent) {
-    const drag = pillDragRef.current
-    if (!drag) return
+  const startPillWindowDrag = useWindowDrag<PillDrag>((e, drag) => {
     const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
     if (drag.kind === 'move') {
       const dur = drag.orig.endTime - drag.orig.startTime
@@ -137,24 +123,17 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
       const newEnd = clamp(drag.orig.endTime + deltaT, drag.orig.startTime + MIN_CAPTION_DURATION, duration)
       updateCaption(drag.id, { endTime: newEnd })
     }
-  }
+  })
 
-  function endPillDrag() {
-    pillDragRef.current = null
-    window.removeEventListener('mousemove', onPillDrag)
-    window.removeEventListener('mouseup', endPillDrag)
-  }
-
-  function startRangeDrag(e: React.MouseEvent, edge: RangeDrag['edge']) {
+  function startPillDrag(e: React.MouseEvent, id: string, kind: PillDragKind) {
     e.stopPropagation()
-    rangeDragRef.current = { edge, startX: e.clientX, orig: gifRange[edge] }
-    window.addEventListener('mousemove', onRangeDrag)
-    window.addEventListener('mouseup', endRangeDrag)
+    const cap = captions.find((c) => c.id === id)
+    if (!cap) return
+    setSelectedId(id)
+    startPillWindowDrag({ kind, id, startX: e.clientX, orig: cap })
   }
 
-  function onRangeDrag(e: MouseEvent) {
-    const drag = rangeDragRef.current
-    if (!drag) return
+  const startRangeWindowDrag = useWindowDrag<RangeDrag>((e, drag) => {
     const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
     const newVal = clamp(drag.orig + deltaT, 0, duration)
     setGifRange((r) =>
@@ -162,12 +141,11 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
         ? { start: Math.min(newVal, r.end - MIN_GIF_RANGE), end: r.end }
         : { start: r.start, end: Math.max(newVal, r.start + MIN_GIF_RANGE) },
     )
-  }
+  })
 
-  function endRangeDrag() {
-    rangeDragRef.current = null
-    window.removeEventListener('mousemove', onRangeDrag)
-    window.removeEventListener('mouseup', endRangeDrag)
+  function startRangeDrag(e: React.MouseEvent, edge: RangeDrag['edge']) {
+    e.stopPropagation()
+    startRangeWindowDrag({ edge, startX: e.clientX, orig: gifRange[edge] })
   }
 
   function scrubTo(e: React.MouseEvent<HTMLDivElement>) {
@@ -175,24 +153,9 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     setCurrentTime(xToTime(e.clientX - rect.left, duration, timelineWidth))
   }
 
-  function startPositionDrag(e: React.MouseEvent, caption: Caption) {
-    e.stopPropagation()
-    setSelectedId(caption.id)
-    positionDragRef.current = {
-      id: caption.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      origX: caption.x,
-      origY: caption.y,
-    }
-    window.addEventListener('mousemove', onPositionDrag)
-    window.addEventListener('mouseup', endPositionDrag)
-  }
-
-  function onPositionDrag(e: MouseEvent) {
-    const drag = positionDragRef.current
+  const startPositionWindowDrag = useWindowDrag<PositionDrag>((e, drag) => {
     const box = previewRef.current
-    if (!drag || !box) return
+    if (!box) return
     const rect = box.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return
     const deltaX = (e.clientX - drag.startX) / rect.width
@@ -201,21 +164,24 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
       x: clamp(drag.origX + deltaX, 0, 1),
       y: clamp(drag.origY + deltaY, 0, 1),
     })
-  }
+  })
 
-  function endPositionDrag() {
-    positionDragRef.current = null
-    window.removeEventListener('mousemove', onPositionDrag)
-    window.removeEventListener('mouseup', endPositionDrag)
+  function startPositionDrag(e: React.MouseEvent, caption: Caption) {
+    e.stopPropagation()
+    setSelectedId(caption.id)
+    startPositionWindowDrag({
+      id: caption.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: caption.x,
+      origY: caption.y,
+    })
   }
 
   const activeCaptions = captions.filter((c) => currentTime >= c.startTime && currentTime <= c.endTime)
   const frameIndex = frameIndexForTime(currentTime, filmstrip.interval, filmstrip.frameCount)
-  const previewTile = spriteTileOffset(frameIndex, filmstrip)
   const previewWidth = filmstrip.frameWidth * PREVIEW_SCALE
   const previewHeight = filmstrip.frameHeight * PREVIEW_SCALE
-  const spriteFullWidth = filmstrip.cols * filmstrip.frameWidth
-  const spriteFullHeight = filmstrip.rows * filmstrip.frameHeight
 
   const filmstripFrameWidth = timelineWidth / filmstrip.frameCount
   const filmstripFrameHeight = filmstripFrameWidth * (filmstrip.frameHeight / filmstrip.frameWidth)
@@ -259,9 +225,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
           style={{
             width: previewWidth,
             height: previewHeight,
-            backgroundImage: `url(${filmstrip.imageUrl})`,
-            backgroundSize: `${spriteFullWidth * PREVIEW_SCALE}px ${spriteFullHeight * PREVIEW_SCALE}px`,
-            backgroundPosition: `${previewTile.backgroundPositionX * PREVIEW_SCALE}px ${previewTile.backgroundPositionY * PREVIEW_SCALE}px`,
+            ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, PREVIEW_SCALE),
           }}
         >
           {activeCaptions.map((c) => (
@@ -374,21 +338,16 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
               style={{ width: timelineWidth, height: Math.max(32, filmstripFrameHeight) }}
               onClick={scrubTo}
             >
-              {Array.from({ length: filmstrip.frameCount }).map((_, i) => {
-                const tile = spriteTileOffset(i, filmstrip)
-                return (
-                  <div
-                    key={i}
-                    className="va-frame"
-                    style={{
-                      width: filmstripFrameWidth,
-                      backgroundImage: `url(${filmstrip.imageUrl})`,
-                      backgroundSize: `${spriteFullWidth * filmstripScale}px ${spriteFullHeight * filmstripScale}px`,
-                      backgroundPosition: `${tile.backgroundPositionX * filmstripScale}px ${tile.backgroundPositionY * filmstripScale}px`,
-                    }}
-                  />
-                )
-              })}
+              {Array.from({ length: filmstrip.frameCount }).map((_, i) => (
+                <div
+                  key={i}
+                  className="va-frame"
+                  style={{
+                    width: filmstripFrameWidth,
+                    ...spriteBackgroundStyle(i, filmstrip, filmstrip.imageUrl, filmstripScale),
+                  }}
+                />
+              ))}
               <div
                 className="va-range-highlight"
                 style={{
