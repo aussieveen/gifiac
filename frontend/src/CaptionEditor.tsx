@@ -372,6 +372,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                   className="va-frame"
                   style={{
                     width: filmstripFrameWidth,
+                    height: filmstripFrameHeight,
                     ...spriteBackgroundStyle(i, filmstrip, filmstrip.imageUrl, filmstripScale),
                   }}
                 />
