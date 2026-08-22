@@ -76,65 +76,43 @@ async fn run_pipeline(
     );
     tokio::fs::write(&ass_path, ass).await?;
 
-    ffmpeg_export::generate_palette(
-        &video_path,
-        &ass_path,
-        &palette_path,
-        request.gif_range_start,
+    let clip = ffmpeg_export::ClipSource {
+        video_path: &video_path,
+        ass_path: &ass_path,
+        range_start: request.gif_range_start,
         clip_duration,
-        |percent| {
-            send(ExportEvent::Progress {
-                stage: "palette_gen",
-                percent,
-            })
-        },
-    )
+    };
+
+    ffmpeg_export::generate_palette(clip, &palette_path, |percent| {
+        send(ExportEvent::Progress {
+            stage: "palette_gen",
+            percent,
+        })
+    })
     .await?;
 
-    ffmpeg_export::encode_gif(
-        &video_path,
-        &ass_path,
-        &palette_path,
-        &gif_path,
-        request.gif_range_start,
-        clip_duration,
-        |percent| {
-            send(ExportEvent::Progress {
-                stage: "encoding_gif",
-                percent,
-            })
-        },
-    )
+    ffmpeg_export::encode_gif(clip, &palette_path, &gif_path, |percent| {
+        send(ExportEvent::Progress {
+            stage: "encoding_gif",
+            percent,
+        })
+    })
     .await?;
 
-    ffmpeg_export::encode_mp4(
-        &video_path,
-        &ass_path,
-        &mp4_path,
-        request.gif_range_start,
-        clip_duration,
-        |percent| {
-            send(ExportEvent::Progress {
-                stage: "encoding_mp4",
-                percent,
-            })
-        },
-    )
+    ffmpeg_export::encode_mp4(clip, &mp4_path, |percent| {
+        send(ExportEvent::Progress {
+            stage: "encoding_mp4",
+            percent,
+        })
+    })
     .await?;
 
-    ffmpeg_export::encode_webm(
-        &video_path,
-        &ass_path,
-        &webm_path,
-        request.gif_range_start,
-        clip_duration,
-        |percent| {
-            send(ExportEvent::Progress {
-                stage: "encoding_webm",
-                percent,
-            })
-        },
-    )
+    ffmpeg_export::encode_webm(clip, &webm_path, |percent| {
+        send(ExportEvent::Progress {
+            stage: "encoding_webm",
+            percent,
+        })
+    })
     .await?;
 
     // The GIF's actual post-scale dimensions (for the `gifs` row) come
@@ -146,34 +124,35 @@ async fn run_pipeline(
     let probe =
         tokio::task::spawn_blocking(move || crate::ffmpeg::probe_video(&probe_path)).await??;
 
-    send(ExportEvent::Progress {
-        stage: "uploading",
-        percent: 0,
-    });
-    state
-        .storage
-        .upload_file(&paths::gif_object_key(&export_id), &gif_path, "image/gif")
-        .await?;
-    send(ExportEvent::Progress {
-        stage: "uploading",
-        percent: 33,
-    });
-    state
-        .storage
-        .upload_file(&paths::mp4_object_key(&export_id), &mp4_path, "video/mp4")
-        .await?;
-    send(ExportEvent::Progress {
-        stage: "uploading",
-        percent: 66,
-    });
-    state
-        .storage
-        .upload_file(
-            &paths::webm_object_key(&export_id),
-            &webm_path,
+    // Not driven off real byte-transfer progress (unlike the FFmpeg
+    // stages) — just an even split across however many files this export
+    // uploads, so a future 4th output format doesn't need its own
+    // hand-picked percent literal.
+    let uploads = [
+        (
+            paths::gif_object_key(&export_id),
+            gif_path.as_path(),
+            "image/gif",
+        ),
+        (
+            paths::mp4_object_key(&export_id),
+            mp4_path.as_path(),
+            "video/mp4",
+        ),
+        (
+            paths::webm_object_key(&export_id),
+            webm_path.as_path(),
             "video/webm",
-        )
-        .await?;
+        ),
+    ];
+    let total = uploads.len();
+    for (i, (key, path, content_type)) in uploads.iter().enumerate() {
+        send(ExportEvent::Progress {
+            stage: "uploading",
+            percent: (i * 100 / total) as u8,
+        });
+        state.storage.upload_file(key, path, content_type).await?;
+    }
     send(ExportEvent::Progress {
         stage: "uploading",
         percent: 100,
