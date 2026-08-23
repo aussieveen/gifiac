@@ -70,11 +70,33 @@ pub fn generate_ass(
             // caption is laid out here instead, as one singly-positioned
             // Dialogue event per line, spaced by `line_height`, rather
             // than one event with libass's fixed automatic pitch.
+            //
+            // Unlike a single \N-joined Dialogue (which libass keeps
+            // on-screen as one block itself), per-line \pos has no idea
+            // where the frame edges are — a caption anchored near the
+            // bottom (SPEC's own default) plus a line pushed further down
+            // by this offset can place glyphs partly below the frame,
+            // and libass's own clipping there isn't a clean cut: it can
+            // eat exactly a rounded letter's lowest curve and leave the
+            // rest, so e.g. "TURN"'s U rendered as two bare vertical
+            // strokes ("II") once its connecting curve was clipped away.
+            // Found via direct reproduction — a bottom-anchored two-line
+            // caption's `generate_ass` output, rendered through the real
+            // pipeline, showed exactly this. Clamping the block's center
+            // so its full height fits within the frame avoids it.
             let line_height_px = font_size * caption.line_height;
             let line_count = lines.len() as f64;
+            let block_half_height = line_count * line_height_px / 2.0;
+            let min_center = block_half_height;
+            let max_center = frame_height as f64 - block_half_height;
+            let block_center_y = if min_center <= max_center {
+                (pos_y as f64).clamp(min_center, max_center)
+            } else {
+                frame_height as f64 / 2.0 // the block is taller than the frame; center it
+            };
             for (line_index, line) in lines.iter().enumerate() {
                 let offset = (line_index as f64 - (line_count - 1.0) / 2.0) * line_height_px;
-                let y = (pos_y as f64 + offset).round() as i64;
+                let y = (block_center_y + offset).round() as i64;
                 events.push_str(&format!(
                     "Dialogue: 0,{start},{end},{name},,0,0,0,,{{\\pos({x},{y})}}{text}\n",
                     name = style_name,
@@ -346,6 +368,73 @@ mod tests {
         // pos_y = 180, line_height_px = 100*1.0 = 100 -> +/-50.
         assert!(ass.contains("{\\pos(320,130)}a"));
         assert!(ass.contains("{\\pos(320,230)}b"));
+    }
+
+    /// Regression test for a real bug: a bottom-anchored caption (SPEC.md
+    /// §4's own default position) that wraps to two lines pushed its
+    /// second line's `\pos` far enough down that libass clipped part of
+    /// its glyphs against the frame's bottom edge — not a clean cut, but
+    /// one that ate exactly a rounded letter's lowest curve, so "TURN"
+    /// rendered with its "U" reading as two bare strokes ("II"). Found by
+    /// reproducing the exact real `generate_ass` output for a reported
+    /// case through the actual pipeline.
+    #[test]
+    fn generate_ass_clamps_a_bottom_anchored_multiline_caption_to_stay_in_frame() {
+        let mut c = caption("c1", 0.0, 1.0, "line one\nline two");
+        c.font_size = 40.0;
+        c.line_height = 1.0;
+        c.y = 0.97;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // pos_y = round(0.97*360) = 349; block_half_height = 2*40/2 = 40;
+        // max_center = 360-40 = 320 < 349, so the block's center clamps
+        // to 320 instead of the raw 349 (which would push "line two"'s
+        // center to 369, past the 360-tall frame entirely).
+        assert!(ass.contains("{\\pos(320,300)}line one"));
+        assert!(ass.contains("{\\pos(320,340)}line two"));
+    }
+
+    #[test]
+    fn generate_ass_clamps_a_top_anchored_multiline_caption_to_stay_in_frame() {
+        let mut c = caption("c1", 0.0, 1.0, "line one\nline two");
+        c.font_size = 40.0;
+        c.line_height = 1.0;
+        c.y = 0.02;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // pos_y = round(0.02*360) = 7; min_center = 40 > 7, so the
+        // block's center clamps up to 40.
+        assert!(ass.contains("{\\pos(320,20)}line one"));
+        assert!(ass.contains("{\\pos(320,60)}line two"));
+    }
+
+    #[test]
+    fn generate_ass_leaves_a_centered_multiline_caption_unclamped() {
+        let mut c = caption("c1", 0.0, 1.0, "line one\nline two");
+        c.font_size = 40.0;
+        c.line_height = 1.0;
+        c.y = 0.5;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // pos_y = 180, comfortably within [40, 320] -> no clamp applied.
+        assert!(ass.contains("{\\pos(320,160)}line one"));
+        assert!(ass.contains("{\\pos(320,200)}line two"));
+    }
+
+    #[test]
+    fn generate_ass_centers_a_multiline_block_taller_than_the_frame() {
+        let mut c = caption("c1", 0.0, 1.0, "a\nb");
+        c.font_size = 1000.0;
+        c.line_height = 1.0;
+        c.y = 0.5;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // block_half_height (1000) exceeds what a 360-tall frame can ever
+        // center within (min_center > max_center) -> falls back to
+        // centering on frame_height/2 rather than producing a nonsensical
+        // clamp target.
+        assert!(ass.contains("{\\pos(320,-320)}a"));
+        assert!(ass.contains("{\\pos(320,680)}b"));
     }
 
     #[test]

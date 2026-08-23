@@ -556,7 +556,15 @@ button {
 }
 
 .archive-panel {
-  width: 320px;
+  /* Wide enough to show a GIF at its native resolution (exports cap at
+     480px — see backend/src/scale.rs MAX_WIDTH) plus padding, so the
+     browser never has to downscale it for display. Browsers use cheap,
+     low-quality real-time scaling for *animated* GIFs specifically (the
+     per-frame cost of high-quality resampling at 15fps adds up) — a
+     480px-wide GIF squeezed into a much narrower box visibly mangled
+     fine text (a capital "U" reading as "II"), even though the exported
+     file itself, and every extracted frame, was completely clean. */
+  width: 520px;
   flex-shrink: 0;
   background: #1e2028;
   border-radius: 6px;
@@ -567,7 +575,17 @@ button {
 }
 
 .archive-panel-preview {
-  width: 100%;
+  /* max-width, not width: 100% — displays at native size (no upscaling
+     of a narrower GIF, no downscaling of a 480px one) unless it's wider
+     than the panel can fit, which shouldn't happen given the panel's
+     width above. `.archive-panel` is a column flex container, whose
+     default `align-items: stretch` would otherwise force this back up
+     to the panel's full width regardless of max-width (only an explicit
+     `width` opts out of stretch, not max-width) — align-self overrides
+     that back to the image's own natural size. */
+  align-self: flex-start;
+  max-width: 100%;
+  display: block;
   border-radius: 4px;
   background: #0d0e12;
 }
