@@ -1,8 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import { createExport, subscribeExportProgress, videoFileUrl } from './api'
-import { clamp, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
+import { clamp, linesFromCharTops, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
+
+/**
+ * Reconstructs a caption's real visual line breaks — including ones the
+ * browser inserted by auto-wrapping, which aren't present as literal '\n'
+ * characters in `el`'s text — from its actual rendered layout, via the
+ * Range API's per-character bounding rects. `el` must render exactly one
+ * text node whose box matches the live preview caption's (see the hidden
+ * measurement container this is called against): same width, font, and
+ * padding, so the wrap points it finds are the ones the user is actually
+ * seeing. Falls back to the raw text if there's no text node (e.g. empty
+ * caption) since there's nothing to measure — same as in a test/jsdom
+ * environment, which has no real layout engine and doesn't implement
+ * `Range.getClientRects` at all (every character measures as
+ * unmeasurable, so `linesFromCharTops` returns the text unchanged).
+ */
+function measureWrappedLines(el: HTMLElement): string {
+  const textNode = el.firstChild
+  if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return el.textContent ?? ''
+  const text = textNode.textContent ?? ''
+  const range = document.createRange()
+  const lines = linesFromCharTops(text, (i) => {
+    range.setStart(textNode, i)
+    range.setEnd(textNode, i + 1)
+    const rect = range.getClientRects?.()[0]
+    return rect ? rect.top : null
+  })
+  return lines.join('\n')
+}
 
 // "Impact" (SPEC.md §4's example) is proprietary and often not installed
 // (browser or libass, which burns in captions) — silent OS-level font
@@ -126,6 +154,13 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const exportUnsubscribeRef = useRef<(() => void) | null>(null)
+  // One hidden, off-screen element per caption — rendered with the exact
+  // same box width/font as its live preview, purely so makeGif() can read
+  // back its real auto-wrapped line breaks at export time (see
+  // measureWrappedLines). Not `activeCaptions`: a caption outside the
+  // current playhead has no visible preview element to measure, but still
+  // needs measuring if it's included in the export.
+  const measureRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   // A component unmounting mid-export (e.g. "back to library" clicked
   // while exporting) must stop the SSE subscription instead of leaving it
@@ -368,10 +403,20 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     setCompletedGif(null)
     setExportProgress(null)
     try {
+      // The backend can only space out lines it knows are separate (see
+      // ass.rs's `line_height` doc comment) — it splits on literal '\n',
+      // so an auto-wrapped caption (no typed line break, just a box too
+      // narrow for the text) needs its real wrap points inserted here
+      // first, or it burns in with libass's wider default spacing instead
+      // of matching what was actually previewed.
+      const captionsWithWrapping = captions.map((c) => {
+        const el = measureRefs.current[c.id]
+        return el ? { ...c, text: measureWrappedLines(el) } : c
+      })
       const result = await createExport({
         video_id: video.id,
         name: trimmedName,
-        captions,
+        captions: captionsWithWrapping,
         gif_range_start: Number(gifRange.start.toFixed(2)),
         gif_range_end: Number(gifRange.end.toFixed(2)),
       })
@@ -450,6 +495,31 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
             {isPlaying ? '⏸ Pause' : '▶ Play'}
           </button>
           <span className="va-hint">{currentTime.toFixed(2)}s</span>
+        </div>
+
+        {/* Off-screen twins of every caption's box, purely for
+            measureWrappedLines to read real wrap points from at export
+            time — see the measureRefs comment. Not `display: none`;
+            layout (and therefore wrapping) only happens for elements the
+            browser actually lays out. */}
+        <div aria-hidden="true" style={{ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}>
+          {captions.map((c) => (
+            <div key={c.id} style={{ width: c.width * previewWidth }}>
+              <div
+                ref={(el) => {
+                  measureRefs.current[c.id] = el
+                }}
+                className="preview-caption-measure"
+                style={{
+                  width: '100%',
+                  fontFamily: c.fontFamily,
+                  fontSize: c.fontSize,
+                }}
+              >
+                {c.text}
+              </div>
+            </div>
+          ))}
         </div>
         </div>
 

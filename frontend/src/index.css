@@ -136,6 +136,17 @@ button {
   outline: 1px dashed #f5c518;
 }
 
+/* Off-screen twin of a caption used only to measure its real wrapped
+   lines (see CaptionEditor's measureRefs) — a separate class (rather than
+   reusing .preview-caption) so tests/selectors that count rendered
+   captions don't also pick these up. Shares just the text-layout
+   properties that affect where lines wrap. */
+.preview-caption-measure {
+  white-space: pre-wrap;
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+
 .preview-caption-handle {
   position: absolute;
   top: 0;

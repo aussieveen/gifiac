@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, frameIndexForTime, spriteBackgroundStyle, spriteTileOffset, timeToX, xToTime } from './timeline'
+import { clamp, frameIndexForTime, linesFromCharTops, spriteBackgroundStyle, spriteTileOffset, timeToX, xToTime } from './timeline'
 
 describe('clamp', () => {
   it('passes values already in range through unchanged', () => {
@@ -85,6 +85,42 @@ describe('spriteTileOffset', () => {
       backgroundPositionX: -320,
       backgroundPositionY: -90,
     })
+  })
+})
+
+describe('linesFromCharTops', () => {
+  it('returns the whole text as one line when every character shares a top', () => {
+    expect(linesFromCharTops('New caption', () => 10)).toEqual(['New caption'])
+  })
+
+  it('splits where the top changes by more than 1px', () => {
+    // "New " on one line (top 10), "caption" on the next (top 30) — an
+    // auto-wrap, since there's no literal newline in the source text.
+    const tops = [10, 10, 10, 10, 30, 30, 30, 30, 30, 30, 30]
+    expect(linesFromCharTops('New caption', (i) => tops[i])).toEqual(['New ', 'caption'])
+  })
+
+  it('tolerates sub-pixel jitter without treating it as a new line', () => {
+    const tops = [10, 10.4, 10.9, 9.6]
+    expect(linesFromCharTops('abcd', (i) => tops[i])).toEqual(['abcd'])
+  })
+
+  it('skips characters with no measurable position', () => {
+    // e.g. a collapsed space at a wrap point — shouldn't itself count as
+    // a top change or break the grouping of the real characters.
+    const tops: Record<number, number | null> = { 0: 10, 1: null, 2: 30 }
+    expect(linesFromCharTops('a b', (i) => tops[i])).toEqual(['a ', 'b'])
+  })
+
+  it('strips any literal newline characters from the reconstructed lines', () => {
+    // "ab\ncd" -> a,b,\n share top 10 (the \n terminates that line); c,d
+    // are on the next line at top 30.
+    const tops = [10, 10, 10, 30, 30]
+    expect(linesFromCharTops('ab\ncd', (i) => tops[i])).toEqual(['ab', 'cd'])
+  })
+
+  it('returns a single empty line for empty text', () => {
+    expect(linesFromCharTops('', () => 0)).toEqual([''])
   })
 })
 
