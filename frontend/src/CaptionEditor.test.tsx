@@ -392,6 +392,25 @@ describe('CaptionEditor', () => {
     expect(screen.getByRole('button', { name: '⏸ Pause' })).toBeInTheDocument()
   })
 
+  it('caps rendered film-strip frames at how many fit legibly, evenly sampled from the full sprite', () => {
+    const longFilmstrip: FilmstripMeta = { ...filmstrip, frameCount: 200 }
+    render(<CaptionEditor video={video} filmstrip={longFilmstrip} onBack={() => {}} />)
+
+    // BASE_TIMELINE_WIDTH (700px) at the default zoom / MIN_FRAME_WIDTH
+    // (40px) -> 17 frames, not all 200 sampled ones.
+    expect(document.querySelectorAll('.va-frame')).toHaveLength(17)
+  })
+
+  it('renders every sampled frame when there are fewer than fit at the minimum width', () => {
+    const shortFilmstrip: FilmstripMeta = { ...filmstrip, frameCount: 5 }
+    render(<CaptionEditor video={video} filmstrip={shortFilmstrip} onBack={() => {}} />)
+
+    const frames = document.querySelectorAll('.va-frame')
+    expect(frames).toHaveLength(5)
+    // Each still stretches to fill the full timeline width between them.
+    expect(frames[0]).toHaveStyle({ width: '140px' })
+  })
+
   it('resumes at the range start when the browser fires "ended"', () => {
     const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLVideoElement) {
       this.dispatchEvent(new Event('play'))

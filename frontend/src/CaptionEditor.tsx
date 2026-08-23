@@ -325,8 +325,26 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   // fill it — a "cover" crop instead of a fit — so there's never a gap
   // above/below a frame even though the sprite's own aspect ratio may not
   // match a single frame's narrow on-screen width.
-  const FILMSTRIP_HEIGHT = 64
-  const filmstripFrameWidth = timelineWidth / filmstrip.frameCount
+  const FILMSTRIP_HEIGHT = 48
+  // The sprite samples a frame every 0.25s, so a long clip has far more
+  // frames than fit the timeline at a reasonable size — rendering all of
+  // them at low zoom squeezed each one down to just a few px wide, an
+  // unrecognizable sliver regardless of height (and a narrower box crops
+  // more tightly out of each frame, compounding the problem). Instead,
+  // show only as many as fit at a legible minimum width, evenly spaced
+  // across the full sampled range — zooming in raises that count (up to
+  // every sampled frame) the same way it already widens everything else
+  // on the timeline. 40x48 keeps each frame closer to landscape than a
+  // taller/narrower box would, so the crop isn't as severe.
+  const MIN_FRAME_WIDTH = 40
+  const visibleFrameCount = clamp(Math.floor(timelineWidth / MIN_FRAME_WIDTH), 1, filmstrip.frameCount)
+  const frameIndices =
+    visibleFrameCount === 1
+      ? [0]
+      : Array.from({ length: visibleFrameCount }, (_, i) =>
+          Math.round((i * (filmstrip.frameCount - 1)) / (visibleFrameCount - 1)),
+        )
+  const filmstripFrameWidth = timelineWidth / visibleFrameCount
   const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
   async function makeGif() {
@@ -530,14 +548,14 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
               style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }}
               onClick={scrubTo}
             >
-              {Array.from({ length: filmstrip.frameCount }).map((_, i) => (
+              {frameIndices.map((frameIndex) => (
                 <div
-                  key={i}
+                  key={frameIndex}
                   className="va-frame"
                   style={{
                     width: filmstripFrameWidth,
                     height: FILMSTRIP_HEIGHT,
-                    ...spriteBackgroundStyle(i, filmstrip, filmstrip.imageUrl, filmstripScale),
+                    ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, filmstripScale),
                   }}
                 />
               ))}
