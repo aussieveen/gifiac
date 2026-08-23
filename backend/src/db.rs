@@ -145,6 +145,27 @@ pub async fn delete_gif(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// How many `gifs` rows were made from this video — checked before
+/// deleting it (SPEC.md §3 explicitly excludes video deletion because it
+/// "would silently break re-editing of any GIF made from it"; a video
+/// with zero GIFs made from it yet is always safe to remove, so deletion
+/// is allowed in exactly that case rather than never).
+pub async fn count_gifs_for_video(pool: &SqlitePool, video_id: &str) -> Result<i64> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gifs WHERE video_id = ?")
+        .bind(video_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+pub async fn delete_video(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM videos WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +390,41 @@ mod tests {
     async fn delete_gif_reports_false_for_a_missing_id() {
         let pool = test_pool().await;
         assert!(!delete_gif(&pool, "missing").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn count_gifs_for_video_counts_only_gifs_made_from_that_video() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_video(&pool, &sample_video("v2"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        let mut gif_from_v1 = sample_gif("g1", "a", "");
+        gif_from_v1.video_id = Some("v1".to_string());
+        insert_gif(&pool, &gif_from_v1, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        assert_eq!(count_gifs_for_video(&pool, "v1").await.unwrap(), 1);
+        assert_eq!(count_gifs_for_video(&pool, "v2").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_video_removes_the_row_and_reports_success() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        assert!(delete_video(&pool, "v1").await.unwrap());
+        assert!(get_video(&pool, "v1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_video_reports_false_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(!delete_video(&pool, "missing").await.unwrap());
     }
 }

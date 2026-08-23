@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{make_large_test_video, make_test_video, multipart_body, spawn_app};
+use common::{create_gif, make_large_test_video, make_test_video, multipart_body, spawn_app};
 
 #[tokio::test]
 async fn upload_probes_generates_thumbnail_and_lists_the_video() {
@@ -340,4 +340,137 @@ async fn upload_of_unparseable_video_is_rejected_and_leaves_no_file_behind() {
         leftover.is_empty(),
         "expected no files left behind after a failed probe, found: {leftover:?}"
     );
+}
+
+#[tokio::test]
+async fn delete_video_removes_the_row_and_its_files() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    // Touch the filmstrip endpoint so a sprite file actually exists on
+    // disk to verify gets cleaned up too (it's generated on demand, per
+    // SPEC.md §3, not at upload time).
+    test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/filmstrip.jpg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+
+    let leftover: Vec<_> = std::fs::read_dir(&test_app.video_dir).unwrap().collect();
+    assert!(
+        leftover.is_empty(),
+        "expected the video/thumbnail/filmstrip files to be removed, found: {leftover:?}"
+    );
+}
+
+#[tokio::test]
+async fn delete_video_is_rejected_with_409_when_a_gif_was_made_from_it() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "depends on this video", "").await;
+    let video_id = gif["video_id"].as_str().unwrap().to_string();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/videos/{video_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // The video is untouched — still fetchable.
+    let get_response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{video_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn delete_unknown_video_returns_404() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/videos/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

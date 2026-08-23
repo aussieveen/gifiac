@@ -230,6 +230,37 @@ describe('CaptionEditor', () => {
     expect(screen.getByRole('button', { name: 'Make GIF' })).toBeEnabled()
   })
 
+  it('calls onGifCreated with the completed gif once the SSE stream reports it', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const onGifCreated = vi.fn()
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} onGifCreated={onGifCreated} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    const gif = {
+      id: 'g1',
+      video_id: 'v1',
+      name: 'my clip',
+      caption_text: '',
+      captions_json: null,
+      gif_range_start: 0,
+      gif_range_end: 8,
+      width: 480,
+      height: 270,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    act(() => handlers.onComplete?.(gif))
+
+    expect(onGifCreated).toHaveBeenCalledWith(gif)
+  })
+
   it('shows an error message when the initial export request fails', async () => {
     vi.mocked(createExport).mockRejectedValue(new Error('/api/exports failed (404): not found'))
     const user = userEvent.setup()

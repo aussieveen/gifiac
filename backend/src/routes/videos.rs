@@ -187,6 +187,40 @@ pub async fn get_filmstrip_meta(
     }))
 }
 
+/// SPEC.md §3 deliberately excludes video deletion ("would silently break
+/// re-editing of any GIF made from it"), but a video with zero GIFs made
+/// from it yet — e.g. the wrong file dragged in by mistake — is always
+/// safe to remove, so deletion is allowed in exactly that case (409 if
+/// any GIF still depends on it) rather than never.
+pub async fn delete_video(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> Result<StatusCode, AppError> {
+    let (uuid, video) = load_video(&state, &id).await?;
+
+    let gif_count = db::count_gifs_for_video(&state.pool, &id).await?;
+    if gif_count > 0 {
+        return Err(AppError::Conflict(format!(
+            "can't delete: {gif_count} GIF(s) were made from this video"
+        )));
+    }
+
+    db::delete_video(&state.pool, &id).await?;
+
+    let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
+    let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
+    let sprite_path = paths::filmstrip_sprite_path(&state.config.video_dir, &uuid);
+    for path in [video_path, thumb_path, sprite_path] {
+        if let Err(err) = tokio::fs::remove_file(&path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), error = %err, "failed to remove file for deleted video");
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn get_filmstrip_image(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,

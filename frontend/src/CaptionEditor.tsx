@@ -71,6 +71,10 @@ interface Props {
   video: Video
   filmstrip: FilmstripMeta
   onBack: () => void
+  /** Called once an export finishes — lets the caller jump straight to
+   * the new GIF (e.g. in the archive) instead of leaving the user to find
+   * it themselves. */
+  onGifCreated?: (gif: Gif) => void
 }
 
 /** Mirrors the backend's optional ASS outline: `null` renders no border. */
@@ -135,7 +139,7 @@ interface WidthDrag {
   origWidth: number
 }
 
-export function CaptionEditor({ video, filmstrip, onBack }: Props) {
+export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props) {
   const duration = video.duration_seconds
 
   const [captions, setCaptions] = useState<Caption[]>([])
@@ -426,6 +430,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
           setCompletedGif(gif)
           setExportProgress(null)
           setSubmitting(false)
+          onGifCreated?.(gif)
         },
         onError: (message) => {
           setExportError(message)

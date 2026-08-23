@@ -1,16 +1,17 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { VideoPicker } from './VideoPicker'
 import type { Video } from './types'
 
 vi.mock('./api', () => ({
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
+  deleteVideo: vi.fn(),
   thumbnailUrl: (id: string) => `/api/videos/${id}/thumbnail`,
 }))
 
-import { listVideos, uploadVideo } from './api'
+import { deleteVideo, listVideos, uploadVideo } from './api'
 
 const existingVideo: Video = {
   id: 'v1',
@@ -26,6 +27,11 @@ const existingVideo: Video = {
 beforeEach(() => {
   vi.mocked(listVideos).mockReset()
   vi.mocked(uploadVideo).mockReset()
+  vi.mocked(deleteVideo).mockReset()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('VideoPicker', () => {
@@ -51,7 +57,7 @@ describe('VideoPicker', () => {
     const user = userEvent.setup()
 
     render(<VideoPicker onSelect={onSelect} />)
-    await user.click(await screen.findByRole('button', { name: /existing.mp4/i }))
+    await user.click(await screen.findByRole('button', { name: /^existing\.mp4/i }))
 
     expect(onSelect).toHaveBeenCalledWith(existingVideo)
   })
@@ -89,5 +95,50 @@ describe('VideoPicker', () => {
 
     await screen.findByText(/bad file/)
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('deleting asks for confirmation, then calls the API and removes the card', async () => {
+    vi.mocked(listVideos).mockResolvedValue([existingVideo])
+    vi.mocked(deleteVideo).mockResolvedValue(undefined)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+
+    render(<VideoPicker onSelect={onSelect} />)
+    await screen.findByText('existing.mp4')
+    await user.click(screen.getByRole('button', { name: 'Delete "existing.mp4"' }))
+
+    await waitFor(() => expect(deleteVideo).toHaveBeenCalledWith('v1'))
+    expect(screen.queryByText('existing.mp4')).not.toBeInTheDocument()
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('declining the confirmation does not delete', async () => {
+    vi.mocked(listVideos).mockResolvedValue([existingVideo])
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const user = userEvent.setup()
+
+    render(<VideoPicker onSelect={() => {}} />)
+    await screen.findByText('existing.mp4')
+    await user.click(screen.getByRole('button', { name: 'Delete "existing.mp4"' }))
+
+    expect(deleteVideo).not.toHaveBeenCalled()
+    expect(screen.getByText('existing.mp4')).toBeInTheDocument()
+  })
+
+  it('shows a delete error (e.g. GIFs still depend on it) without removing the card', async () => {
+    vi.mocked(listVideos).mockResolvedValue([existingVideo])
+    vi.mocked(deleteVideo).mockRejectedValue(
+      new Error('/api/videos/v1 failed (409): can\'t delete: 1 GIF(s) were made from this video'),
+    )
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const user = userEvent.setup()
+
+    render(<VideoPicker onSelect={() => {}} />)
+    await screen.findByText('existing.mp4')
+    await user.click(screen.getByRole('button', { name: 'Delete "existing.mp4"' }))
+
+    await screen.findByText(/GIF\(s\) were made from this video/)
+    expect(screen.getByText('existing.mp4')).toBeInTheDocument()
   })
 })

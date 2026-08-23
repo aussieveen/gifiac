@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -17,7 +17,8 @@ vi.mock('./api', () => ({
   deleteGif: vi.fn(),
 }))
 
-import { getFilmstripMeta, listGifs, listVideos } from './api'
+import { createExport, getFilmstripMeta, listGifs, listVideos, subscribeExportProgress } from './api'
+import type { ExportProgressHandlers } from './api'
 
 const video: Video = {
   id: 'v1',
@@ -46,6 +47,8 @@ beforeEach(() => {
   vi.mocked(listVideos).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(listGifs).mockReset()
+  vi.mocked(createExport).mockReset()
+  vi.mocked(subscribeExportProgress).mockReset()
 })
 
 describe('App', () => {
@@ -61,7 +64,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /clip.mp4/i }))
+    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     expect(await screen.findByText('clip.mp4')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
@@ -73,7 +76,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /clip.mp4/i }))
+    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     await screen.findByText(/boom/)
     await user.click(screen.getByRole('button', { name: /back to library/i }))
@@ -88,11 +91,11 @@ describe('App', () => {
     const user = userEvent.setup()
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /clip\.mp4/i }))
+    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
     await screen.findByText('clip.mp4')
 
     await user.click(screen.getByRole('button', { name: /back to library/i }))
-    await user.click(await screen.findByRole('button', { name: /other\.mp4/i }))
+    await user.click(await screen.findByRole('button', { name: /^other\.mp4/i }))
 
     // The switch target's film-strip fetch never resolves, so the editor
     // (and clip.mp4's now-stale film-strip data) must not render at all.
@@ -126,5 +129,44 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'New GIF' }))
 
     await screen.findByText('Gifiac')
+  })
+
+  it('making a GIF switches to the archive with it already selected', async () => {
+    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const createdGif = {
+      id: 'g1',
+      video_id: 'v1',
+      name: 'my clip',
+      caption_text: '',
+      captions_json: null,
+      gif_range_start: 0,
+      gif_range_end: 8,
+      width: 480,
+      height: 270,
+      created_at: '2026-01-01T00:00:00Z',
+      gif_url: 'http://example.com/g1.gif',
+    }
+    vi.mocked(listGifs).mockResolvedValue([createdGif])
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
+    await screen.findByText('clip.mp4')
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    act(() => handlers.onComplete?.(createdGif))
+
+    expect(await screen.findByLabelText('GIF name')).toHaveValue('my clip')
+    expect(screen.getByRole('button', { name: 'Archive' })).toHaveClass('active')
+    expect(screen.getByRole('button', { name: 'my clip' })).toHaveClass('selected')
   })
 })

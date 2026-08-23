@@ -20,12 +20,20 @@ function useToast() {
   return { message, show }
 }
 
-export function Archive() {
+interface Props {
+  /** Pre-selects this GIF in the detail panel once it loads — used when
+   * arriving here right after making a GIF, so its link/download/rename
+   * actions are immediately at hand instead of the user having to find it
+   * in the grid themselves. */
+  initialSelectedId?: string | null
+}
+
+export function Archive({ initialSelectedId }: Props) {
   const [gifs, setGifs] = useState<Gif[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null)
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)

@@ -23,6 +23,14 @@ export function uploadVideo(file: File): Promise<Video> {
   return request<Video>('/api/videos', { method: 'POST', body })
 }
 
+export async function deleteVideo(id: string): Promise<void> {
+  const response = await fetch(`/api/videos/${id}`, { method: 'DELETE' })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`/api/videos/${id} failed (${response.status}): ${body || response.statusText}`)
+  }
+}
+
 export function getFilmstripMeta(id: string): Promise<FilmstripMeta> {
   return request<FilmstripMeta>(`/api/videos/${id}/filmstrip`)
 }

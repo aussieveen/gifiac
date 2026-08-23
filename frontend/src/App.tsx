@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Archive } from './Archive'
 import { getFilmstripMeta } from './api'
 import { CaptionEditor } from './CaptionEditor'
-import type { FilmstripMeta, Video } from './types'
+import type { FilmstripMeta, Gif, Video } from './types'
 import { VideoPicker } from './VideoPicker'
 
 type View = 'videos' | 'archive'
@@ -12,6 +12,9 @@ export default function App() {
   const [video, setVideo] = useState<Video | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Set right before switching to the archive view so it can arrive with
+  // the just-created GIF already selected — see handleGifCreated.
+  const [pendingGifId, setPendingGifId] = useState<string | null>(null)
 
   useEffect(() => {
     // Reset before fetching so a video switch can't render the new video
@@ -37,6 +40,11 @@ export default function App() {
     setLoadError(null)
   }
 
+  function handleGifCreated(gif: Gif) {
+    setPendingGifId(gif.id)
+    setView('archive')
+  }
+
   const nav = (
     <nav className="app-nav">
       <button className={`app-nav-btn ${view === 'videos' ? 'active' : ''}`} onClick={() => setView('videos')}>
@@ -52,7 +60,7 @@ export default function App() {
     return (
       <>
         {nav}
-        <Archive />
+        <Archive initialSelectedId={pendingGifId} />
       </>
     )
   }
@@ -94,7 +102,7 @@ export default function App() {
   return (
     <>
       {nav}
-      <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToLibrary} />
+      <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToLibrary} onGifCreated={handleGifCreated} />
     </>
   )
 }

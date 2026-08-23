@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listVideos, thumbnailUrl, uploadVideo } from './api'
+import { deleteVideo, listVideos, thumbnailUrl, uploadVideo } from './api'
 import type { Video } from './types'
 
 interface Props {
@@ -12,6 +12,8 @@ export function VideoPicker({ onSelect }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     // `loading` already starts true and this effect only ever runs once
@@ -48,6 +50,20 @@ export function VideoPicker({ onSelect }: Props) {
     }
   }
 
+  async function handleDelete(video: Video) {
+    if (!window.confirm(`Delete "${video.original_filename}"? This can't be undone.`)) return
+    setDeletingId(video.id)
+    setDeleteError(null)
+    try {
+      await deleteVideo(video.id)
+      setVideos((vs) => vs.filter((v) => v.id !== video.id))
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div className="page">
       <h1>Gifiac</h1>
@@ -74,14 +90,25 @@ export function VideoPicker({ onSelect }: Props) {
 
       {loading && <p className="va-hint">Loading videos…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
+      {deleteError && <p className="export-error">{deleteError}</p>}
 
       <div className="video-grid">
         {videos.map((v) => (
-          <button key={v.id} className="video-card" onClick={() => onSelect(v)}>
-            <img src={thumbnailUrl(v.id)} alt={v.original_filename} />
-            <span className="video-card-name">{v.original_filename}</span>
-            <span className="va-hint">{v.duration_seconds.toFixed(1)}s</span>
-          </button>
+          <div key={v.id} className="video-card">
+            <button className="video-card-select" onClick={() => onSelect(v)}>
+              <img src={thumbnailUrl(v.id)} alt={v.original_filename} />
+              <span className="video-card-name">{v.original_filename}</span>
+              <span className="va-hint">{v.duration_seconds.toFixed(1)}s</span>
+            </button>
+            <button
+              className="video-card-delete"
+              aria-label={`Delete "${v.original_filename}"`}
+              disabled={deletingId === v.id}
+              onClick={() => handleDelete(v)}
+            >
+              ✕
+            </button>
+          </div>
         ))}
       </div>
     </div>
