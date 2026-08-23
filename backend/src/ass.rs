@@ -84,7 +84,22 @@ pub fn generate_ass(
             // caption's `generate_ass` output, rendered through the real
             // pipeline, showed exactly this. Clamping the block's center
             // so its full height fits within the frame avoids it.
-            let line_height_px = font_size * caption.line_height;
+            //
+            // Uses `caption.font_size` (the raw, un-corrected value), not
+            // `font_size` (scaled by `ass_font_size_multiplier` to make
+            // *glyph size* match the browser for fonts like Anton, whose
+            // libass rendering is otherwise smaller than the same nominal
+            // Fontsize looks in a browser). The live preview's CSS
+            // `line-height` is a multiplier of the raw, declared
+            // `font-size` — it has no idea about that glyph-size
+            // correction — so reusing the corrected value here scaled
+            // line spacing by the same ~1.75x on top of an already-correct
+            // pitch. Measured directly: preview line pitch for "MY"/"TURN"
+            // at fontSize 28/lineHeight 1.0 was 28.0px (matching CSS
+            // line-height's own definition exactly); the export was
+            // producing 49px — 1.75x too much, the Anton multiplier
+            // verbatim — before this fix.
+            let line_height_px = caption.font_size * caption.line_height;
             let line_count = lines.len() as f64;
             let block_half_height = line_count * line_height_px / 2.0;
             let min_center = block_half_height;
@@ -368,6 +383,35 @@ mod tests {
         // pos_y = 180, line_height_px = 100*1.0 = 100 -> +/-50.
         assert!(ass.contains("{\\pos(320,130)}a"));
         assert!(ass.contains("{\\pos(320,230)}b"));
+    }
+
+    /// Regression test for a real bug: line spacing must scale off the
+    /// *raw* `caption.font_size`, not the value already scaled by
+    /// `ass_font_size_multiplier` for fonts like Anton (to fix libass
+    /// rendering their *glyphs* smaller than a browser does at the same
+    /// nominal Fontsize). The live preview's CSS `line-height` multiplies
+    /// the plain declared `font-size` — it has no idea about that
+    /// glyph-size correction — so reusing the corrected value for pitch
+    /// scaled Anton's line spacing by an extra, unintended 1.75x versus
+    /// the preview. Measured directly: preview line pitch for "MY"/"TURN"
+    /// at fontSize 28/lineHeight 1.0 was 28.0px; the export was producing
+    /// 49px (28 * 1.75, the Anton multiplier) before this fix.
+    #[test]
+    fn generate_ass_scales_multiline_spacing_off_the_raw_font_size_not_the_anton_corrected_one() {
+        let mut c = caption("c1", 0.0, 1.0, "MY\nTURN");
+        c.font_family = "Anton, sans-serif".to_string();
+        c.font_size = 28.0;
+        c.line_height = 1.0;
+        c.y = 0.5;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 198);
+
+        // Style's own Fontsize is still the corrected 28*1.75=49 (glyph
+        // size must match the preview) — only the *spacing* uses the raw
+        // 28. pos_y = round(0.5*198) = 99; line_height_px = 28*1.0 = 28
+        // -> +/-14.
+        assert!(ass.contains("Style: cap0,Anton,49,"));
+        assert!(ass.contains("{\\pos(320,85)}MY"));
+        assert!(ass.contains("{\\pos(320,113)}TURN"));
     }
 
     /// Regression test for a real bug: a bottom-anchored caption (SPEC.md
