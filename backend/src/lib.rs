@@ -16,10 +16,21 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use config::Config;
 use state::AppState;
+
+/// Where the built frontend (`frontend/dist`, per SPEC.md §1: "built to
+/// static files ... served by the same Axum binary") lives at runtime —
+/// relative to the process's working directory, which the Dockerfile fixes
+/// by `WORKDIR`ing to the same place it copies the built assets into. In
+/// local dev this directory just doesn't exist (the frontend is served by
+/// Vite on :5173 instead, proxying `/api` back to this server — see
+/// frontend/vite.config.ts) — `ServeDir` 404s per-request rather than
+/// failing at startup, so that's harmless.
+const STATIC_DIR: &str = "static";
 
 /// Axum's `Multipart` extractor otherwise caps request bodies at 2MB, far
 /// too small for a video upload — 200MB comfortably covers "at least
@@ -56,6 +67,9 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+        // Anything not under /api — `ServeDir` already serves `index.html`
+        // for a directory-root request (i.e. `/`) on its own.
+        .fallback_service(ServeDir::new(STATIC_DIR))
 }
 
 pub async fn run() -> anyhow::Result<()> {

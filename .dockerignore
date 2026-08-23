@@ -1,0 +1,14 @@
+**/target
+**/node_modules
+**/dist
+.git
+.scratch
+.idea
+.claude
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
