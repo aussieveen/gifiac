@@ -324,4 +324,87 @@ describe('CaptionEditor', () => {
 
     pauseSpy.mockRestore()
   })
+
+  it('dragging the playhead pauses the video and seeks it as it moves', () => {
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    const playhead = document.querySelector('.va-playhead') as HTMLElement
+
+    fireEvent.mouseDown(playhead, { clientX: 0 })
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+
+    // The timeline is BASE_TIMELINE_WIDTH (700px) wide at the default
+    // zoom, so a 350px move is exactly half the timeline -> half the
+    // video's duration.
+    fireEvent.mouseMove(window, { clientX: 350 })
+    fireEvent.mouseUp(window)
+
+    expect(videoEl.currentTime).toBeCloseTo(video.duration_seconds / 2, 1)
+    pauseSpy.mockRestore()
+  })
+
+  it('"Set start"/"Set end" set the GIF range to the current playhead time', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 2, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    fireEvent.click(screen.getByRole('button', { name: 'Set start' }))
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 6, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    fireEvent.click(screen.getByRole('button', { name: 'Set end' }))
+
+    expect(screen.getByText(/GIF range: 2\.00s – 6\.00s/)).toBeInTheDocument()
+  })
+
+  it('loops playback back to the range start once the playhead reaches the range end', () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLVideoElement) {
+      this.dispatchEvent(new Event('play'))
+      return Promise.resolve()
+    })
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLVideoElement) {
+      this.dispatchEvent(new Event('pause'))
+    })
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    // Narrow the GIF range to 1s-3s.
+    Object.defineProperty(videoEl, 'currentTime', { value: 1, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    fireEvent.click(screen.getByRole('button', { name: 'Set start' }))
+    Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    fireEvent.click(screen.getByRole('button', { name: 'Set end' }))
+
+    // Pressing play while sitting at the range's end (out of range) snaps
+    // back to its start instead of doing nothing.
+    fireEvent.click(screen.getByRole('button', { name: '▶ Play' }))
+    expect(videoEl.currentTime).toBe(1)
+
+    // Reaching the range's end while playing loops back to its start,
+    // without pausing.
+    Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    expect(videoEl.currentTime).toBe(1)
+    expect(screen.getByRole('button', { name: '⏸ Pause' })).toBeInTheDocument()
+  })
+
+  it('resumes at the range start when the browser fires "ended"', () => {
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLVideoElement) {
+      this.dispatchEvent(new Event('play'))
+      return Promise.resolve()
+    })
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 8, configurable: true, writable: true })
+
+    act(() => videoEl.dispatchEvent(new Event('ended')))
+
+    expect(videoEl.currentTime).toBe(0) // gifRange.start defaults to 0
+    expect(playSpy).toHaveBeenCalled()
+    playSpy.mockRestore()
+  })
 })

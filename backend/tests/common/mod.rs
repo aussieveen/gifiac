@@ -72,6 +72,42 @@ pub async fn spawn_app() -> TestApp {
     }
 }
 
+/// Generates a synthetic test clip deliberately too large to fit under
+/// axum's default 2MB multipart body limit — high-entropy noise (rather
+/// than `make_test_video`'s solid color, which compresses to near-nothing
+/// regardless of duration) at a high target bitrate, so a test can prove
+/// the raised `DefaultBodyLimit` is actually in effect rather than passing
+/// vacuously against a tiny fixture.
+#[allow(dead_code)]
+pub fn make_large_test_video(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("large_source.mp4");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x480:duration=4:rate=30",
+            "-c:v",
+            "libx264",
+            "-b:v",
+            "24M",
+            "-maxrate",
+            "24M",
+            "-bufsize",
+            "4M",
+            "-pix_fmt",
+            "yuv420p",
+            path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("failed to run ffmpeg to build large test fixture");
+    assert!(status.success(), "ffmpeg large fixture generation failed");
+    path
+}
+
 /// Generates a tiny synthetic test clip (solid color, no audio) with the
 /// system `ffmpeg` binary so tests don't need to ship a fixture video file.
 pub fn make_test_video(dir: &std::path::Path, duration_seconds: f64) -> PathBuf {

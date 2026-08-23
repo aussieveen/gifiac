@@ -15,10 +15,16 @@ pub mod storage;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use tower_http::trace::TraceLayer;
 
 use config::Config;
 use state::AppState;
+
+/// Axum's `Multipart` extractor otherwise caps request bodies at 2MB, far
+/// too small for a video upload — 200MB comfortably covers "at least
+/// 100MB, even though that's unlikely" per the user's ask.
+const MAX_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
 
 pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let config = Config::from_env();
@@ -47,6 +53,7 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
 pub fn build_app(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_router())
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

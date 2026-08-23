@@ -76,6 +76,10 @@ interface RangeDrag {
   startX: number
   orig: number
 }
+interface PlayheadDrag {
+  startX: number
+  orig: number
+}
 interface PositionDrag {
   id: string
   startX: number
@@ -183,6 +187,25 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     startRangeWindowDrag({ edge, startX: e.clientX, orig: gifRange[edge] })
   }
 
+  const startPlayheadWindowDrag = useWindowDrag<PlayheadDrag>((e, drag) => {
+    const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
+    seekTo(clamp(drag.orig + deltaT, 0, duration))
+  })
+
+  function startPlayheadDrag(e: React.MouseEvent) {
+    e.stopPropagation()
+    videoRef.current?.pause()
+    startPlayheadWindowDrag({ startX: e.clientX, orig: currentTime })
+  }
+
+  function setRangeStartToPlayhead() {
+    setGifRange((r) => ({ start: Math.min(currentTime, r.end - MIN_GIF_RANGE), end: r.end }))
+  }
+
+  function setRangeEndToPlayhead() {
+    setGifRange((r) => ({ start: r.start, end: Math.max(currentTime, r.start + MIN_GIF_RANGE) }))
+  }
+
   function seekTo(time: number) {
     setCurrentTime(time)
     if (videoRef.current) videoRef.current.currentTime = time
@@ -205,13 +228,43 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
     if (isPlaying) {
       video.pause()
     } else {
+      // Playback is confined to the GIF range (see handleVideoTimeUpdate) —
+      // starting from outside it (or from its very end) would immediately
+      // loop, which looks like nothing happened, so snap into range first.
+      if (video.currentTime < gifRange.start || video.currentTime >= gifRange.end) {
+        video.currentTime = gifRange.start
+        setCurrentTime(gifRange.start)
+      }
       video.play()
     }
   }
 
+  // Confines playback to the GIF range: once the playhead reaches the
+  // range's end, loop back to its start instead of continuing into
+  // (or stopping at) footage outside the exported clip. Scrubbing/seeking
+  // outside the range is still allowed — only *playback* is clamped, so
+  // switching the range's edges can still be previewed by hand.
   function handleVideoTimeUpdate() {
     const video = videoRef.current
-    if (video) setCurrentTime(video.currentTime)
+    if (!video) return
+    if (isPlaying && video.currentTime >= gifRange.end) {
+      video.currentTime = gifRange.start
+      setCurrentTime(gifRange.start)
+      return
+    }
+    setCurrentTime(video.currentTime)
+  }
+
+  // Covers the case where `gifRange.end` sits at (or past) the clip's real
+  // duration: `timeupdate` may not catch the boundary before the browser's
+  // own 'ended' event fires and pauses playback, which would otherwise stop
+  // the loop instead of restarting it.
+  function handleVideoEnded() {
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = gifRange.start
+    setCurrentTime(gifRange.start)
+    video.play()
   }
 
   const startPositionWindowDrag = useWindowDrag<PositionDrag>((e, drag) => {
@@ -264,9 +317,17 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
   const previewWidth = filmstrip.frameWidth * PREVIEW_SCALE
   const previewHeight = filmstrip.frameHeight * PREVIEW_SCALE
 
+  // A fixed strip height, independent of zoom/frame count, so frames stay
+  // clearly visible rather than shrinking (and letterboxing inside a
+  // taller minimum-height container) once a longer clip's 0.25s sampling
+  // makes each frame only a few pixels wide. Each frame's background tile
+  // is scaled to *this* height (not its on-screen width) and cropped to
+  // fill it — a "cover" crop instead of a fit — so there's never a gap
+  // above/below a frame even though the sprite's own aspect ratio may not
+  // match a single frame's narrow on-screen width.
+  const FILMSTRIP_HEIGHT = 64
   const filmstripFrameWidth = timelineWidth / filmstrip.frameCount
-  const filmstripFrameHeight = filmstripFrameWidth * (filmstrip.frameHeight / filmstrip.frameWidth)
-  const filmstripScale = filmstripFrameWidth / filmstrip.frameWidth
+  const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
   async function makeGif() {
     const trimmedName = name.trim()
@@ -321,6 +382,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
             className="preview-video"
             preload="auto"
             onTimeUpdate={handleVideoTimeUpdate}
+            onEnded={handleVideoEnded}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
           />
@@ -465,7 +527,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
           <div className="va-filmstrip-wrap">
             <div
               className="va-filmstrip"
-              style={{ width: timelineWidth, height: Math.max(32, filmstripFrameHeight) }}
+              style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }}
               onClick={scrubTo}
             >
               {Array.from({ length: filmstrip.frameCount }).map((_, i) => (
@@ -474,7 +536,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                   className="va-frame"
                   style={{
                     width: filmstripFrameWidth,
-                    height: filmstripFrameHeight,
+                    height: FILMSTRIP_HEIGHT,
                     ...spriteBackgroundStyle(i, filmstrip, filmstrip.imageUrl, filmstripScale),
                   }}
                 />
@@ -489,7 +551,13 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                 <div className="va-range-handle" style={{ left: -5 }} onMouseDown={(e) => startRangeDrag(e, 'start')} />
                 <div className="va-range-handle" style={{ right: -5 }} onMouseDown={(e) => startRangeDrag(e, 'end')} />
               </div>
-              <div className="va-playhead" style={{ left: timeToX(currentTime, duration, timelineWidth) }} />
+              <div
+                className="va-playhead"
+                style={{ left: timeToX(currentTime, duration, timelineWidth) }}
+                onMouseDown={startPlayheadDrag}
+              >
+                <div className="va-playhead-grip" />
+              </div>
             </div>
           </div>
           </div>
@@ -513,6 +581,12 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
             <span className="va-hint">
               GIF range: {gifRange.start.toFixed(2)}s – {gifRange.end.toFixed(2)}s ({(gifRange.end - gifRange.start).toFixed(2)}s)
             </span>
+            <button className="va-btn" onClick={setRangeStartToPlayhead}>
+              Set start
+            </button>
+            <button className="va-btn" onClick={setRangeEndToPlayhead}>
+              Set end
+            </button>
             <input
               className="va-name-input"
               placeholder="Name this GIF…"

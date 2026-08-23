@@ -298,7 +298,6 @@ button {
 .va-filmstrip {
   position: relative;
   display: flex;
-  align-items: center; /* center frames shorter than the strip's enforced min-height */
   background: #0d0e12;
   border-radius: 3px;
   overflow: hidden;
@@ -314,9 +313,12 @@ button {
   position: absolute;
   top: -3px;
   bottom: -3px;
-  background: rgba(245, 197, 24, 0.25);
+  /* No fill — the border alone marks exactly where the exported clip
+     starts/ends, so the filmstrip inside it stays fully visible. */
+  background: transparent;
   border: 2px solid #f5c518;
   border-radius: 3px;
+  pointer-events: none;
 }
 
 .va-range-handle {
@@ -326,13 +328,41 @@ button {
   width: 10px;
   background: #f5c518;
   cursor: ew-resize;
+  pointer-events: auto;
 }
 
+/* A wider (14px) invisible hit-area, shifted left by half its width so it
+   stays centered on the actual playhead time — the visible thin line and
+   grip circle are drawn inside it via ::before and .va-playhead-grip. */
 .va-playhead {
   position: absolute;
   top: -4px;
   bottom: -4px;
+  width: 14px;
+  margin-left: -7px;
+  background: transparent;
+  cursor: grab;
+}
+
+.va-playhead::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 0;
   width: 2px;
+  background: #fff;
+  pointer-events: none;
+}
+
+.va-playhead-grip {
+  position: absolute;
+  left: 7px;
+  bottom: -8px;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
   background: #fff;
   pointer-events: none;
 }

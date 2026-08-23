@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{make_test_video, multipart_body, spawn_app};
+use common::{make_large_test_video, make_test_video, multipart_body, spawn_app};
 
 #[tokio::test]
 async fn upload_probes_generates_thumbnail_and_lists_the_video() {
@@ -134,6 +134,39 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .await
         .unwrap();
     assert!(!sprite_bytes.is_empty());
+}
+
+#[tokio::test]
+async fn upload_accepts_a_file_well_over_axums_default_2mb_body_limit() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_large_test_video(fixture_dir.path());
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    assert!(
+        video_bytes.len() > 2 * 1024 * 1024,
+        "fixture is only {} bytes, not actually over the old 2MB default",
+        video_bytes.len()
+    );
+
+    let (boundary, body) = multipart_body("file", "large-clip.mp4", "video/mp4", video_bytes);
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]
