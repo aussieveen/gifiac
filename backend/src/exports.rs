@@ -60,13 +60,6 @@ async fn run_pipeline(
     let video_uuid = Uuid::parse_str(&video.id)?;
     let video_path = paths::video_path(&state.config.video_dir, &video_uuid, &video.extension);
 
-    let tmp_dir = tempfile::tempdir()?;
-    let ass_path = tmp_dir.path().join("captions.ass");
-    let palette_path = tmp_dir.path().join("palette.png");
-    let gif_path = tmp_dir.path().join("out.gif");
-    let mp4_path = tmp_dir.path().join("out.mp4");
-    let webm_path = tmp_dir.path().join("out.webm");
-
     // The captions are burned in *after* the video is scaled down (see
     // captioned_scale_filter's doc comment), so the ASS file's
     // PlayResX/PlayResY — and thus caption font size and \pos() placement
@@ -81,12 +74,74 @@ async fn run_pipeline(
         output_width,
         output_height,
     );
-    tokio::fs::write(&ass_path, ass).await?;
+
+    let result = transcode_and_upload(
+        state,
+        export_id,
+        &video_path,
+        &ass,
+        request.gif_range_start,
+        clip_duration,
+        send,
+    )
+    .await?;
+
+    let caption_text = request
+        .captions
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let new_gif = NewGif {
+        id: export_id.to_string(),
+        video_id: Some(video.id.clone()),
+        name: request.name.clone(),
+        caption_text,
+        captions_json: Some(serde_json::to_string(&request.captions)?),
+        gif_range_start: request.gif_range_start,
+        gif_range_end: request.gif_range_end,
+        width: result.width,
+        height: result.height,
+    };
+    let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
+
+    Ok(gif)
+}
+
+/// The R2 object keys a `transcode_and_upload` run produced, plus the
+/// output GIF's actual post-scale dimensions — everything a caller needs
+/// to build its own `NewGif` row, whether that's an export (captions,
+/// tied to a `videos` row) or a bulk import (no captions, no source
+/// `videos` row at all). Pulled out of `run_pipeline` because bulk import
+/// (SPEC.md §7) needs the exact same burn-in-scale-down-two-pass-GIF-then-
+/// MP4-then-WebM-then-upload sequence, just fed a different source file
+/// and an empty ASS (no captions to burn in).
+pub struct TranscodeResult {
+    pub width: i64,
+    pub height: i64,
+}
+
+pub async fn transcode_and_upload(
+    state: &AppState,
+    id: Uuid,
+    video_path: &std::path::Path,
+    ass_content: &str,
+    range_start: f64,
+    clip_duration: f64,
+    send: &impl Fn(ExportEvent),
+) -> anyhow::Result<TranscodeResult> {
+    let tmp_dir = tempfile::tempdir()?;
+    let ass_path = tmp_dir.path().join("captions.ass");
+    let palette_path = tmp_dir.path().join("palette.png");
+    let gif_path = tmp_dir.path().join("out.gif");
+    let mp4_path = tmp_dir.path().join("out.mp4");
+    let webm_path = tmp_dir.path().join("out.webm");
+    tokio::fs::write(&ass_path, ass_content).await?;
 
     let clip = ffmpeg_export::ClipSource {
-        video_path: &video_path,
+        video_path,
         ass_path: &ass_path,
-        range_start: request.gif_range_start,
+        range_start,
         clip_duration,
     };
 
@@ -132,22 +187,14 @@ async fn run_pipeline(
         tokio::task::spawn_blocking(move || crate::ffmpeg::probe_video(&probe_path)).await??;
 
     // Not driven off real byte-transfer progress (unlike the FFmpeg
-    // stages) — just an even split across however many files this export
-    // uploads, so a future 4th output format doesn't need its own
+    // stages) — just an even split across however many files this upload
+    // covers, so a future 4th output format doesn't need its own
     // hand-picked percent literal.
     let uploads = [
+        (paths::gif_object_key(&id), gif_path.as_path(), "image/gif"),
+        (paths::mp4_object_key(&id), mp4_path.as_path(), "video/mp4"),
         (
-            paths::gif_object_key(&export_id),
-            gif_path.as_path(),
-            "image/gif",
-        ),
-        (
-            paths::mp4_object_key(&export_id),
-            mp4_path.as_path(),
-            "video/mp4",
-        ),
-        (
-            paths::webm_object_key(&export_id),
+            paths::webm_object_key(&id),
             webm_path.as_path(),
             "video/webm",
         ),
@@ -165,26 +212,10 @@ async fn run_pipeline(
         percent: 100,
     });
 
-    let caption_text = request
-        .captions
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let new_gif = NewGif {
-        id: export_id.to_string(),
-        video_id: Some(video.id.clone()),
-        name: request.name.clone(),
-        caption_text,
-        captions_json: Some(serde_json::to_string(&request.captions)?),
-        gif_range_start: request.gif_range_start,
-        gif_range_end: request.gif_range_end,
+    Ok(TranscodeResult {
         width: probe.width,
         height: probe.height,
-    };
-    let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
-
-    Ok(gif)
+    })
     // `tmp_dir` drops here, deleting the local ass/palette/gif/mp4/webm
     // scratch files — R2 is the only persistent home for the outputs
     // (SPEC.md §9).

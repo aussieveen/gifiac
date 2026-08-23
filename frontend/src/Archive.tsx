@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteGif, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, listGifs, renameGif } from './api'
 import type { Gif } from './types'
 
 /** Auto-dismisses after a beat, matching the archive prototype's toast. */
@@ -27,6 +27,8 @@ export function Archive() {
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
   const toast = useToast()
 
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
@@ -76,6 +78,21 @@ export function Archive() {
     }
   }
 
+  async function handleImport(files: FileList | null) {
+    if (!files || files.length === 0) return
+    setImporting(true)
+    setImportError(null)
+    try {
+      const created = await importGifs(Array.from(files))
+      setGifs((gs) => [...created, ...gs])
+      toast.show(created.length === 1 ? '1 GIF imported' : `${created.length} GIFs imported`)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setImporting(false)
+    }
+  }
+
   async function remove() {
     if (!selected) return
     if (!window.confirm(`Delete "${selected.name}"? This can't be undone.`)) return
@@ -97,16 +114,33 @@ export function Archive() {
       <h1>Archive</h1>
       <p className="subtitle">Search, re-download, or delete GIFs you've made.</p>
 
-      <input
-        className="archive-search"
-        placeholder="Search by name or caption text…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        aria-label="Search archive"
-      />
+      <div className="archive-toolbar">
+        <input
+          className="archive-search"
+          placeholder="Search by name or caption text…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search archive"
+        />
+        <label className="va-btn archive-import-btn">
+          {importing ? 'Importing…' : '+ Import GIFs'}
+          <input
+            type="file"
+            accept="image/gif,video/*"
+            multiple
+            hidden
+            disabled={importing}
+            onChange={(e) => {
+              handleImport(e.target.files)
+              e.target.value = '' // allow re-selecting the same file(s) later
+            }}
+          />
+        </label>
+      </div>
 
       {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
+      {importError && <p className="export-error">{importError}</p>}
 
       <div className="archive-layout">
         <div className="archive-grid">

@@ -8,9 +8,10 @@ vi.mock('./api', () => ({
   listGifs: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
+  importGifs: vi.fn(),
 }))
 
-import { deleteGif, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, listGifs, renameGif } from './api'
 
 const gifA: Gif = {
   id: 'g1',
@@ -42,6 +43,7 @@ beforeEach(() => {
   vi.mocked(listGifs).mockReset()
   vi.mocked(renameGif).mockReset()
   vi.mocked(deleteGif).mockReset()
+  vi.mocked(importGifs).mockReset()
 })
 
 afterEach(() => {
@@ -189,5 +191,38 @@ describe('Archive', () => {
 
     expect(deleteGif).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
+  })
+
+  it('importing files calls the API and prepends the created gifs to the grid', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(importGifs).mockResolvedValue([gifB])
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+
+    const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, file)
+
+    await waitFor(() => expect(importGifs).toHaveBeenCalledWith([file]))
+    expect(await screen.findByRole('button', { name: 'dog running' })).toBeInTheDocument()
+    await screen.findByText(/1 gif imported/i)
+  })
+
+  it('shows an import error without touching the grid', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(importGifs).mockRejectedValue(new Error('/api/gifs/import failed (400): bad file'))
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+
+    const file = new File(['bytes'], 'bad.gif', { type: 'image/gif' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, file)
+
+    await screen.findByText(/bad file/)
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
   })
 })

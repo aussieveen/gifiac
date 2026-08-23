@@ -4,6 +4,7 @@ import {
   deleteGif,
   getFilmstripMeta,
   getGif,
+  importGifs,
   listGifs,
   listVideos,
   renameGif,
@@ -225,6 +226,28 @@ describe('deleteGif', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(deleteGif('g1')).rejects.toThrow(/500/)
+  })
+})
+
+describe('importGifs', () => {
+  it('POSTs each file as multipart form data under the "files" field', async () => {
+    const created = [{ id: 'g1' }, { id: 'g2' }]
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(created))
+    vi.stubGlobal('fetch', fetchMock)
+    const files = [
+      new File(['a'], 'a.gif', { type: 'image/gif' }),
+      new File(['b'], 'b.gif', { type: 'image/gif' }),
+    ]
+
+    const result = await importGifs(files)
+
+    expect(result).toEqual(created)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/gifs/import')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeInstanceOf(FormData)
+    const submitted = (init.body as FormData).getAll('files') as File[]
+    expect(submitted.map((f) => f.name)).toEqual(['a.gif', 'b.gif'])
   })
 })
 

@@ -127,3 +127,12 @@ export async function deleteGif(id: string): Promise<void> {
     throw new Error(`/api/gifs/${id} failed (${response.status}): ${body || response.statusText}`)
   }
 }
+
+// Bulk import per SPEC.md §7 — multiple files in one multipart request,
+// each field named "files" (reusing the video-upload multipart pattern,
+// extended to multi-file), returning the array of created gif rows.
+export function importGifs(files: File[]): Promise<Gif[]> {
+  const body = new FormData()
+  for (const file of files) body.append('files', file, file.name)
+  return request<Gif[]>('/api/gifs/import', { method: 'POST', body })
+}

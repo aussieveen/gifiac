@@ -487,15 +487,27 @@ button {
 
 /* ---------- archive ---------- */
 
+.archive-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
 .archive-search {
-  width: 100%;
+  flex: 1;
   background: #0d0e12;
   border: 1px solid #2a2b33;
   color: #fff;
   border-radius: 4px;
   padding: 8px 10px;
   font-size: 14px;
-  margin-top: 8px;
+}
+
+.archive-import-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
 
 .archive-layout {

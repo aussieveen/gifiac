@@ -263,23 +263,57 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
     serde_json::from_str(last_data).unwrap()
 }
 
+/// Generates a tiny synthetic GIF fixture with the system `ffmpeg` binary —
+/// for bulk-import tests, which need a real *GIF* (not an mp4) as their
+/// source, per SPEC.md §7 ("imported files are typically GIF-only").
+#[allow(dead_code)]
+pub fn make_test_gif(dir: &std::path::Path, duration_seconds: f64) -> PathBuf {
+    let path = dir.join("source.gif");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=c=green:s=64x48:d={duration_seconds}"),
+            path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("failed to run ffmpeg to build gif test fixture");
+    assert!(status.success(), "ffmpeg gif fixture generation failed");
+    path
+}
+
 pub fn multipart_body(
     field_name: &str,
     filename: &str,
     content_type: &str,
     bytes: Vec<u8>,
 ) -> (String, Vec<u8>) {
+    multipart_body_multi(&[(field_name, filename, content_type, bytes)])
+}
+
+/// Same wire format as `multipart_body`, but with one part per `(field_name,
+/// filename, content_type, bytes)` entry — for endpoints that accept
+/// multiple files in a single request (bulk import, SPEC.md §7).
+#[allow(dead_code)]
+pub fn multipart_body_multi(files: &[(&str, &str, &str, Vec<u8>)]) -> (String, Vec<u8>) {
     let boundary = "----gifiac-test-boundary".to_string();
     let mut body = Vec::new();
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
-    body.extend_from_slice(&bytes);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    for (field_name, filename, content_type, bytes) in files {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     (boundary, body)
 }
