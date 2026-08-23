@@ -64,9 +64,22 @@ fn seek_args(clip: ClipSource) -> Vec<String> {
         format!("{:.3}", clip.range_start),
         "-i".to_string(),
         clip.video_path.to_string_lossy().into_owned(),
-        "-t".to_string(),
-        format!("{:.3}", clip.clip_duration),
     ]
+}
+
+/// `-t` as an *output* option (placed right before the output path, after
+/// every input) rather than bundled into `seek_args` as a per-input one.
+/// `encode_gif` takes a second input (the palette image) after the video
+/// one; a per-input `-t` sitting between the two `-i`s applies to
+/// whichever `-i` comes *next* — the palette, not the video — so the
+/// video input ends up with no duration limit at all and ffmpeg reads it
+/// to EOF. Found by an export whose GIF came out full-length regardless
+/// of the requested range while its MP4/WebM (only one input each, so
+/// the same bug couldn't reach them) came out correctly trimmed. An
+/// output-side `-t` has no such positional footgun, so every pipeline
+/// function uses it the same way regardless of how many inputs it has.
+fn duration_args(clip: ClipSource) -> Vec<String> {
+    vec!["-t".to_string(), format!("{:.3}", clip.clip_duration)]
 }
 
 /// Pass 1 of the two-pass GIF encode: analyze the (captioned, scaled,
@@ -84,6 +97,7 @@ pub async fn generate_palette<F: FnMut(u8)>(
     args.extend(seek_args(clip));
     args.push("-vf".to_string());
     args.push(filter);
+    args.extend(duration_args(clip));
     args.push(palette_path.to_string_lossy().into_owned());
 
     run_ffmpeg_with_progress(&args, clip.clip_duration, on_progress).await
@@ -108,6 +122,7 @@ pub async fn encode_gif<F: FnMut(u8)>(
     args.push(filter);
     args.push("-map".to_string());
     args.push("[out]".to_string());
+    args.extend(duration_args(clip));
     args.push(out_path.to_string_lossy().into_owned());
 
     run_ffmpeg_with_progress(&args, clip.clip_duration, on_progress).await
@@ -145,6 +160,7 @@ async fn encode_video<F: FnMut(u8)>(
     } else {
         args.push("-an".to_string());
     }
+    args.extend(duration_args(clip));
     args.push(out_path.to_string_lossy().into_owned());
 
     run_ffmpeg_with_progress(&args, clip.clip_duration, on_progress).await

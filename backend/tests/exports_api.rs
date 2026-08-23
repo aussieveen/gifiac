@@ -184,6 +184,102 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     assert!(webm_status.is_success());
 }
 
+/// Regression test for a real bug: `encode_gif`'s ffmpeg invocation has a
+/// *second* input (the generated palette image) after the video one, and
+/// the shared `-t <duration>` arg was landing between the two `-i`s —
+/// which ffmpeg treats as an option for whichever `-i` comes next (the
+/// palette, not the video), so the video input silently got no duration
+/// limit at all and read to EOF. The GIF came out full source length
+/// regardless of the requested range; MP4/WebM (only one input each, so
+/// the same positional bug couldn't reach them) came out correctly
+/// trimmed — which is exactly why this needs its own duration assertion
+/// per format, not just "did all three upload".
+#[tokio::test]
+async fn export_output_duration_matches_the_requested_range_not_the_source_video() {
+    let test_app = spawn_app().await;
+    // A source clearly longer than the requested range, so a regression
+    // (falling back to full source length) is unmistakable rather than
+    // hidden by a source that's already close to the range.
+    let video = upload_video(&test_app, 10.0).await;
+    let video_id = video["id"].as_str().unwrap();
+
+    let request_body = json!({
+        "video_id": video_id,
+        "name": "duration check",
+        "captions": [],
+        "gif_range_start": 1.0,
+        "gif_range_end": 3.5
+    });
+    let create_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let accepted: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let export_id = accepted["export_id"].as_str().unwrap().to_string();
+
+    let progress_response = tokio::time::timeout(
+        Duration::from_secs(60),
+        test_app.app.clone().oneshot(
+            Request::builder()
+                .uri(format!("/api/exports/{export_id}/progress"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let body_text = String::from_utf8(
+        axum::body::to_bytes(progress_response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let events = parse_sse_events(&body_text);
+    let (_, last_data) = events.last().unwrap();
+    let gif: serde_json::Value = serde_json::from_str(last_data).unwrap();
+    let gif_id = gif["id"].as_str().unwrap();
+
+    let tmp_dir = TempDir::new().unwrap();
+    for (key, filename) in [
+        (format!("gifs/{gif_id}.gif"), "out.gif"),
+        (format!("clips/{gif_id}.mp4"), "out.mp4"),
+        (format!("clips/{gif_id}.webm"), "out.webm"),
+    ] {
+        let bytes = reqwest::get(test_app.storage.public_url(&key))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let path = tmp_dir.path().join(filename);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let probe = gifiac_backend::ffmpeg::probe_video(&path).unwrap();
+        assert!(
+            probe.duration_seconds < 5.0,
+            "{key} duration was {}s — expected close to the requested 2.5s range, \
+             not anywhere near the source's full 10s (the full-length-fallback bug)",
+            probe.duration_seconds
+        );
+    }
+}
+
 #[tokio::test]
 async fn export_with_empty_name_is_rejected() {
     let test_app = spawn_app().await;
