@@ -130,6 +130,7 @@ describe('createExport', () => {
         y: 0.88,
         width: 0.6,
         outlineColor: '#000000',
+        lineHeight: 0.65,
       },
     ]
 

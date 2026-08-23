@@ -16,6 +16,18 @@ const MIN_GIF_RANGE = 0.1
 const DEFAULT_CAPTION_WIDTH = 0.6
 const MIN_CAPTION_WIDTH = 0.05
 const MAX_CAPTION_WIDTH = 1
+// Matches the backend default (models.rs `default_line_height`) — ASS has
+// no line-spacing control independent of font size, so the backend lays
+// multi-line captions out line-by-line using this same multiplier. It only
+// does that for *explicit* line breaks in `text` (backend/src/ass.rs splits
+// on literal '\n'), not text the browser happens to auto-wrap because the
+// box is too narrow — CSS line-height applies to auto-wrapped lines too, so
+// a caption that only auto-wraps (no typed line break) can preview tighter
+// than it actually exports. Typing Enter to force the break keeps the two
+// in sync.
+const DEFAULT_LINE_HEIGHT = 0.65
+const MIN_LINE_HEIGHT = 0.3
+const MAX_LINE_HEIGHT = 1.5
 const BASE_TIMELINE_WIDTH = 700
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3]
 const DEFAULT_ZOOM_INDEX = 2 // ZOOM_LEVELS[2] === 1
@@ -61,6 +73,7 @@ function defaultCaption(id: string, start: number, end: number): Caption {
     y: 0.88,
     width: DEFAULT_CAPTION_WIDTH,
     outlineColor: '#000000',
+    lineHeight: DEFAULT_LINE_HEIGHT,
   }
 }
 
@@ -415,6 +428,7 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                 width: `${c.width * 100}%`,
                 fontFamily: c.fontFamily,
                 fontSize: c.fontSize,
+                lineHeight: c.lineHeight,
                 color: c.color,
                 textAlign: c.align,
                 textShadow: outlineTextShadow(c.outlineColor),
@@ -468,6 +482,22 @@ export function CaptionEditor({ video, filmstrip, onBack }: Props) {
                   onChange={(e) => patchStyle({ fontSize: Number(e.target.value) })}
                 />
                 <span className="va-hint">{selected.fontSize}px</span>
+              </div>
+              <div className="va-style-row">
+                <label className="va-hint" htmlFor="line-height-input">
+                  Line height
+                </label>
+                <input
+                  id="line-height-input"
+                  aria-label="Line height"
+                  type="range"
+                  min={MIN_LINE_HEIGHT}
+                  max={MAX_LINE_HEIGHT}
+                  step={0.05}
+                  value={selected.lineHeight}
+                  onChange={(e) => patchStyle({ lineHeight: Number(e.target.value) })}
+                />
+                <span className="va-hint">{selected.lineHeight.toFixed(2)}×</span>
               </div>
               <div className="va-style-row">
                 <input

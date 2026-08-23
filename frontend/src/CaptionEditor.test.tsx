@@ -81,7 +81,22 @@ describe('CaptionEditor', () => {
 
     await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(createExport).mock.calls[0][0]
-    expect(payload.captions[0]).toMatchObject({ width: 0.6, outlineColor: '#000000' })
+    expect(payload.captions[0]).toMatchObject({ width: 0.6, outlineColor: '#000000', lineHeight: 0.65 })
+  })
+
+  it('the line-height slider updates the caption and the live preview', async () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    const slider = screen.getByLabelText('Line height')
+    expect(slider).toHaveValue('0.65')
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ lineHeight: '0.65' })
+
+    fireEvent.change(slider, { target: { value: '0.4' } })
+
+    expect(screen.getByText('0.40×')).toBeInTheDocument()
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ lineHeight: '0.4' })
   })
 
   it('unchecking Outline hides the color picker and sends outlineColor: null', async () => {

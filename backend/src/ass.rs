@@ -50,15 +50,39 @@ pub fn generate_ass(
             align = ass_alignment(caption.align),
         ));
 
-        events.push_str(&format!(
-            "Dialogue: 0,{start},{end},{name},,0,0,0,,{{\\pos({x},{y})}}{text}\n",
-            start = ass_timestamp(local_start),
-            end = ass_timestamp(local_end),
-            name = style_name,
-            x = pos_x,
-            y = pos_y,
-            text = ass_escape_text(&caption.text),
-        ));
+        let start = ass_timestamp(local_start);
+        let end = ass_timestamp(local_end);
+        let lines: Vec<&str> = caption.text.split('\n').collect();
+
+        if lines.len() <= 1 {
+            events.push_str(&format!(
+                "Dialogue: 0,{start},{end},{name},,0,0,0,,{{\\pos({x},{y})}}{text}\n",
+                name = style_name,
+                x = pos_x,
+                y = pos_y,
+                text = ass_escape_text(&caption.text),
+            ));
+        } else {
+            // libass has no line-spacing control independent of font size
+            // (verified directly: `\fscy` scales glyph height and line
+            // pitch together, no combination decouples them — see
+            // `Caption::line_height`'s doc comment) — so a multi-line
+            // caption is laid out here instead, as one singly-positioned
+            // Dialogue event per line, spaced by `line_height`, rather
+            // than one event with libass's fixed automatic pitch.
+            let line_height_px = font_size * caption.line_height;
+            let line_count = lines.len() as f64;
+            for (line_index, line) in lines.iter().enumerate() {
+                let offset = (line_index as f64 - (line_count - 1.0) / 2.0) * line_height_px;
+                let y = (pos_y as f64 + offset).round() as i64;
+                events.push_str(&format!(
+                    "Dialogue: 0,{start},{end},{name},,0,0,0,,{{\\pos({x},{y})}}{text}\n",
+                    name = style_name,
+                    x = pos_x,
+                    text = ass_escape_text(line),
+                ));
+            }
+        }
     }
 
     format!(
@@ -197,6 +221,7 @@ mod tests {
             y: 0.88,
             width: 0.6,
             outline_color: Some("#000000".to_string()),
+            line_height: 0.65,
         }
     }
 
@@ -292,12 +317,43 @@ mod tests {
     }
 
     #[test]
-    fn generate_ass_escapes_newlines_as_hard_breaks() {
+    fn generate_ass_positions_each_line_of_a_multiline_caption_separately() {
+        // No longer joined into one \N Dialogue — libass's automatic line
+        // pitch can't be decoupled from font size (see `line_height`'s doc
+        // comment), so each line is its own positioned event instead.
         let mut c = caption("c1", 0.0, 1.0, "line one\nline two");
-        c.text = "line one\nline two".to_string();
+        c.x = 0.5;
+        c.y = 0.5;
+        c.font_size = 28.0;
+        c.line_height = 0.65;
         let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
 
-        assert!(ass.contains("line one\\Nline two"));
+        assert!(!ass.contains("\\N"));
+        // pos_y = round(0.5*360) = 180; line_height_px = 28*0.65 = 18.2;
+        // offsets = ∓9.1 -> 170.9/189.1, rounding to 171/189.
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,cap0,,0,0,0,,{\\pos(320,171)}line one"));
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,cap0,,0,0,0,,{\\pos(320,189)}line two"));
+    }
+
+    #[test]
+    fn generate_ass_spaces_multiline_lines_by_the_line_height_multiplier() {
+        let mut c = caption("c1", 0.0, 1.0, "a\nb");
+        c.font_size = 100.0;
+        c.line_height = 1.0;
+        c.y = 0.5;
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        // pos_y = 180, line_height_px = 100*1.0 = 100 -> +/-50.
+        assert!(ass.contains("{\\pos(320,130)}a"));
+        assert!(ass.contains("{\\pos(320,230)}b"));
+    }
+
+    #[test]
+    fn generate_ass_leaves_a_single_line_caption_as_one_dialogue_event() {
+        let c = caption("c1", 0.0, 1.0, "one line only");
+        let ass = generate_ass(&[c], 0.0, 2.0, 640, 360);
+
+        assert_eq!(ass.matches("Dialogue:").count(), 1);
     }
 
     #[test]

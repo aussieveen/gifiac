@@ -63,10 +63,27 @@ pub struct Caption {
     /// missing key means "no outline" rather than a deserialize error.
     #[serde(default)]
     pub outline_color: Option<String>,
+    /// Multiplier applied to the (already font-size-corrected) ASS font
+    /// size to get the pixel distance between line centers, for captions
+    /// with more than one line (split on literal newlines in `text`).
+    /// User-requested: ASS/libass has no native line-spacing control
+    /// independent of font size (verified directly — `\fscy` scales both
+    /// together, no combination decouples them), so multi-line captions
+    /// render each line as its own positioned Dialogue event instead of
+    /// relying on libass's fixed automatic line pitch, which measured at
+    /// roughly a 1.0 multiplier here — and which is exactly what the user
+    /// asked to have reduced, so `0.65` is the new default rather than a
+    /// value that reproduces the old (complained-about) spacing.
+    #[serde(default = "default_line_height")]
+    pub line_height: f64,
 }
 
 fn default_caption_width() -> f64 {
     0.6
+}
+
+fn default_line_height() -> f64 {
+    0.65
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

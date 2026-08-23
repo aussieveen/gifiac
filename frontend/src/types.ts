@@ -16,6 +16,7 @@ export interface Caption {
   y: number // 0-1 fractional position within the frame
   width: number // 0-1 fractional box width, centered on x — controls text wrap
   outlineColor: string | null // hex, or null for no outline
+  lineHeight: number // multiplier of fontSize -> gap between wrapped lines
 }
 
 // `videos` row shape returned by the backend (SPEC.md §2) — snake_case,
