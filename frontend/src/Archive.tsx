@@ -20,6 +20,30 @@ function useToast() {
   return { message, show }
 }
 
+/** `navigator.clipboard` only exists in secure contexts (HTTPS, or
+ * localhost) — Gifiac is a self-hosted LAN tool typically served over plain
+ * HTTP on a local hostname/IP, so it's routinely unavailable. Falls back to
+ * the older `execCommand('copy')` path, which isn't secure-context-gated. */
+async function copyToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('execCommand copy failed')
+    }
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 interface Props {
   /** Pre-selects this GIF in the detail panel once it loads — used when
    * arriving here right after making a GIF, so its link/download/rename
@@ -79,7 +103,7 @@ export function Archive({ initialSelectedId }: Props) {
   async function copyLink() {
     if (!selected?.gif_url) return
     try {
-      await navigator.clipboard.writeText(selected.gif_url)
+      await copyToClipboard(selected.gif_url)
       toast.show('Link copied')
     } catch {
       toast.show('Copy failed')

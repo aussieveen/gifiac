@@ -154,6 +154,26 @@ describe('Archive', () => {
     await screen.findByText(/link copied/i)
   })
 
+  it('copy link falls back to execCommand when navigator.clipboard is unavailable (e.g. an insecure-context LAN deployment)', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    })
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+
+    await user.click(screen.getByRole('button', { name: /copy link/i }))
+
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    await screen.findByText(/link copied/i)
+  })
+
   it('the download action links directly to the gif url', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
