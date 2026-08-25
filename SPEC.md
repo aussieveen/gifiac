@@ -246,7 +246,46 @@ The image is built and published by GitHub Actions so it can be installed on Unr
 
 ---
 
-## 12. Out of scope
+## 12. Video templates *(designed, not yet implemented)*
+
+A templating system so a video's full export setup can be saved and reused with minimal edits.
+
+### Behaviour
+
+- **One template per video.** A single set of saved parameters is attached to a video; it cannot have multiple templates.
+- **Pre-fills the editor automatically.** Opening a video that has a template loads the caption editor with all template data pre-filled. The user can freely change anything before exporting.
+- **Export form UX:**
+  - When a video has *no* template: a **"Create template"** checkbox appears on the Make GIF form. Checking it saves the current export parameters as the video's template when the GIF is exported.
+  - When working *from* a template: the "Create template" checkbox is hidden; a standalone **"Overwrite template"** button replaces it. Overwriting is independent of exporting — the user can update the template without triggering a new GIF export.
+- **What is stored:** the full export form payload — captions array, GIF range (in/out points), and output dimensions. The GIF `name` is **not** stored (it's per-GIF, not per-template).
+- **Video deletion guard:** a video can only be deleted if it has **no template**. The previous guard (blocking deletion if any GIF was made from the video) is removed and replaced entirely by this rule.
+- **Template badge:** videos with a saved template display a small badge/icon on their card in the video picker.
+
+### Data model
+
+New table `video_templates`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `video_id` | TEXT | PK + FK → `videos.id`; unique constraint enforces one template per video |
+| `payload_json` | TEXT | Full export payload as a JSON blob: `{captions, gif_range_start, gif_range_end, width, height}` |
+| `saved_at` | TEXT | ISO8601 |
+
+No separate path/URL columns; the template is always associated via `video_id`.
+
+### REST API
+
+| Method + path | Purpose |
+|---|---|
+| `GET /api/videos/{id}/template` | Returns the template payload, or `404` if none exists |
+| `PUT /api/videos/{id}/template` | Upserts (creates or overwrites) the template with the request body |
+| `DELETE /api/videos/{id}/template` | Deletes the template, allowing the video to be deleted |
+
+The `GET /api/videos` list response gains a `has_template: bool` field per item (resolved at the SQL join level, no extra round-trips) to power the video-card badge.
+
+---
+
+## 13. Out of scope
 
 - Multi-user / authentication.
 - YouTube URL import (nice-to-have, explicitly deferred).
