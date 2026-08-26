@@ -8,6 +8,6 @@ dist/
 *.db-journal
 *.db-shm
 *.db-wal
-.env
+backend/.env
 .env.*
 !.env.example

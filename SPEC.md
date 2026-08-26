@@ -244,7 +244,7 @@ Reference prototype: `.scratch/gifiac/prototypes/archive-browse/` (Variant C won
 
 **Port**: fixed internal `8080`. Host-side port mapping is left to Unraid's own template UI — nothing to configure inside the container.
 
-**Deployment artifact**: [`docker-compose.yml`](.scratch/gifiac/assets/docker-compose.yml) (`debian:bookworm-slim` base, the single `/data` volume, fixed port mapping). References the CI-published registry image (see §11) rather than building locally. R2 credentials are supplied via a companion `.env` file, not hardcoded into the compose file.
+**Deployment artifact**: [`docker-compose.yml`](.scratch/gifiac/assets/docker-compose.yml) (`debian:bookworm-slim` base, the single `/data` volume, fixed port mapping). References the CI-published registry image (see §11) rather than building locally. R2 credentials are supplied via a companion `backend/.env` file, not hardcoded into the compose file.
 
 ---
 

@@ -57,7 +57,7 @@ on every push to `main` — no local build required.
    stored there, not on disk.
 2. Copy [`docker-compose.yml`](docker-compose.yml) and
    [`.env.example`](.env.example) to your host, and copy `.env.example` to
-   `.env`, filling in your R2 credentials.
+   `backend/.env`, filling in your R2 credentials.
 3. In `docker-compose.yml`, replace `YOUR_GITHUB_USERNAME` in the `image:`
    line with the GitHub user/org this repo lives under.
 4. Adjust the volume host path (`/mnt/user/appdata/gifiac` by default,

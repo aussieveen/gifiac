@@ -28,4 +28,4 @@ How is Gifiac deployed as a Docker container on Unraid? Given the settled API (t
 
 **Port**: fixed internal `8080`, no env var — host-side port mapping is left to Unraid's own template UI (`-p 8123:8080` style), nothing to configure inside the container.
 
-**Deployment artifact**: [docker-compose.yml](../assets/docker-compose.yml) — `debian:bookworm-slim`-based build (per [Rust framework selection](01-rust-framework-selection.md)), the single `/data` volume, fixed port mapping, and all R2 env vars pulled from a companion `.env` file (not hardcoded, keeps secrets out of the compose file itself).
+**Deployment artifact**: [docker-compose.yml](../assets/docker-compose.yml) — `debian:bookworm-slim`-based build (per [Rust framework selection](01-rust-framework-selection.md)), the single `/data` volume, fixed port mapping, and all R2 env vars pulled from a companion `../../../backend/.env` file (not hardcoded, keeps secrets out of the compose file itself).
