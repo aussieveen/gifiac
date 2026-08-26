@@ -141,4 +141,17 @@ describe('VideoPicker', () => {
     await screen.findByText(/GIF\(s\) were made from this video/)
     expect(screen.getByText('existing.mp4')).toBeInTheDocument()
   })
+
+  it('shows a template badge only for a video that has one', async () => {
+    const withTemplate: Video = { ...existingVideo, id: 'v2', original_filename: 'has-template.mp4', has_template: true }
+    vi.mocked(listVideos).mockResolvedValue([existingVideo, withTemplate])
+
+    render(<VideoPicker onSelect={() => {}} />)
+    await screen.findByText('existing.mp4')
+
+    const plainCard = screen.getByRole('button', { name: /^existing\.mp4/i })
+    const templateCard = screen.getByRole('button', { name: /^has-template\.mp4/i })
+    expect(plainCard.querySelector('.video-card-badge-template')).not.toBeInTheDocument()
+    expect(templateCard.querySelector('.video-card-badge-template')).toBeInTheDocument()
+  })
 })

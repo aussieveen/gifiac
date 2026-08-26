@@ -19,7 +19,7 @@ use crate::{db, paths};
 #[serde(tag = "type")]
 pub enum ExportEvent {
     Progress { stage: &'static str, percent: u8 },
-    Complete { gif: Gif },
+    Complete { gif: Box<Gif> },
     Failed { message: String },
 }
 
@@ -39,7 +39,7 @@ pub async fn run_export_job(
     };
 
     match run_pipeline(state, export_id, &video, &request, &send).await {
-        Ok(gif) => send(ExportEvent::Complete { gif }),
+        Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
         Err(err) => {
             tracing::error!(export_id = %export_id, error = ?err, "export job failed");
             send(ExportEvent::Failed {
@@ -98,10 +98,11 @@ async fn run_pipeline(
         name: request.name.clone(),
         caption_text,
         captions_json: Some(serde_json::to_string(&request.captions)?),
-        gif_range_start: request.gif_range_start,
-        gif_range_end: request.gif_range_end,
-        width: result.width,
-        height: result.height,
+        gif_range_start: Some(request.gif_range_start),
+        gif_range_end: Some(request.gif_range_end),
+        width: Some(result.width),
+        height: Some(result.height),
+        external_url: None,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 

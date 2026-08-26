@@ -47,20 +47,23 @@ No status column, no stored file-path column. A row is only inserted once FFmpeg
 | Column | Type | Notes |
 |---|---|---|
 | `id` | TEXT | PK, UUID v4 (same as the export/import id) |
-| `video_id` | TEXT | FK → `videos.id`, **nullable** (NULL for imported GIFs with no source video) |
+| `video_id` | TEXT | FK → `videos.id`, **nullable** (NULL for imported and linked GIFs with no source video) |
 | `name` | TEXT | required; user-editable title |
-| `caption_text` | TEXT | concatenated caption text, for archive search (empty for imports) |
-| `captions_json` | TEXT | full structured caption array, **nullable** (NULL for imports); used to reopen the GIF in the caption editor for re-editing |
-| `gif_range_start` | REAL | seconds, source-clip in-point |
-| `gif_range_end` | REAL | seconds, source-clip out-point |
-| `width` | INTEGER | post-scaling output dimensions |
-| `height` | INTEGER | |
+| `caption_text` | TEXT | concatenated caption text, for archive search (empty for imports and linked GIFs) |
+| `captions_json` | TEXT | full structured caption array, **nullable** (NULL for imports and linked GIFs); used to reopen the GIF in the caption editor for re-editing |
+| `gif_range_start` | REAL | seconds, source-clip in-point, **nullable** (NULL for linked GIFs) |
+| `gif_range_end` | REAL | seconds, source-clip out-point, **nullable** (NULL for linked GIFs) |
+| `width` | INTEGER | post-scaling output dimensions, **nullable** (NULL for linked GIFs — not probed; the frontend sizes the thumbnail from the live image's natural dimensions) |
+| `height` | INTEGER | **nullable**, same as `width` |
+| `external_url` | TEXT | **nullable**; non-NULL marks a **linked GIF** — hotlinked to a third-party URL, never downloaded or re-hosted on R2 (see §13). Drives the "external" badge in the archive. |
 | `created_at` | TEXT | ISO8601 |
 
-No S3 key/URL columns. Output file locations are **always derived** from `id` (see §6):
+No S3 key/URL columns for GIFs created or imported natively. Output file locations are **always derived** from `id` (see §6):
 - `{R2_PUBLIC_BASE_URL}/gifs/{id}.gif`
 - `{R2_PUBLIC_BASE_URL}/clips/{id}.mp4`
 - `{R2_PUBLIC_BASE_URL}/clips/{id}.webm`
+
+**Exception**: a linked GIF (`external_url` set) has no R2 objects at all — its public location *is* `external_url` itself, and only the GIF format exists (see §13).
 
 **Design principle used throughout**: never store a path/URL that's mechanically derivable from an id plus a known convention/env var. This means switching the video storage root or the R2 public base URL later is a config change, never a data migration.
 
@@ -142,8 +145,8 @@ No `DELETE /api/videos/{id}` — see §3.
 |---|---|
 | `GET /api/gifs?q={query}` | list/search — `q` matches `name` and `caption_text` together; omitted `q` returns everything, newest first. No pagination for v1. |
 | `GET /api/gifs/{id}` | single GIF, including `captions_json`, for viewing or re-editing |
-| `PATCH /api/gifs/{id}` | body `{name}` — rename without a full re-export |
-| `DELETE /api/gifs/{id}` | removes the SQLite row **and** its R2 objects (all three formats) |
+| `PATCH /api/gifs/{id}` | body `{name}` — rename without a full re-export. `external_url` is not editable — to fix a wrong or moved link, delete and re-add (see §13). |
+| `DELETE /api/gifs/{id}` | removes the SQLite row **and** its R2 objects (all three formats) — for a linked GIF (`external_url` set) there are no R2 objects, so only the row is removed |
 
 ### Bulk import
 
@@ -152,6 +155,14 @@ No `DELETE /api/videos/{id}` — see §3.
 | `POST /api/gifs/import` | multipart, **multiple files** in one request → array of created `gifs` rows. See §7. |
 
 (Endpoint path/shape for bulk import wasn't pinned to an exact contract during wayfinding beyond "reuse the video-upload multipart pattern, multi-file, array response" — finalize the exact request/response field names during implementation, consistent with the `POST /api/videos` precedent.)
+
+### Link import
+
+| Method + path | Purpose |
+|---|---|
+| `POST /api/gifs/link` | JSON body `{url, name}` → creates a single `gifs` row with `external_url` set (no file body, no multipart). See §13. |
+
+Deliberately a separate endpoint from `POST /api/gifs/import`: that endpoint is multipart/multi-file with a transcode pipeline behind it; this one is a single JSON object with a lightweight validation check and no processing pipeline at all.
 
 ---
 
@@ -172,7 +183,7 @@ No `DELETE /api/videos/{id}` — see §3.
 
 **Not a live Giphy API integration.** Feasibility research (`.scratch/gifiac/assets/09-giphy-import-feasibility.md`) found the Giphy API technically capable of enumerating a user's own uploads (`q=@username` search, no OAuth needed) and exposing direct GIF+MP4 download URLs — but Giphy's API Terms of Service prohibit caching/storing API-obtained media without partner approval and forbid using API content to build "a database, directory, or index containing GIFs," with no carve-out for the requesting user's own uploads. Rather than accept that ambiguous ToS risk, the decision was to sidestep the API entirely: **the user manually downloads GIFs** (via Giphy's own website, or any other source) to their machine first.
 
-This makes bulk import a generic feature, not Giphy-specific:
+This makes bulk import a generic feature, not Giphy-specific. (Note: this section covers *file-based* import, where the GIF is uploaded and re-hosted on R2 — fully owned, no archive badge. For adding a GIF by pasting a URL without downloading it, see §13, URL-linked GIFs — a distinct feature with its own endpoint.)
 
 - **Mechanism**: bulk browser upload — a multi-file picker/drag-and-drop, reusing the same multipart-POST pattern as video ingest, extended to accept multiple files in one request (`POST /api/gifs/import`) and return an array of created `gifs` rows.
 - **Schema**: no new columns (see §2). An imported GIF has `video_id = NULL` and `captions_json = NULL`. `name` defaults to the uploaded filename with its extension stripped, immediately renameable via `PATCH /api/gifs/{id}`. `caption_text` is left empty — archive search falls back to matching `name` only for imported items.
@@ -186,13 +197,17 @@ This makes bulk import a generic feature, not Giphy-specific:
 
 Reference prototype: `.scratch/gifiac/prototypes/archive-browse/` (Variant C won).
 
+**Default landing page.** The archive is what loads first when the app opens — not the video-picker/New-GIF flow — since browsing/finding existing GIFs is the more common action. The New-GIF flow is reached via the persistent nav bar (always shows both "New GIF" and "Archive", regardless of which view is active), so it's never more than one click away.
+
 **Layout: master-detail.** A static thumbnail grid on the left (no hover effects on the grid itself); clicking a thumbnail opens it in a **detail panel** on the right.
 
+**External badge**: a small icon overlay on any grid thumbnail (and in the detail panel) whose GIF is a **linked GIF** (`external_url` set, see §13) — i.e. media that lives outside our controlled R2 and could disappear if the source goes down. File-based imports (§7) do **not** get this badge; once re-hosted on R2 they're fully owned, same as natively-created GIFs.
+
 **Detail panel**:
-- Preview thumbnail **auto-plays as soon as a GIF is selected** (not gated behind hover) — restarts when selecting a different item.
+- Preview thumbnail **auto-plays as soon as a GIF is selected** (not gated behind hover) — restarts when selecting a different item. For a linked GIF, this is simply the live `<img src={external_url}>`.
 - Inline-editable `name` field (rename via `PATCH /api/gifs/{id}`, no full re-export needed).
 - Caption text, created date.
-- Centralized actions: **Copy link** (writes the derived public R2 URL to the clipboard), **Download**, **Delete**.
+- Centralized actions: **Copy link** (writes the derived public R2 URL to the clipboard — or, for a linked GIF, the `external_url` itself), **Download**, **Delete**. For a linked GIF, **Download is replaced by Open original** (opens `external_url` in a new tab) — there's no R2-hosted file to serve as a clean download.
 
 **Search**: a single search bar, live-filtering as you type, matching `GET /api/gifs?q={query}` exactly — one combined query against `name` + `caption_text`, no separate name/tag filters.
 
@@ -285,11 +300,42 @@ The `GET /api/videos` list response gains a `has_template: bool` field per item 
 
 ---
 
-## 13. Out of scope
+## 13. URL-linked GIFs *(designed, not yet implemented)*
+
+A way to add a GIF to the archive by pasting a URL and a title, instead of uploading a file. Distinct from bulk import (§7): the GIF is **never downloaded or re-hosted** — it's a pure hotlink to wherever it already lives.
+
+### Behaviour
+
+- **Pure hotlink, no re-hosting.** The `gifs` row stores the URL (`external_url`, see §2); Gifiac never fetches and stores the file body. The archive thumbnail and detail-panel preview render it directly as a live `<img src={external_url}>`. If the source disappears, the entry breaks — that tradeoff is accepted in exchange for zero storage cost and zero processing.
+- **GIF format only.** No MP4/WebM sibling formats are generated — generating them would require fetching the source file server-side, which contradicts "pure hotlink." This is a deliberate exception to §7's "every `gifs` row ends up with all three formats" rule; it applies only to file-based imports and native exports, not to linked GIFs.
+- **Lightweight validation on submit.** The server does a HEAD (or ranged GET) request against the submitted URL to confirm it resolves and looks like an image, with basic SSRF guards (reject private/loopback/link-local IP ranges). This is a sanity check only — no width/height are probed or persisted; the frontend sizes the thumbnail from the live image's natural dimensions.
+- **Fixed at creation.** The URL can't be edited afterwards via `PATCH` — only `name` is patchable (see §5). To fix a typo'd or moved link, delete the row and re-add it. This keeps `PATCH`'s contract uniform across every GIF type.
+- **External badge.** Any linked GIF is marked with a small icon in the archive grid and detail panel (see §8), since its media isn't under our control the way file-based imports and native exports are.
+- **Detail panel actions**: Copy link (copies `external_url`) and **Open original** (opens `external_url` in a new tab) in place of Download — see §8.
+- **Re-edit unavailable**, same existing rule as file-based imports: `video_id IS NULL` hides the "edit captions" action in the archive UI (§7).
+- **Search**: `caption_text` is empty, so `GET /api/gifs?q=` falls back to matching `name` only — same existing rule as imports (§7), no new search logic needed.
+
+### Data model
+
+No new table — a single nullable `external_url` column on the existing `gifs` table (see §2 for the full column list and nullability notes). `video_id`, `captions_json`, `gif_range_start`/`gif_range_end`, `width`/`height` are all NULL for a linked GIF; `caption_text` is empty.
+
+### REST API
+
+| Method + path | Purpose |
+|---|---|
+| `POST /api/gifs/link` | JSON body `{url, name}` → validates the URL, creates a single `gifs` row with `external_url` set. See §5. |
+
+`name` is required (no default), same as `POST /api/exports`. No multipart, no file body, no background job — this is a synchronous, single-row operation.
+
+---
+
+## 14. Out of scope
 
 - Multi-user / authentication.
 - YouTube URL import (nice-to-have, explicitly deferred).
 - A live Giphy API integration (ruled out on Terms-of-Service grounds — see §7; manual download + bulk upload was chosen instead).
+- Editing a linked GIF's `external_url` after creation (see §13) — delete and re-add instead.
+- Downloading/re-hosting a linked GIF's file on R2 (see §13) — deliberately kept as a pure hotlink.
 
 ---
 

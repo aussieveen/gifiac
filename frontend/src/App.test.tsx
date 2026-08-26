@@ -7,6 +7,7 @@ import type { FilmstripMeta, Video } from './types'
 vi.mock('./api', () => ({
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
+  deleteVideo: vi.fn(),
   thumbnailUrl: (id: string) => `/api/videos/${id}/thumbnail`,
   videoFileUrl: (id: string) => `/api/videos/${id}/file`,
   getFilmstripMeta: vi.fn(),
@@ -15,9 +16,14 @@ vi.mock('./api', () => ({
   listGifs: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
+  importGifs: vi.fn(),
+  linkGif: vi.fn(),
+  getTemplate: vi.fn(),
+  putTemplate: vi.fn(),
+  deleteTemplate: vi.fn(),
 }))
 
-import { createExport, getFilmstripMeta, listGifs, listVideos, subscribeExportProgress } from './api'
+import { createExport, getFilmstripMeta, getTemplate, listGifs, listVideos, subscribeExportProgress } from './api'
 import type { ExportProgressHandlers } from './api'
 
 const video: Video = {
@@ -49,21 +55,39 @@ beforeEach(() => {
   vi.mocked(listGifs).mockReset()
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
+  vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
 })
 
 describe('App', () => {
-  it('starts on the video picker', async () => {
-    vi.mocked(listVideos).mockResolvedValue([video])
+  it('starts on the archive', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    expect(screen.getByRole('button', { name: 'Archive' })).toHaveClass('active')
+  })
+
+  it('the New GIF nav tab switches to the video picker', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listVideos).mockResolvedValue([video])
+    const user = userEvent.setup()
+
+    render(<App />)
+    await screen.findByText(/no gifs yet/i)
+
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+
     await screen.findByText('Gifiac')
   })
 
   it('selecting a video loads its film-strip and opens the editor', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video])
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     const user = userEvent.setup()
 
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     expect(await screen.findByText('clip.mp4')).toBeInTheDocument()
@@ -71,11 +95,14 @@ describe('App', () => {
   })
 
   it('shows an error and lets you go back if the film-strip fails to load', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video])
     vi.mocked(getFilmstripMeta).mockRejectedValue(new Error('/api/videos/v1/filmstrip failed (500): boom'))
     const user = userEvent.setup()
 
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     await screen.findByText(/boom/)
@@ -84,6 +111,7 @@ describe('App', () => {
   })
 
   it('never renders one video against another video\'s stale film-strip when switching', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video, otherVideo])
     vi.mocked(getFilmstripMeta).mockImplementation((id: string) =>
       id === video.id ? Promise.resolve(filmstrip) : new Promise(() => {}), // never resolves for the switch target
@@ -91,6 +119,8 @@ describe('App', () => {
     const user = userEvent.setup()
 
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
     await screen.findByText('clip.mp4')
 
@@ -103,35 +133,24 @@ describe('App', () => {
     expect(await screen.findByText(/loading film-strip/i)).toBeInTheDocument()
   })
 
-  it('the Archive nav tab switches to the archive view', async () => {
-    vi.mocked(listVideos).mockResolvedValue([video])
+  it('the Archive nav tab returns from the video picker to the archive', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listVideos).mockResolvedValue([video])
     const user = userEvent.setup()
 
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
     await screen.findByText('Gifiac')
+
     await user.click(screen.getByRole('button', { name: 'Archive' }))
 
     await screen.findByText(/no gifs yet/i)
     expect(listGifs).toHaveBeenCalled()
   })
 
-  it('the New GIF nav tab returns from the archive view to the video picker', async () => {
-    vi.mocked(listVideos).mockResolvedValue([video])
-    vi.mocked(listGifs).mockResolvedValue([])
-    const user = userEvent.setup()
-
-    render(<App />)
-    await screen.findByText('Gifiac')
-    await user.click(screen.getByRole('button', { name: 'Archive' }))
-    await screen.findByText(/no gifs yet/i)
-
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
-
-    await screen.findByText('Gifiac')
-  })
-
   it('making a GIF switches to the archive with it already selected', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video])
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
@@ -150,16 +169,19 @@ describe('App', () => {
       gif_range_end: 8,
       width: 480,
       height: 270,
+      external_url: null,
       created_at: '2026-01-01T00:00:00Z',
       gif_url: 'http://example.com/g1.gif',
     }
-    vi.mocked(listGifs).mockResolvedValue([createdGif])
     const user = userEvent.setup()
 
     render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
     await screen.findByText('clip.mp4')
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    vi.mocked(listGifs).mockResolvedValue([createdGif])
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 

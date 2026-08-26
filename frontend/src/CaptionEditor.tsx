@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { createExport, subscribeExportProgress, videoFileUrl } from './api'
+import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
 import { clamp, linesFromCharTops, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Gif, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 /**
@@ -154,6 +154,16 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  // SPEC.md §12: pre-fills from the video's saved template, if any —
+  // `video.has_template` (from the video list) gives an immediate answer
+  // for which export-form control to show (checkbox vs. button) without
+  // waiting on the fetch below, which then corrects it if stale and
+  // supplies the actual caption/range payload to pre-fill with.
+  const [hasTemplate, setHasTemplate] = useState(video.has_template ?? false)
+  const [createTemplate, setCreateTemplate] = useState(false)
+  const [templateSaving, setTemplateSaving] = useState(false)
+  const [templateSaved, setTemplateSaved] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
 
   const previewRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -171,6 +181,28 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   // calling back into torn-down state setters — same leak class fixed in
   // useWindowDrag.
   useEffect(() => () => exportUnsubscribeRef.current?.(), [])
+
+  // SPEC.md §12: "Opening a video that has a template loads the caption
+  // editor with all template data pre-filled." The user can freely change
+  // anything afterwards — this only sets the initial state.
+  useEffect(() => {
+    let cancelled = false
+    getTemplate(video.id)
+      .then((template) => {
+        if (cancelled) return
+        setHasTemplate(template !== null)
+        if (template) {
+          setCaptions(template.captions)
+          setGifRange({ start: template.gif_range_start, end: template.gif_range_end })
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [video.id])
 
   const timelineWidth = BASE_TIMELINE_WIDTH * ZOOM_LEVELS[zoomIndex]
   const selected = captions.find((c) => c.id === selectedId) ?? null
@@ -399,6 +431,40 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   const filmstripFrameWidth = timelineWidth / visibleFrameCount
   const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
+  // SPEC.md §12: output dimensions are derived from the video the same
+  // deterministic way the export pipeline does (backend/src/scale.rs) —
+  // filmstrip.frameWidth/frameHeight are already computed from that exact
+  // function server-side (see the PREVIEW_SCALE comment above), so this
+  // needs no export to run first to know what they'd be. Shared by both
+  // the standalone "Overwrite template" action and "Create template" on
+  // export completion, which otherwise build the identical payload.
+  function buildTemplatePayload(captionsForTemplate: Caption[]): TemplatePayload {
+    return {
+      captions: captionsForTemplate,
+      gif_range_start: Number(gifRange.start.toFixed(2)),
+      gif_range_end: Number(gifRange.end.toFixed(2)),
+      width: filmstrip.frameWidth,
+      height: filmstrip.frameHeight,
+    }
+  }
+
+  // SPEC.md §12: "Overwriting is independent of exporting — the user can
+  // update the template without triggering a new GIF export."
+  async function overwriteTemplate() {
+    setTemplateSaving(true)
+    setTemplateError(null)
+    setTemplateSaved(false)
+    try {
+      await putTemplate(video.id, buildTemplatePayload(captions))
+      setHasTemplate(true)
+      setTemplateSaved(true)
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTemplateSaving(false)
+    }
+  }
+
   async function makeGif() {
     const trimmedName = name.trim()
     if (!trimmedName) return
@@ -430,6 +496,13 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
           setCompletedGif(gif)
           setExportProgress(null)
           setSubmitting(false)
+          // SPEC.md §12: "Checking it saves the current export parameters
+          // as the video's template when the GIF is exported."
+          if (createTemplate) {
+            putTemplate(video.id, buildTemplatePayload(captionsWithWrapping))
+              .then(() => setHasTemplate(true))
+              .catch((err) => setTemplateError(err instanceof Error ? err.message : String(err)))
+          }
           onGifCreated?.(gif)
         },
         onError: (message) => {
@@ -710,6 +783,24 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
             <button className="va-btn" onClick={setRangeEndToPlayhead}>
               Set end
             </button>
+            {/* SPEC.md §12: a video with no template gets a "Create
+                template" checkbox on the Make GIF form; a video already
+                working from one gets a standalone "Overwrite template"
+                button instead, independent of exporting. */}
+            {!hasTemplate ? (
+              <label className="va-hint">
+                <input
+                  type="checkbox"
+                  checked={createTemplate}
+                  onChange={(e) => setCreateTemplate(e.target.checked)}
+                />{' '}
+                Create template
+              </label>
+            ) : (
+              <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
+                {templateSaving ? 'Saving…' : 'Overwrite template'}
+              </button>
+            )}
             <input
               className="va-name-input"
               placeholder="Name this GIF…"
@@ -729,6 +820,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
         </p>
       )}
       {exportError && <p className="export-error">{exportError}</p>}
+      {templateError && <p className="export-error">{templateError}</p>}
+      {templateSaved && <p className="export-success">Template saved.</p>}
       {completedGif && (
         <p className="export-success">
           "{completedGif.name}" is ready ({completedGif.width}×{completedGif.height}).

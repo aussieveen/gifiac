@@ -1,11 +1,14 @@
-import type { Caption, FilmstripMeta, Gif, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
+
+async function throwIfNotOk(input: string, response: Response): Promise<void> {
+  if (response.ok) return
+  const body = await response.text().catch(() => '')
+  throw new Error(`${input} failed (${response.status}): ${body || response.statusText}`)
+}
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`${input} failed (${response.status}): ${body || response.statusText}`)
-  }
+  await throwIfNotOk(input, response)
   return (await response.json()) as T
 }
 
@@ -24,11 +27,8 @@ export function uploadVideo(file: File): Promise<Video> {
 }
 
 export async function deleteVideo(id: string): Promise<void> {
-  const response = await fetch(`/api/videos/${id}`, { method: 'DELETE' })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`/api/videos/${id} failed (${response.status}): ${body || response.statusText}`)
-  }
+  const input = `/api/videos/${id}`
+  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
 }
 
 export function getFilmstripMeta(id: string): Promise<FilmstripMeta> {
@@ -129,11 +129,8 @@ export function renameGif(id: string, name: string): Promise<Gif> {
 }
 
 export async function deleteGif(id: string): Promise<void> {
-  const response = await fetch(`/api/gifs/${id}`, { method: 'DELETE' })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`/api/gifs/${id} failed (${response.status}): ${body || response.statusText}`)
-  }
+  const input = `/api/gifs/${id}`
+  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
 }
 
 // Bulk import per SPEC.md §7 — multiple files in one multipart request,
@@ -143,4 +140,36 @@ export function importGifs(files: File[]): Promise<Gif[]> {
   const body = new FormData()
   for (const file of files) body.append('files', file, file.name)
   return request<Gif[]>('/api/gifs/import', { method: 'POST', body })
+}
+
+// Link import per SPEC.md §13 — a pure hotlink, never downloaded/re-hosted.
+export function linkGif(url: string, name: string): Promise<Gif> {
+  return request<Gif>('/api/gifs/link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, name }),
+  })
+}
+
+// Video templates per SPEC.md §12.
+
+export async function getTemplate(videoId: string): Promise<TemplatePayload | null> {
+  const input = `/api/videos/${videoId}/template`
+  const response = await fetch(input)
+  if (response.status === 404) return null
+  await throwIfNotOk(input, response)
+  return (await response.json()) as TemplatePayload
+}
+
+export function putTemplate(videoId: string, payload: TemplatePayload): Promise<TemplatePayload> {
+  return request<TemplatePayload>(`/api/videos/${videoId}/template`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteTemplate(videoId: string): Promise<void> {
+  const input = `/api/videos/${videoId}/template`
+  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
 }

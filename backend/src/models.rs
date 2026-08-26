@@ -22,6 +22,45 @@ pub struct NewVideo {
     pub height: i64,
 }
 
+/// `GET /api/videos` row shape (SPEC.md §12) — every `Video` field plus
+/// `has_template`, resolved via a join so the video-picker badge doesn't
+/// need a separate round-trip per video.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct VideoListItem {
+    pub id: String,
+    pub original_filename: String,
+    pub extension: String,
+    pub file_size_bytes: i64,
+    pub duration_seconds: f64,
+    pub width: i64,
+    pub height: i64,
+    pub uploaded_at: String,
+    pub has_template: bool,
+}
+
+/// A video's saved export template (SPEC.md §12) — one per video, upserted
+/// via `PUT /api/videos/{id}/template`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct VideoTemplate {
+    pub video_id: String,
+    pub payload_json: String,
+    pub saved_at: String,
+}
+
+/// The template's actual saved content, serialized into `payload_json`.
+/// snake_case at the top level (matching the `gifs` table columns, same
+/// convention as `ExportRequest`), camelCase `captions` (matching §4) via
+/// `Caption`'s own rename. Deliberately excludes `name` — SPEC.md §12: "The
+/// GIF `name` is not stored (it's per-GIF, not per-template)."
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TemplatePayload {
+    pub captions: Vec<Caption>,
+    pub gif_range_start: f64,
+    pub gif_range_end: f64,
+    pub width: i64,
+    pub height: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilmstripMeta {
@@ -112,11 +151,25 @@ pub struct Gif {
     pub name: String,
     pub caption_text: String,
     pub captions_json: Option<String>,
-    pub gif_range_start: f64,
-    pub gif_range_end: f64,
-    pub width: i64,
-    pub height: i64,
+    /// `None` for a linked GIF (SPEC.md §13) — it has no source clip range.
+    pub gif_range_start: Option<f64>,
+    pub gif_range_end: Option<f64>,
+    /// `None` for a linked GIF — not dimension-probed; the frontend sizes
+    /// its thumbnail from the live image's natural dimensions instead.
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// Non-`None` marks a linked GIF: hotlinked to a third-party URL,
+    /// never downloaded or re-hosted on R2 (SPEC.md §13).
+    pub external_url: Option<String>,
     pub created_at: String,
+}
+
+impl Gif {
+    /// SPEC.md §13: whether this is a linked GIF — hotlinked to a
+    /// third-party URL, with no R2 objects of its own to derive/clean up.
+    pub fn is_linked(&self) -> bool {
+        self.external_url.is_some()
+    }
 }
 
 pub struct NewGif {
@@ -125,8 +178,9 @@ pub struct NewGif {
     pub name: String,
     pub caption_text: String,
     pub captions_json: Option<String>,
-    pub gif_range_start: f64,
-    pub gif_range_end: f64,
-    pub width: i64,
-    pub height: i64,
+    pub gif_range_start: Option<f64>,
+    pub gif_range_end: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub external_url: Option<String>,
 }

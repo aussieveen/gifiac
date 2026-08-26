@@ -421,11 +421,17 @@ async fn delete_video_removes_the_row_and_its_files() {
     );
 }
 
+/// SPEC.md §12 replaced the old "no GIFs were made from it" guard
+/// entirely — a video with GIFs made from it is now fine to delete. The
+/// dependent GIF's `video_id` becomes NULL (ON DELETE SET NULL), which is
+/// exactly the existing "no source video" case the archive UI already
+/// treats as un-re-editable.
 #[tokio::test]
-async fn delete_video_is_rejected_with_409_when_a_gif_was_made_from_it() {
+async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
     let test_app = spawn_app().await;
     let gif = create_gif(&test_app, "depends on this video", "").await;
     let video_id = gif["video_id"].as_str().unwrap().to_string();
+    let gif_id = gif["id"].as_str().unwrap().to_string();
 
     let response = test_app
         .app
@@ -440,20 +446,293 @@ async fn delete_video_is_rejected_with_409_when_a_gif_was_made_from_it() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    // The video is untouched — still fetchable.
-    let get_response = test_app
+    let gif_response = test_app
         .app
         .oneshot(
             Request::builder()
-                .uri(format!("/api/videos/{video_id}"))
+                .uri(format!("/api/gifs/{gif_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(gif_response.status(), StatusCode::OK);
+    let gif_after: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(gif_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(gif_after["video_id"].is_null());
+}
+
+#[tokio::test]
+async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    let template_body = serde_json::json!({
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.0,
+        "width": 480,
+        "height": 270
+    });
+    let put_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/videos/{id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(template_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let delete_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::CONFLICT);
+
+    // Removing the template first clears the way to delete the video.
+    let delete_template_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}/template"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_template_response.status(), StatusCode::NO_CONTENT);
+
+    let delete_response2 = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response2.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn get_template_returns_404_when_none_is_saved() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/template"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// `PUT .../template` upserts (creates, then overwrites) and `GET
+/// /api/videos` surfaces `has_template` for the video-picker badge.
+#[tokio::test]
+async fn put_template_upserts_and_list_videos_reports_has_template() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    let list_before = test_app
+        .app
+        .clone()
+        .oneshot(Request::builder().uri("/api/videos").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let list_before: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(list_before.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(list_before[0]["has_template"], false);
+
+    let template_body = serde_json::json!({
+        "captions": [{
+            "id": "c1", "startTime": 0.0, "endTime": 1.0, "text": "hi",
+            "fontFamily": "Impact, sans-serif", "fontSize": 28, "color": "#ffffff",
+            "align": "center", "x": 0.5, "y": 0.88
+        }],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.5,
+        "width": 480,
+        "height": 270
+    });
+    let put_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/videos/{id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(template_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let get_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(get_response.status(), StatusCode::OK);
+    let fetched: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fetched["gif_range_end"], 1.5);
+    assert_eq!(fetched["captions"][0]["text"], "hi");
+
+    let list_after = test_app
+        .app
+        .oneshot(Request::builder().uri("/api/videos").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let list_after: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(list_after.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(list_after[0]["has_template"], true);
+}
+
+#[tokio::test]
+async fn delete_template_for_unknown_video_returns_404() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/videos/00000000-0000-0000-0000-000000000000/template")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

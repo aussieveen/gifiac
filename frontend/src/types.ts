@@ -30,6 +30,20 @@ export interface Video {
   width: number
   height: number
   uploaded_at: string
+  // SPEC.md §12: only present on `GET /api/videos` list responses, where
+  // it's resolved via a join — drives the video-picker's template badge.
+  has_template?: boolean
+}
+
+// SPEC.md §12: the saved export template payload — `PUT/GET
+// /api/videos/{id}/template`. Deliberately excludes `name` (per-GIF, not
+// per-template).
+export interface TemplatePayload {
+  captions: Caption[]
+  gif_range_start: number
+  gif_range_end: number
+  width: number
+  height: number
 }
 
 // GET /api/videos/{id}/filmstrip response shape (SPEC.md §5) — camelCase.
@@ -54,12 +68,17 @@ export interface Gif {
   name: string
   caption_text: string
   captions_json: string | null
-  gif_range_start: number
-  gif_range_end: number
-  width: number
-  height: number
+  gif_range_start: number | null
+  gif_range_end: number | null
+  width: number | null
+  height: number | null
+  // Non-null marks a linked GIF (SPEC.md §13) — hotlinked to a
+  // third-party URL, never downloaded or re-hosted on R2.
+  external_url: string | null
   created_at: string
   gif_url?: string
-  mp4_url?: string
-  webm_url?: string
+  // `null` (not just absent) for a linked GIF — see GifResponse in the
+  // backend, which always includes these keys, `null` or not.
+  mp4_url?: string | null
+  webm_url?: string | null
 }

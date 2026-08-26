@@ -3,10 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-use crate::models::{Gif, NewGif, NewVideo, Video};
+use crate::models::{Gif, NewGif, NewVideo, TemplatePayload, Video, VideoListItem, VideoTemplate};
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, created_at";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
 
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
@@ -51,9 +51,12 @@ pub async fn get_video(pool: &SqlitePool, id: &str) -> Result<Option<Video>> {
         .map_err(Into::into)
 }
 
-pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<Video>> {
-    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos ORDER BY uploaded_at DESC");
-    sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
+/// `has_template` is resolved at the join level (SPEC.md §12) rather than
+/// with a per-video follow-up query.
+pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<VideoListItem>> {
+    let sql = "SELECT v.id, v.original_filename, v.extension, v.file_size_bytes, v.duration_seconds, v.width, v.height, v.uploaded_at, (t.video_id IS NOT NULL) AS has_template \
+         FROM videos v LEFT JOIN video_templates t ON t.video_id = v.id ORDER BY v.uploaded_at DESC";
+    sqlx::query_as::<_, VideoListItem>(sql)
         .fetch_all(pool)
         .await
         .map_err(Into::into)
@@ -61,7 +64,7 @@ pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<Video>> {
 
 pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Result<Gif> {
     let sql = format!(
-        "INSERT INTO gifs ({GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -73,6 +76,7 @@ pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Re
         .bind(gif.gif_range_end)
         .bind(gif.width)
         .bind(gif.height)
+        .bind(&gif.external_url)
         .bind(created_at)
         .fetch_one(pool)
         .await
@@ -145,22 +149,60 @@ pub async fn delete_gif(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-/// How many `gifs` rows were made from this video — checked before
-/// deleting it (SPEC.md §3 explicitly excludes video deletion because it
-/// "would silently break re-editing of any GIF made from it"; a video
-/// with zero GIFs made from it yet is always safe to remove, so deletion
-/// is allowed in exactly that case rather than never).
-pub async fn count_gifs_for_video(pool: &SqlitePool, video_id: &str) -> Result<i64> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gifs WHERE video_id = ?")
+/// Whether this video has a saved template — checked before deleting it
+/// (SPEC.md §12: "a video can only be deleted if it has no template",
+/// replacing the earlier "no GIFs were made from it" guard entirely).
+pub async fn has_template(pool: &SqlitePool, video_id: &str) -> Result<bool> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_templates WHERE video_id = ?")
         .bind(video_id)
         .fetch_one(pool)
         .await?;
-    Ok(count)
+    Ok(count > 0)
 }
 
 pub async fn delete_video(pool: &SqlitePool, id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM videos WHERE id = ?")
         .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn get_template(pool: &SqlitePool, video_id: &str) -> Result<Option<TemplatePayload>> {
+    let row: Option<VideoTemplate> =
+        sqlx::query_as("SELECT video_id, payload_json, saved_at FROM video_templates WHERE video_id = ?")
+            .bind(video_id)
+            .fetch_optional(pool)
+            .await?;
+    row.map(|r| serde_json::from_str(&r.payload_json).map_err(Into::into))
+        .transpose()
+}
+
+/// Upserts the template for `video_id` (SPEC.md §12: "Upserts (creates or
+/// overwrites) the template with the request body").
+pub async fn upsert_template(
+    pool: &SqlitePool,
+    video_id: &str,
+    payload: &TemplatePayload,
+    saved_at: &str,
+) -> Result<()> {
+    let payload_json = serde_json::to_string(payload)?;
+    sqlx::query(
+        "INSERT INTO video_templates (video_id, payload_json, saved_at) VALUES (?, ?, ?) \
+         ON CONFLICT (video_id) DO UPDATE SET payload_json = excluded.payload_json, saved_at = excluded.saved_at",
+    )
+    .bind(video_id)
+    .bind(payload_json)
+    .bind(saved_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Returns `true` if a template was actually deleted.
+pub async fn delete_template(pool: &SqlitePool, video_id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM video_templates WHERE video_id = ?")
+        .bind(video_id)
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
@@ -237,6 +279,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_videos_reports_has_template_only_for_videos_with_a_saved_template() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_video(&pool, &sample_video("v2"), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+
+        let videos = list_videos(&pool).await.unwrap();
+        let has_template = |id: &str| videos.iter().find(|v| v.id == id).unwrap().has_template;
+        assert!(has_template("v1"));
+        assert!(!has_template("v2"));
+    }
+
+    #[tokio::test]
     async fn insert_gif_round_trips_including_nullable_fields() {
         let pool = test_pool().await;
         insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
@@ -251,10 +312,11 @@ mod tests {
                 name: "My GIF".to_string(),
                 caption_text: "hello world".to_string(),
                 captions_json: Some("[]".to_string()),
-                gif_range_start: 1.0,
-                gif_range_end: 4.0,
-                width: 480,
-                height: 270,
+                gif_range_start: Some(1.0),
+                gif_range_end: Some(4.0),
+                width: Some(480),
+                height: Some(270),
+                external_url: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -264,7 +326,7 @@ mod tests {
         assert_eq!(gif.id, "g1");
         assert_eq!(gif.video_id.as_deref(), Some("v1"));
         assert_eq!(gif.name, "My GIF");
-        assert_eq!(gif.width, 480);
+        assert_eq!(gif.width, Some(480));
     }
 
     #[tokio::test]
@@ -279,10 +341,11 @@ mod tests {
                 name: "imported.gif".to_string(),
                 caption_text: String::new(),
                 captions_json: None,
-                gif_range_start: 0.0,
-                gif_range_end: 0.0,
-                width: 200,
-                height: 200,
+                gif_range_start: Some(0.0),
+                gif_range_end: Some(0.0),
+                width: Some(200),
+                height: Some(200),
+                external_url: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -293,6 +356,34 @@ mod tests {
         assert!(gif.captions_json.is_none());
     }
 
+    #[tokio::test]
+    async fn insert_gif_allows_a_linked_gif_with_no_range_or_dimensions() {
+        let pool = test_pool().await;
+
+        let gif = insert_gif(
+            &pool,
+            &NewGif {
+                id: "linked".to_string(),
+                video_id: None,
+                name: "a linked gif".to_string(),
+                caption_text: String::new(),
+                captions_json: None,
+                gif_range_start: None,
+                gif_range_end: None,
+                width: None,
+                height: None,
+                external_url: Some("https://example.com/a.gif".to_string()),
+            },
+            "2026-08-22T00:00:01Z",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(gif.external_url.as_deref(), Some("https://example.com/a.gif"));
+        assert!(gif.gif_range_start.is_none());
+        assert!(gif.width.is_none());
+    }
+
     fn sample_gif(id: &str, name: &str, caption_text: &str) -> NewGif {
         NewGif {
             id: id.to_string(),
@@ -300,8 +391,19 @@ mod tests {
             name: name.to_string(),
             caption_text: caption_text.to_string(),
             captions_json: None,
+            gif_range_start: Some(0.0),
+            gif_range_end: Some(1.0),
+            width: Some(480),
+            height: Some(270),
+            external_url: None,
+        }
+    }
+
+    fn sample_template() -> TemplatePayload {
+        TemplatePayload {
+            captions: vec![],
             gif_range_start: 0.0,
-            gif_range_end: 1.0,
+            gif_range_end: 2.0,
             width: 480,
             height: 270,
         }
@@ -393,22 +495,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn count_gifs_for_video_counts_only_gifs_made_from_that_video() {
+    async fn has_template_reports_true_only_after_a_template_is_saved() {
         let pool = test_pool().await;
         insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        insert_video(&pool, &sample_video("v2"), "2026-08-22T00:00:00Z")
-            .await
-            .unwrap();
-        let mut gif_from_v1 = sample_gif("g1", "a", "");
-        gif_from_v1.video_id = Some("v1".to_string());
-        insert_gif(&pool, &gif_from_v1, "2026-08-22T00:00:01Z")
+
+        assert!(!has_template(&pool, "v1").await.unwrap());
+
+        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 
-        assert_eq!(count_gifs_for_video(&pool, "v1").await.unwrap(), 1);
-        assert_eq!(count_gifs_for_video(&pool, "v2").await.unwrap(), 0);
+        assert!(has_template(&pool, "v1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn get_template_returns_none_when_no_template_is_saved() {
+        let pool = test_pool().await;
+        assert!(get_template(&pool, "v1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn upsert_template_creates_then_overwrites_the_same_row() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        let first = get_template(&pool, "v1").await.unwrap().unwrap();
+        assert_eq!(first.width, 480);
+
+        let mut overwrite = sample_template();
+        overwrite.width = 320;
+        upsert_template(&pool, "v1", &overwrite, "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+
+        let second = get_template(&pool, "v1").await.unwrap().unwrap();
+        assert_eq!(second.width, 320);
+    }
+
+    #[tokio::test]
+    async fn delete_template_removes_it_and_reports_success() {
+        let pool = test_pool().await;
+        insert_video(&pool, &sample_video("v1"), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        assert!(delete_template(&pool, "v1").await.unwrap());
+        assert!(get_template(&pool, "v1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_template_reports_false_for_a_missing_video() {
+        let pool = test_pool().await;
+        assert!(!delete_template(&pool, "missing").await.unwrap());
     }
 
     #[tokio::test]

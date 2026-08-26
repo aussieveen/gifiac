@@ -97,6 +97,13 @@ export function VideoPicker({ onSelect }: Props) {
           <div key={v.id} className="video-card">
             <button className="video-card-select" onClick={() => onSelect(v)}>
               <img src={thumbnailUrl(v.id)} alt={v.original_filename} />
+              {/* SPEC.md §12: "videos with a saved template display a
+                  small badge/icon on their card in the video picker". */}
+              {v.has_template && (
+                <span className="video-card-badge-template" title="Has a saved template">
+                  📋
+                </span>
+              )}
               <span className="video-card-name">{v.original_filename}</span>
               <span className="va-hint">{v.duration_seconds.toFixed(1)}s</span>
             </button>

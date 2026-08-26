@@ -15,7 +15,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
-use crate::models::{FilmstripMeta, NewVideo, Video};
+use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListItem};
 use crate::paths;
 use crate::state::AppState;
 
@@ -123,7 +123,9 @@ pub async fn upload_video(
     Ok((StatusCode::CREATED, Json(video)))
 }
 
-pub async fn list_videos(State(state): State<Arc<AppState>>) -> Result<Json<Vec<Video>>, AppError> {
+pub async fn list_videos(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<VideoListItem>>, AppError> {
     let videos = db::list_videos(&state.pool).await?;
     Ok(Json(videos))
 }
@@ -187,22 +189,20 @@ pub async fn get_filmstrip_meta(
     }))
 }
 
-/// SPEC.md §3 deliberately excludes video deletion ("would silently break
-/// re-editing of any GIF made from it"), but a video with zero GIFs made
-/// from it yet — e.g. the wrong file dragged in by mistake — is always
-/// safe to remove, so deletion is allowed in exactly that case (409 if
-/// any GIF still depends on it) rather than never.
+/// SPEC.md §12 replaced the original guard ("no GIFs were made from it")
+/// entirely: a video can now only be deleted if it has **no template** —
+/// deleting one out from under GIFs made from it is accepted, but deleting
+/// a video whose saved template would silently vanish is not.
 pub async fn delete_video(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
     let (uuid, video) = load_video(&state, &id).await?;
 
-    let gif_count = db::count_gifs_for_video(&state.pool, &id).await?;
-    if gif_count > 0 {
-        return Err(AppError::Conflict(format!(
-            "can't delete: {gif_count} GIF(s) were made from this video"
-        )));
+    if db::has_template(&state.pool, &id).await? {
+        return Err(AppError::Conflict(
+            "can't delete: this video has a saved template".to_string(),
+        ));
     }
 
     db::delete_video(&state.pool, &id).await?;
@@ -251,4 +251,41 @@ pub async fn get_filmstrip_image(
 
     let bytes = tokio::fs::read(&sprite_path).await?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
+/// SPEC.md §12: `GET /api/videos/{id}/template` — 404 if none exists,
+/// distinct from a 404 for the video itself not existing.
+pub async fn get_template(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<TemplatePayload>, AppError> {
+    load_video(&state, &id).await?;
+    let template = db::get_template(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(template))
+}
+
+/// SPEC.md §12: `PUT /api/videos/{id}/template` — upserts (creates or
+/// overwrites) the template with the request body.
+pub async fn put_template(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Json(payload): Json<TemplatePayload>,
+) -> Result<Json<TemplatePayload>, AppError> {
+    load_video(&state, &id).await?;
+    db::upsert_template(&state.pool, &id, &payload, &Utc::now().to_rfc3339()).await?;
+    Ok(Json(payload))
+}
+
+/// SPEC.md §12: `DELETE /api/videos/{id}/template` — allows the video to
+/// be deleted afterwards.
+pub async fn delete_template(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> Result<StatusCode, AppError> {
+    load_video(&state, &id).await?;
+    let deleted = db::delete_template(&state.pool, &id).await?;
+    if !deleted {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

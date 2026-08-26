@@ -9,9 +9,10 @@ vi.mock('./api', () => ({
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
   importGifs: vi.fn(),
+  linkGif: vi.fn(),
 }))
 
-import { deleteGif, importGifs, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif } from './api'
 
 const gifA: Gif = {
   id: 'g1',
@@ -23,6 +24,7 @@ const gifA: Gif = {
   gif_range_end: 2,
   width: 480,
   height: 270,
+  external_url: null,
   created_at: '2026-01-01T00:00:00Z',
   gif_url: 'http://localhost:19000/gifiac-test/gifs/g1.gif',
   mp4_url: 'http://localhost:19000/gifiac-test/clips/g1.mp4',
@@ -39,11 +41,29 @@ const gifB: Gif = {
   webm_url: 'http://localhost:19000/gifiac-test/clips/g2.webm',
 }
 
+const linkedGif: Gif = {
+  id: 'g3',
+  video_id: null,
+  name: 'linked meme',
+  caption_text: '',
+  captions_json: null,
+  gif_range_start: null,
+  gif_range_end: null,
+  width: null,
+  height: null,
+  external_url: 'https://example.com/meme.gif',
+  created_at: '2026-01-01T00:00:00Z',
+  gif_url: 'https://example.com/meme.gif',
+  mp4_url: null,
+  webm_url: null,
+}
+
 beforeEach(() => {
   vi.mocked(listGifs).mockReset()
   vi.mocked(renameGif).mockReset()
   vi.mocked(deleteGif).mockReset()
   vi.mocked(importGifs).mockReset()
+  vi.mocked(linkGif).mockReset()
 })
 
 afterEach(() => {
@@ -244,5 +264,73 @@ describe('Archive', () => {
 
     await screen.findByText(/bad file/)
     expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+  })
+
+  it('shows an external badge only for a linked gif, not a native/imported one', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA, linkedGif])
+
+    render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+
+    const nativeThumb = screen.getByRole('button', { name: 'cat jumping' })
+    const linkedThumb = screen.getByRole('button', { name: 'linked meme' })
+    expect(nativeThumb.querySelector('.archive-badge-external')).not.toBeInTheDocument()
+    expect(linkedThumb.querySelector('.archive-badge-external')).toBeInTheDocument()
+  })
+
+  it('a linked gif shows "Open original" instead of Download, linking to the external url', async () => {
+    vi.mocked(listGifs).mockResolvedValue([linkedGif])
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'linked meme' }))
+
+    expect(screen.queryByRole('link', { name: /download/i })).not.toBeInTheDocument()
+    const openOriginal = screen.getByRole('link', { name: /open original/i }) as HTMLAnchorElement
+    expect(openOriginal.href).toBe(linkedGif.external_url)
+  })
+
+  it('a native gif still shows Download, not "Open original"', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('link', { name: /open original/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument()
+  })
+
+  it('adding a gif by url calls the API and prepends it to the grid', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(linkGif).mockResolvedValue(linkedGif)
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
+    await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/meme.gif')
+    await user.type(screen.getByLabelText('Linked GIF title'), 'linked meme')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(linkGif).toHaveBeenCalledWith('https://example.com/meme.gif', 'linked meme'))
+    expect(await screen.findByRole('button', { name: 'linked meme' })).toBeInTheDocument()
+    await screen.findByText(/^linked$/i)
+  })
+
+  it('shows a link error without touching the grid', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(linkGif).mockRejectedValue(new Error('/api/gifs/link failed (400): not an image'))
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
+    await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/not-an-image')
+    await user.type(screen.getByLabelText('Linked GIF title'), 'bad link')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await screen.findByText(/not an image/)
+    expect(screen.queryByRole('button', { name: 'bad link' })).not.toBeInTheDocument()
   })
 })

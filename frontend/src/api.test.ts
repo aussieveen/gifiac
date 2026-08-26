@@ -2,18 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createExport,
   deleteGif,
+  deleteTemplate,
   getFilmstripMeta,
   getGif,
+  getTemplate,
   importGifs,
+  linkGif,
   listGifs,
   listVideos,
+  putTemplate,
   renameGif,
   subscribeExportProgress,
   thumbnailUrl,
   uploadVideo,
   videoFileUrl,
 } from './api'
-import type { Caption } from './types'
+import type { Caption, TemplatePayload } from './types'
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -249,6 +253,87 @@ describe('importGifs', () => {
     expect(init.body).toBeInstanceOf(FormData)
     const submitted = (init.body as FormData).getAll('files') as File[]
     expect(submitted.map((f) => f.name)).toEqual(['a.gif', 'b.gif'])
+  })
+})
+
+describe('linkGif', () => {
+  it('POSTs the url and name as JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'g1', external_url: 'https://example.com/a.gif' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await linkGif('https://example.com/a.gif', 'a gif')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/gifs/link')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body as string)).toEqual({ url: 'https://example.com/a.gif', name: 'a gif' })
+  })
+
+  it('rejects with the response body on a non-ok status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('not an image', { status: 400 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(linkGif('https://example.com/a.gif', 'a gif')).rejects.toThrow(/not an image/)
+  })
+})
+
+describe('getTemplate', () => {
+  it('GETs the template endpoint and returns the parsed payload', async () => {
+    const payload: TemplatePayload = { captions: [], gif_range_start: 0, gif_range_end: 2, width: 480, height: 270 }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getTemplate('v1')).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith('/api/videos/v1/template')
+  })
+
+  it('resolves to null when no template is saved (404)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getTemplate('v1')).resolves.toBeNull()
+  })
+
+  it('rejects on a non-404 error status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getTemplate('v1')).rejects.toThrow(/500/)
+  })
+})
+
+describe('putTemplate', () => {
+  it('PUTs the payload as JSON', async () => {
+    const payload: TemplatePayload = { captions: [], gif_range_start: 0, gif_range_end: 2, width: 480, height: 270 }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await putTemplate('v1', payload)
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/videos/v1/template')
+    expect(init.method).toBe('PUT')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body as string)).toEqual(payload)
+  })
+})
+
+describe('deleteTemplate', () => {
+  it('DELETEs the template', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteTemplate('v1')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/videos/v1/template', { method: 'DELETE' })
+  })
+
+  it('throws on a non-ok status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteTemplate('v1')).rejects.toThrow(/500/)
   })
 })
 

@@ -507,6 +507,17 @@ button {
   opacity: 0.4;
 }
 
+.video-card-badge-template {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(13, 14, 18, 0.85);
+  border-radius: 4px;
+  padding: 3px 4px;
+}
+
 .video-card img {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -547,6 +558,33 @@ button {
   align-items: center;
 }
 
+.archive-link-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.archive-link-url {
+  flex: 2;
+  background: #0d0e12;
+  border: 1px solid #2a2b33;
+  color: #fff;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.archive-link-name {
+  flex: 1;
+  background: #0d0e12;
+  border: 1px solid #2a2b33;
+  color: #fff;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
 .archive-layout {
   display: flex;
   gap: 20px;
@@ -562,12 +600,28 @@ button {
 }
 
 .archive-thumb {
+  position: relative;
   padding: 0;
   border: 2px solid transparent;
   border-radius: 4px;
   overflow: hidden;
   background: #0d0e12;
   aspect-ratio: 16 / 9;
+}
+
+.archive-badge-external {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(13, 14, 18, 0.8);
+  border-radius: 3px;
+  padding: 3px 4px;
+}
+
+.archive-panel-external-note {
+  margin: 0;
 }
 
 .archive-thumb.selected {

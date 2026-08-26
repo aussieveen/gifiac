@@ -8,7 +8,9 @@ import { VideoPicker } from './VideoPicker'
 type View = 'videos' | 'archive'
 
 export default function App() {
-  const [view, setView] = useState<View>('videos')
+  // SPEC.md §8: the archive is the app's landing page — browsing/finding
+  // existing GIFs is the more common action than starting a new one.
+  const [view, setView] = useState<View>('archive')
   const [video, setVideo] = useState<Video | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)

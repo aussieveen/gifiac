@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteGif, importGifs, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif } from './api'
 import type { Gif } from './types'
 
 /** Auto-dismisses after a beat, matching the archive prototype's toast. */
@@ -61,6 +61,11 @@ export function Archive({ initialSelectedId }: Props) {
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [showLinkForm, setShowLinkForm] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkName, setLinkName] = useState('')
+  const [linking, setLinking] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
   const toast = useToast()
 
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
@@ -125,6 +130,29 @@ export function Archive({ initialSelectedId }: Props) {
     }
   }
 
+  // SPEC.md §13: creates a linked (hotlinked, never re-hosted) GIF from a
+  // pasted URL + title.
+  async function handleLink(e: React.FormEvent) {
+    e.preventDefault()
+    const url = linkUrl.trim()
+    const name = linkName.trim()
+    if (!url || !name) return
+    setLinking(true)
+    setLinkError(null)
+    try {
+      const created = await linkGif(url, name)
+      setGifs((gs) => [created, ...gs])
+      setLinkUrl('')
+      setLinkName('')
+      setShowLinkForm(false)
+      toast.show('Linked')
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLinking(false)
+    }
+  }
+
   async function remove() {
     if (!selected) return
     if (!window.confirm(`Delete "${selected.name}"? This can't be undone.`)) return
@@ -168,11 +196,37 @@ export function Archive({ initialSelectedId }: Props) {
             }}
           />
         </label>
+        <button className="va-btn" onClick={() => setShowLinkForm((s) => !s)}>
+          + Add from URL
+        </button>
       </div>
+
+      {showLinkForm && (
+        <form className="archive-link-form" onSubmit={handleLink}>
+          <input
+            className="archive-link-url"
+            placeholder="https://…/example.gif"
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            aria-label="GIF URL"
+          />
+          <input
+            className="archive-link-name"
+            placeholder="Title…"
+            value={linkName}
+            onChange={(e) => setLinkName(e.target.value)}
+            aria-label="Linked GIF title"
+          />
+          <button className="va-btn" type="submit" disabled={linking || !linkUrl.trim() || !linkName.trim()}>
+            {linking ? 'Adding…' : 'Add'}
+          </button>
+        </form>
+      )}
 
       {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
       {importError && <p className="export-error">{importError}</p>}
+      {linkError && <p className="export-error">{linkError}</p>}
 
       <div className="archive-layout">
         <div className="archive-grid">
@@ -184,6 +238,15 @@ export function Archive({ initialSelectedId }: Props) {
               aria-label={g.name}
             >
               {g.gif_url && <img src={g.gif_url} alt={g.name} />}
+              {/* SPEC.md §13/§8: marks a GIF hotlinked to a third-party
+                  URL — media outside our controlled R2 that could vanish
+                  if the source does. File-based imports don't get this;
+                  they're fully re-hosted, same as native GIFs. */}
+              {g.external_url && (
+                <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
+                  🔗
+                </span>
+              )}
             </button>
           ))}
           {!loading && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
@@ -211,14 +274,23 @@ export function Archive({ initialSelectedId }: Props) {
                 onBlur={(e) => rename(e.target.value)}
               />
               {selected.caption_text && <p className="archive-panel-caption">{selected.caption_text}</p>}
+              {selected.external_url && (
+                <p className="va-hint archive-panel-external-note">🔗 Linked — hosted externally, not by Gifiac</p>
+              )}
               <p className="va-hint">{new Date(selected.created_at).toLocaleString()}</p>
               <div className="archive-panel-actions">
                 <button className="va-btn" onClick={copyLink}>
                   🔗 Copy link
                 </button>
-                <a className="va-btn" href={selected.gif_url} download={`${selected.name}.gif`}>
-                  ⬇ Download
-                </a>
+                {selected.external_url ? (
+                  <a className="va-btn" href={selected.external_url} target="_blank" rel="noopener noreferrer">
+                    ↗ Open original
+                  </a>
+                ) : (
+                  <a className="va-btn" href={selected.gif_url} download={`${selected.name}.gif`}>
+                    ⬇ Download
+                  </a>
+                )}
                 <button className="va-btn danger" onClick={remove} disabled={deleting}>
                   ✕ {deleting ? 'Deleting…' : 'Delete'}
                 </button>

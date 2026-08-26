@@ -25,21 +25,31 @@ use crate::storage::Storage;
 /// `Gif` plus its derived, never-stored R2 URLs (SPEC.md §9: "URLs are
 /// derived, never stored") — what the archive UI needs to preview, link,
 /// and download a GIF without separately re-deriving the key convention.
+/// For a linked GIF (SPEC.md §13), `gif_url` is the external URL itself
+/// and there's no MP4/WebM — those stay `None`.
 #[derive(Debug, Serialize)]
 pub struct GifResponse {
     #[serde(flatten)]
     gif: Gif,
     gif_url: String,
-    mp4_url: String,
-    webm_url: String,
+    mp4_url: Option<String>,
+    webm_url: Option<String>,
 }
 
 fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppError> {
+    if let Some(external_url) = gif.external_url.clone() {
+        return Ok(GifResponse {
+            gif_url: external_url,
+            mp4_url: None,
+            webm_url: None,
+            gif,
+        });
+    }
     let uuid = Uuid::parse_str(&gif.id)?;
     Ok(GifResponse {
         gif_url: storage.public_url(&paths::gif_object_key(&uuid)),
-        mp4_url: storage.public_url(&paths::mp4_object_key(&uuid)),
-        webm_url: storage.public_url(&paths::webm_object_key(&uuid)),
+        mp4_url: Some(storage.public_url(&paths::mp4_object_key(&uuid))),
+        webm_url: Some(storage.public_url(&paths::webm_object_key(&uuid))),
         gif,
     })
 }
@@ -93,26 +103,73 @@ pub async fn rename_gif(
 /// objects — if an object was never fully uploaded (unlikely, but not
 /// impossible after a crash mid-export) a missing-object delete from the
 /// S3-compatible API is a no-op, not an error, so this doesn't need to
-/// distinguish "already gone" from "successfully removed".
+/// distinguish "already gone" from "successfully removed". A linked GIF
+/// (SPEC.md §13) has no R2 objects at all — that step is skipped for it.
 pub async fn delete_gif(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
+    let gif = db::get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
     let deleted = db::delete_gif(&state.pool, &id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
 
-    let uuid = Uuid::parse_str(&id)?;
-    for key in [
-        paths::gif_object_key(&uuid),
-        paths::mp4_object_key(&uuid),
-        paths::webm_object_key(&uuid),
-    ] {
-        state.storage.delete_object(&key).await?;
+    if !gif.is_linked() {
+        let uuid = Uuid::parse_str(&id)?;
+        for key in [
+            paths::gif_object_key(&uuid),
+            paths::mp4_object_key(&uuid),
+            paths::webm_object_key(&uuid),
+        ] {
+            state.storage.delete_object(&key).await?;
+        }
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkGifRequest {
+    url: String,
+    name: String,
+}
+
+/// SPEC.md §13: creates a linked GIF — a pure hotlink to a third-party
+/// URL, never downloaded or re-hosted on R2. Synchronous, like `POST
+/// /api/videos`'s FFmpeg probe: the URL sanity check runs inline, since
+/// there's no real processing pipeline behind this to background.
+pub async fn link_gif(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<LinkGifRequest>,
+) -> Result<(StatusCode, Json<GifResponse>), AppError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name must not be empty".to_string()));
+    }
+    let url = request.url.trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::BadRequest("url must not be empty".to_string()));
+    }
+
+    crate::link_check::check_linkable(&state.http_client, &url)
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let new_gif = NewGif {
+        id: Uuid::new_v4().to_string(),
+        video_id: None,
+        name,
+        caption_text: String::new(),
+        captions_json: None,
+        gif_range_start: None,
+        gif_range_end: None,
+        width: None,
+        height: None,
+        external_url: Some(url),
+    };
+    let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
+    Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage)?)))
 }
 
 /// Bulk import (SPEC.md §7): each multipart field is one file, run through
@@ -199,10 +256,11 @@ pub async fn import_gifs(
             name,
             caption_text: String::new(),
             captions_json: None,
-            gif_range_start: 0.0,
-            gif_range_end: probe.duration_seconds,
-            width: result.width,
-            height: result.height,
+            gif_range_start: Some(0.0),
+            gif_range_end: Some(probe.duration_seconds),
+            width: Some(result.width),
+            height: Some(result.height),
+            external_url: None,
         };
         let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
         created.push(with_urls(gif, &state.storage)?);

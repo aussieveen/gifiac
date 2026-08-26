@@ -5,6 +5,7 @@ pub mod error;
 pub mod exports;
 pub mod ffmpeg;
 pub mod filmstrip_layout;
+pub mod link_check;
 pub mod models;
 pub mod paths;
 pub mod routes;
@@ -53,10 +54,13 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         &r2.secret_access_key,
     );
 
+    let http_client = link_check::build_client()?;
+
     Ok(Arc::new(AppState {
         pool,
         config,
         storage,
+        http_client,
         export_jobs: Default::default(),
     }))
 }

@@ -26,10 +26,17 @@ pub fn api_router() -> Router<Arc<AppState>> {
             "/videos/{id}/filmstrip.jpg",
             get(videos::get_filmstrip_image),
         )
+        .route(
+            "/videos/{id}/template",
+            get(videos::get_template)
+                .put(videos::put_template)
+                .delete(videos::delete_template),
+        )
         .route("/exports", post(exports::create_export))
         .route("/exports/{id}/progress", get(exports::export_progress))
         .route("/gifs", get(gifs::list_gifs))
         .route("/gifs/import", post(gifs::import_gifs))
+        .route("/gifs/link", post(gifs::link_gif))
         .route(
             "/gifs/{id}",
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),

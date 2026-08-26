@@ -8,9 +8,11 @@ vi.mock('./api', () => ({
   createExport: vi.fn(),
   subscribeExportProgress: vi.fn(),
   videoFileUrl: (id: string) => `/api/videos/${id}/file`,
+  getTemplate: vi.fn(),
+  putTemplate: vi.fn(),
 }))
 
-import { createExport, subscribeExportProgress } from './api'
+import { createExport, getTemplate, putTemplate, subscribeExportProgress } from './api'
 import type { ExportProgressHandlers } from './api'
 
 const video: Video = {
@@ -38,6 +40,8 @@ beforeEach(() => {
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(subscribeExportProgress).mockReturnValue(() => {})
+  vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
+  vi.mocked(putTemplate).mockReset()
 })
 
 describe('CaptionEditor', () => {
@@ -222,6 +226,7 @@ describe('CaptionEditor', () => {
         gif_range_end: 8,
         width: 480,
         height: 270,
+        external_url: null,
         created_at: '2026-01-01T00:00:00Z',
       }),
     )
@@ -254,11 +259,142 @@ describe('CaptionEditor', () => {
       gif_range_end: 8,
       width: 480,
       height: 270,
+      external_url: null,
       created_at: '2026-01-01T00:00:00Z',
     }
     act(() => handlers.onComplete?.(gif))
 
     expect(onGifCreated).toHaveBeenCalledWith(gif)
+  })
+
+  it('shows a "Create template" checkbox for a video with no template', async () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(await screen.findByText('Create template')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Overwrite template' })).not.toBeInTheDocument()
+  })
+
+  it('pre-fills captions and the GIF range from a saved template, and shows "Overwrite template" instead', async () => {
+    vi.mocked(getTemplate).mockResolvedValue({
+      captions: [
+        {
+          id: 'c1',
+          startTime: 1,
+          endTime: 3,
+          text: 'from template',
+          fontFamily: 'Impact, sans-serif',
+          fontSize: 28,
+          color: '#ffffff',
+          align: 'center',
+          x: 0.5,
+          y: 0.88,
+          width: 0.6,
+          outlineColor: null,
+          lineHeight: 0.65,
+        },
+      ],
+      gif_range_start: 1,
+      gif_range_end: 6,
+      width: 160,
+      height: 90,
+    })
+
+    render(<CaptionEditor video={{ ...video, has_template: true }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    await screen.findByRole('button', { name: 'Delete caption "from template"' })
+    expect(screen.getByText(/GIF range: 1\.00s – 6\.00s/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Overwrite template' })).toBeInTheDocument()
+    expect(screen.queryByText('Create template')).not.toBeInTheDocument()
+  })
+
+  it('clicking "Overwrite template" saves the current captions/range without exporting', async () => {
+    vi.mocked(getTemplate).mockResolvedValue({ captions: [], gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 })
+    vi.mocked(putTemplate).mockResolvedValue({ captions: [], gif_range_start: 0, gif_range_end: 1, width: 160, height: 90 })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={{ ...video, has_template: true }} filmstrip={filmstrip} onBack={() => {}} />)
+    await screen.findByRole('button', { name: 'Overwrite template' })
+
+    await user.click(screen.getByRole('button', { name: 'Overwrite template' }))
+
+    await waitFor(() =>
+      expect(putTemplate).toHaveBeenCalledWith(
+        'v1',
+        expect.objectContaining({ gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 }),
+      ),
+    )
+    await screen.findByText('Template saved.')
+    expect(createExport).not.toHaveBeenCalled()
+  })
+
+  it('checking "Create template" and exporting saves the template alongside the GIF', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    vi.mocked(putTemplate).mockResolvedValue({ captions: [], gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(await screen.findByText('Create template'))
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    act(() =>
+      handlers.onComplete?.({
+        id: 'g1',
+        video_id: 'v1',
+        name: 'my clip',
+        caption_text: '',
+        captions_json: null,
+        gif_range_start: 0,
+        gif_range_end: 8,
+        width: 480,
+        height: 270,
+        external_url: null,
+        created_at: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(putTemplate).toHaveBeenCalledWith(
+        'v1',
+        expect.objectContaining({ gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 }),
+      ),
+    )
+  })
+
+  it('does not save a template on export when "Create template" is left unchecked', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    let handlers: ExportProgressHandlers = {}
+    vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
+      handlers = h
+      return () => {}
+    })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    act(() =>
+      handlers.onComplete?.({
+        id: 'g1',
+        video_id: 'v1',
+        name: 'my clip',
+        caption_text: '',
+        captions_json: null,
+        gif_range_start: 0,
+        gif_range_end: 8,
+        width: 480,
+        height: 270,
+        external_url: null,
+        created_at: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    expect(putTemplate).not.toHaveBeenCalled()
   })
 
   it('shows an error message when the initial export request fails', async () => {

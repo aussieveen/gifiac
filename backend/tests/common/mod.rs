@@ -56,10 +56,12 @@ pub async fn spawn_app() -> TestApp {
     db::run_migrations(&pool).await.unwrap();
 
     let storage = test_storage();
+    let http_client = gifiac_backend::link_check::build_client().unwrap();
     let state = Arc::new(AppState {
         pool,
         config,
         storage: storage.clone(),
+        http_client,
         export_jobs: Default::default(),
     });
     let app = gifiac_backend::build_app(state);

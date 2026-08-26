@@ -13,6 +13,10 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Config,
     pub storage: Storage,
+    /// Shared client for the light URL sanity check behind linked GIFs
+    /// (SPEC.md §13, see link_check.rs) — reused across requests rather
+    /// than building a fresh one per submission.
+    pub http_client: reqwest::Client,
     /// In-flight export jobs, keyed by export id, so `GET
     /// /api/exports/{id}/progress` can subscribe to a job's broadcast
     /// channel. Entries are removed once the job finishes (success or
