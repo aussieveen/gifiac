@@ -261,7 +261,7 @@ The image is built and published by GitHub Actions so it can be installed on Unr
 
 ---
 
-## 12. Video templates *(designed, not yet implemented)*
+## 12. Video templates
 
 A templating system so a video's full export setup can be saved and reused with minimal edits.
 
@@ -300,7 +300,7 @@ The `GET /api/videos` list response gains a `has_template: bool` field per item 
 
 ---
 
-## 13. URL-linked GIFs *(designed, not yet implemented)*
+## 13. URL-linked GIFs
 
 A way to add a GIF to the archive by pasting a URL and a title, instead of uploading a file. Distinct from bulk import (§7): the GIF is **never downloaded or re-hosted** — it's a pure hotlink to wherever it already lives.
 
