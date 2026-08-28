@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
-import { clamp, linesFromCharTops, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
+import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
@@ -59,6 +59,18 @@ const MAX_LINE_HEIGHT = 1.5
 const BASE_TIMELINE_WIDTH = 700
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3]
 const DEFAULT_ZOOM_INDEX = 2 // ZOOM_LEVELS[2] === 1
+// SPEC.md §14: dragging a caption/range edge snaps into alignment with the
+// playhead or another caption's/the range's edge once within this many
+// on-screen pixels, converted to a time threshold at the current zoom.
+const SNAP_PX = 8
+// Bounds how fast a single wheel gesture can step through the zoom levels —
+// a fast trackpad swipe fires many wheel events per gesture, and without
+// this it would blow through several levels instead of feeling like one
+// deliberate zoom step (SPEC.md §14).
+const WHEEL_ZOOM_COOLDOWN_MS = 150
+// SPEC.md §14: quick-select swatches shown alongside the native color
+// pickers for caption text and outline color.
+const SWATCH_COLORS = ['#fff35c', '#00ff99', '#00ccff', '#ff6666', '#9933ff', '#fcfcfc', '#000000']
 // The live preview box is sized from the film-strip's frame dimensions
 // (see backend/src/scale.rs MAX_WIDTH) — the same scaled-down size the
 // export pipeline burns captions into — so caption font-size/position in
@@ -83,6 +95,24 @@ function outlineTextShadow(outlineColor: string | null): string {
   return `2px 2px 0 ${outlineColor}, -2px -2px 0 ${outlineColor}, 2px -2px 0 ${outlineColor}, -2px 2px 0 ${outlineColor}`
 }
 
+/** SPEC.md §14: quick-select swatches shown alongside a native color picker. */
+function ColorSwatches({ label, value, onSelect }: { label: string; value: string; onSelect: (color: string) => void }) {
+  return (
+    <div className="va-swatches">
+      {SWATCH_COLORS.map((color) => (
+        <button
+          key={color}
+          type="button"
+          className={`va-swatch ${value.toLowerCase() === color.toLowerCase() ? 'active' : ''}`}
+          style={{ backgroundColor: color }}
+          aria-label={`${label} color ${color}`}
+          onClick={() => onSelect(color)}
+        />
+      ))}
+    </div>
+  )
+}
+
 function newCaptionId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -98,7 +128,7 @@ function defaultCaption(id: string, start: number, end: number): Caption {
     text: 'New caption',
     fontFamily: FONTS[0],
     fontSize: 28,
-    color: '#ffffff',
+    color: '#fcfcfc',
     align: 'center',
     // "defaults to bottom-center on creation" — SPEC.md §4.
     x: 0.5,
@@ -164,10 +194,15 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaved, setTemplateSaved] = useState(false)
   const [templateError, setTemplateError] = useState<string | null>(null)
+  // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
+  // null when nothing's snapped — drives the vertical guide line.
+  const [snapGuideX, setSnapGuideX] = useState<number | null>(null)
 
   const previewRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const exportUnsubscribeRef = useRef<(() => void) | null>(null)
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null)
+  const lastWheelZoomAtRef = useRef(0)
   // One hidden, off-screen element per caption — rendered with the exact
   // same box width/font as its live preview, purely so makeGif() can read
   // back its real auto-wrapped line breaks at export time (see
@@ -204,7 +239,54 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     }
   }, [video.id])
 
+  // SPEC.md §14: hovering the timeline and scrolling vertically zooms
+  // instead of scrolling the page — up zooms in, down zooms out — while a
+  // horizontal trackpad swipe (deltaX, no deltaY) is left untouched so it
+  // still pans the timeline natively. Bound as a real DOM listener (not
+  // React's onWheel) with `passive: false`: React registers wheel handlers
+  // as passive by default, which would silently ignore preventDefault and
+  // let the page scroll anyway.
+  useEffect(() => {
+    const el = timelineScrollRef.current
+    if (!el) return
+    function handleWheel(e: WheelEvent) {
+      if (e.deltaY === 0) return
+      e.preventDefault()
+      const now = Date.now()
+      if (now - lastWheelZoomAtRef.current < WHEEL_ZOOM_COOLDOWN_MS) return
+      lastWheelZoomAtRef.current = now
+      if (e.deltaY < 0) {
+        setZoomIndex((z) => Math.min(ZOOM_LEVELS.length - 1, z + 1))
+      } else {
+        setZoomIndex((z) => Math.max(0, z - 1))
+      }
+    }
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [])
+
   const timelineWidth = BASE_TIMELINE_WIDTH * ZOOM_LEVELS[zoomIndex]
+
+  // SPEC.md §14: whenever the zoom level changes (buttons or wheel), keep
+  // the playhead centered in view instead of leaving it — and its
+  // add-caption button — scrolled out of sight. Deliberately fires only on
+  // a zoomIndex change, not continuously as the playhead moves during
+  // playback — so the values it reads (via this ref, synced every render
+  // like useWindowDrag's onMoveRef) are current as of the render that
+  // changed zoomIndex, without making them dependencies of the effect
+  // itself.
+  const centerOnZoomRef = useRef<() => void>(() => {})
+  useLayoutEffect(() => {
+    centerOnZoomRef.current = () => {
+      const el = timelineScrollRef.current
+      if (!el) return
+      const playheadX = timeToX(currentTime, duration, timelineWidth)
+      el.scrollLeft = centeredScrollLeft(playheadX, el.clientWidth, timelineWidth)
+    }
+  })
+  useEffect(() => {
+    centerOnZoomRef.current()
+  }, [zoomIndex])
   const selected = captions.find((c) => c.id === selectedId) ?? null
 
   function updateCaption(id: string, patch: Partial<Caption>) {
@@ -233,20 +315,76 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     }
   }
 
-  const startPillWindowDrag = useWindowDrag<PillDrag>((e, drag) => {
-    const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
-    if (drag.kind === 'move') {
-      const dur = drag.orig.endTime - drag.orig.startTime
-      const newStart = clamp(drag.orig.startTime + deltaT, 0, Math.max(0, duration - dur))
-      updateCaption(drag.id, { startTime: newStart, endTime: newStart + dur })
-    } else if (drag.kind === 'left') {
-      const newStart = clamp(drag.orig.startTime + deltaT, 0, drag.orig.endTime - MIN_CAPTION_DURATION)
-      updateCaption(drag.id, { startTime: newStart })
-    } else {
-      const newEnd = clamp(drag.orig.endTime + deltaT, drag.orig.startTime + MIN_CAPTION_DURATION, duration)
-      updateCaption(drag.id, { endTime: newEnd })
-    }
-  })
+  // SPEC.md §14: how close (in time) a dragged edge needs to land to a snap
+  // target before it locks on — a fixed on-screen distance (SNAP_PX)
+  // converted to time at the current zoom, so it feels the same regardless
+  // of how zoomed in the timeline is.
+  const snapThreshold = timelineWidth > 0 ? (SNAP_PX / timelineWidth) * duration : 0
+
+  function captionSnapTargets(excludeId: string): number[] {
+    return [
+      currentTime,
+      gifRange.start,
+      gifRange.end,
+      ...captions.filter((c) => c.id !== excludeId).flatMap((c) => [c.startTime, c.endTime]),
+    ]
+  }
+
+  function rangeSnapTargets(): number[] {
+    return [currentTime, ...captions.flatMap((c) => [c.startTime, c.endTime])]
+  }
+
+  function showSnapGuide(snappedTo: number | null) {
+    setSnapGuideX(snappedTo === null ? null : timeToX(snappedTo, duration, timelineWidth))
+  }
+
+  // Shared shape for every single-edge drag (caption left/right handle, GIF
+  // range handle): snap the raw dragged value against `targets`, then
+  // re-clamp into [lo, hi] in case the snap target itself falls outside
+  // what this particular edge is allowed to reach (e.g. snapping past the
+  // opposite edge's minimum-duration bound).
+  function snapAndClamp(raw: number, targets: number[], lo: number, hi: number) {
+    const snap = snapValue(raw, targets, snapThreshold)
+    return { value: clamp(snap.value, lo, hi), snappedTo: snap.snappedTo }
+  }
+
+  const startPillWindowDrag = useWindowDrag<PillDrag>(
+    (e, drag) => {
+      const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
+      const targets = captionSnapTargets(drag.id)
+      if (drag.kind === 'move') {
+        const dur = drag.orig.endTime - drag.orig.startTime
+        const rawStart = clamp(drag.orig.startTime + deltaT, 0, Math.max(0, duration - dur))
+        const startSnap = snapValue(rawStart, targets, snapThreshold)
+        const endSnap = snapValue(rawStart + dur, targets, snapThreshold)
+        const startDistance = startSnap.snappedTo === null ? Infinity : Math.abs(startSnap.value - rawStart)
+        const endDistance = endSnap.snappedTo === null ? Infinity : Math.abs(endSnap.value - (rawStart + dur))
+        let newStart = rawStart
+        let snappedTo: number | null = null
+        if (startDistance <= endDistance && startSnap.snappedTo !== null) {
+          newStart = startSnap.value
+          snappedTo = startSnap.snappedTo
+        } else if (endSnap.snappedTo !== null) {
+          newStart = endSnap.value - dur
+          snappedTo = endSnap.snappedTo
+        }
+        newStart = clamp(newStart, 0, Math.max(0, duration - dur))
+        updateCaption(drag.id, { startTime: newStart, endTime: newStart + dur })
+        showSnapGuide(snappedTo)
+      } else if (drag.kind === 'left') {
+        const raw = clamp(drag.orig.startTime + deltaT, 0, drag.orig.endTime - MIN_CAPTION_DURATION)
+        const { value, snappedTo } = snapAndClamp(raw, targets, 0, drag.orig.endTime - MIN_CAPTION_DURATION)
+        updateCaption(drag.id, { startTime: value })
+        showSnapGuide(snappedTo)
+      } else {
+        const raw = clamp(drag.orig.endTime + deltaT, drag.orig.startTime + MIN_CAPTION_DURATION, duration)
+        const { value, snappedTo } = snapAndClamp(raw, targets, drag.orig.startTime + MIN_CAPTION_DURATION, duration)
+        updateCaption(drag.id, { endTime: value })
+        showSnapGuide(snappedTo)
+      }
+    },
+    () => setSnapGuideX(null),
+  )
 
   function startPillDrag(e: React.MouseEvent, id: string, kind: PillDragKind) {
     e.stopPropagation()
@@ -256,15 +394,20 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     startPillWindowDrag({ kind, id, startX: e.clientX, orig: cap })
   }
 
-  const startRangeWindowDrag = useWindowDrag<RangeDrag>((e, drag) => {
-    const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
-    const newVal = clamp(drag.orig + deltaT, 0, duration)
-    setGifRange((r) =>
-      drag.edge === 'start'
-        ? { start: Math.min(newVal, r.end - MIN_GIF_RANGE), end: r.end }
-        : { start: r.start, end: Math.max(newVal, r.start + MIN_GIF_RANGE) },
-    )
-  })
+  const startRangeWindowDrag = useWindowDrag<RangeDrag>(
+    (e, drag) => {
+      const deltaT = ((e.clientX - drag.startX) / timelineWidth) * duration
+      const raw = clamp(drag.orig + deltaT, 0, duration)
+      const { value: newVal, snappedTo } = snapAndClamp(raw, rangeSnapTargets(), 0, duration)
+      setGifRange((r) =>
+        drag.edge === 'start'
+          ? { start: Math.min(newVal, r.end - MIN_GIF_RANGE), end: r.end }
+          : { start: r.start, end: Math.max(newVal, r.start + MIN_GIF_RANGE) },
+      )
+      showSnapGuide(snappedTo)
+    },
+    () => setSnapGuideX(null),
+  )
 
   function startRangeDrag(e: React.MouseEvent, edge: RangeDrag['edge']) {
     e.stopPropagation()
@@ -288,6 +431,19 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
 
   function setRangeEndToPlayhead() {
     setGifRange((r) => ({ start: r.start, end: Math.max(currentTime, r.start + MIN_GIF_RANGE) }))
+  }
+
+  // SPEC.md §14: precise per-caption equivalent of Set start/end above.
+  function setCaptionEdgeToPlayhead(id: string, edge: 'start' | 'end') {
+    setCaptions((cs) =>
+      cs.map((c) =>
+        c.id !== id
+          ? c
+          : edge === 'start'
+            ? { ...c, startTime: clamp(currentTime, 0, c.endTime - MIN_CAPTION_DURATION) }
+            : { ...c, endTime: clamp(currentTime, c.startTime + MIN_CAPTION_DURATION, duration) },
+      ),
+    )
   }
 
   function seekTo(time: number) {
@@ -410,6 +566,11 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   // above/below a frame even though the sprite's own aspect ratio may not
   // match a single frame's narrow on-screen width.
   const FILMSTRIP_HEIGHT = 48
+  // SPEC.md §14: vertical room below the strip for the playhead's
+  // add-caption button. Given as real layout height (not just left to
+  // absolute-position overflow) so .va-filmstrip-wrap's own box already
+  // includes it — nothing needs to scroll or clip to show it.
+  const PLAYHEAD_ADD_CLEARANCE = 26
   // The sprite samples a frame every 0.25s, so a long clip has far more
   // frames than fit the timeline at a reasonable size — rendering all of
   // them at low zoom squeezed each one down to just a few px wide, an
@@ -610,6 +771,17 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                 onChange={(e) => patchStyle({ text: e.target.value })}
               />
               <div className="va-style-row">
+                <span className="va-hint">
+                  {selected.startTime.toFixed(2)}s – {selected.endTime.toFixed(2)}s
+                </span>
+                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}>
+                  Set start to playhead
+                </button>
+                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}>
+                  Set end to playhead
+                </button>
+              </div>
+              <div className="va-style-row">
                 <select
                   aria-label="Font family"
                   value={selected.fontFamily}
@@ -654,6 +826,7 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                   value={selected.color}
                   onChange={(e) => patchStyle({ color: e.target.value })}
                 />
+                <ColorSwatches label="Text" value={selected.color} onSelect={(color) => patchStyle({ color })} />
                 {(['left', 'center', 'right'] as const).map((a) => (
                   <button
                     key={a}
@@ -674,12 +847,19 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                   Outline
                 </label>
                 {selected.outlineColor !== null && (
-                  <input
-                    aria-label="Outline color"
-                    type="color"
-                    value={selected.outlineColor}
-                    onChange={(e) => patchStyle({ outlineColor: e.target.value })}
-                  />
+                  <>
+                    <input
+                      aria-label="Outline color"
+                      type="color"
+                      value={selected.outlineColor}
+                      onChange={(e) => patchStyle({ outlineColor: e.target.value })}
+                    />
+                    <ColorSwatches
+                      label="Outline"
+                      value={selected.outlineColor}
+                      onSelect={(color) => patchStyle({ outlineColor: color })}
+                    />
+                  </>
                 )}
               </div>
               <label className="va-hint">
@@ -694,8 +874,9 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
       </div>
 
       <div className="va-timeline">
-        <div className="va-timeline-scroll">
+        <div className="va-timeline-scroll" ref={timelineScrollRef}>
           <div className="va-timeline-tracks" style={{ width: timelineWidth + 40 }}>
+          {snapGuideX !== null && <div className="va-snap-guide" style={{ left: snapGuideX }} />}
           {captions.map((c) => (
             <div key={c.id} className="va-track-row" style={{ width: timelineWidth }}>
               <div
@@ -716,11 +897,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
               </button>
             </div>
           ))}
-          <button className="va-add-track" onClick={addCaption}>
-            + add caption at playhead
-          </button>
 
-          <div className="va-filmstrip-wrap">
+          <div className="va-filmstrip-wrap" style={{ height: FILMSTRIP_HEIGHT + PLAYHEAD_ADD_CLEARANCE }}>
             <div
               className="va-filmstrip"
               style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }}
@@ -755,6 +933,20 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                 <div className="va-playhead-grip" />
               </div>
             </div>
+            {/* SPEC.md §14: rendered as a sibling of .va-filmstrip (which
+                clips overflow) rather than nested inside it, so it's never
+                clipped — always visible and following the playhead,
+                including once you've scrolled/zoomed to find a spot. */}
+            <button
+              type="button"
+              className="va-playhead-add"
+              style={{ left: timeToX(currentTime, duration, timelineWidth), top: FILMSTRIP_HEIGHT + 4 }}
+              aria-label="Add caption at playhead"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={addCaption}
+            >
+              +
+            </button>
           </div>
           </div>
         </div>

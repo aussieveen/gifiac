@@ -55,6 +55,26 @@ describe('useWindowDrag', () => {
     expect(second).toHaveBeenCalledTimes(1)
   })
 
+  it('calls onEnd once the drag ends via mouseup, but not before', () => {
+    const onEnd = vi.fn()
+    const { result } = renderHook(() => useWindowDrag<{ id: string }>(() => {}, onEnd))
+
+    act(() => result.current({ id: 'cap-1' }))
+    expect(onEnd).not.toHaveBeenCalled()
+
+    act(() => fireMouseEvent('mouseup'))
+    expect(onEnd).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call onEnd from a mouseup that is not ending an active drag', () => {
+    const onEnd = vi.fn()
+    renderHook(() => useWindowDrag<{ id: string }>(() => {}, onEnd))
+
+    act(() => fireMouseEvent('mouseup'))
+
+    expect(onEnd).not.toHaveBeenCalled()
+  })
+
   it('removes its window listeners on unmount, even mid-drag', () => {
     const onMove = vi.fn()
     const addSpy = vi.spyOn(window, 'addEventListener')

@@ -88,9 +88,9 @@ Frinkiac-style visual timeline editor. Reference prototype: `.scratch/gifiac/pro
 
 **Layout**: one editor mode only (no Simple/Advanced toggle).
 - **Live preview** (top-left): shows the current frame with active captions overlaid.
-- **Style panel** (top-right): edits whichever caption is currently selected — multi-line text box, font-family dropdown, size slider, color swatch, left/center/right alignment buttons, an "All tracks" checkbox to apply the current style to every caption at once.
-- **Timeline lanes**: one draggable/resizable track row per caption below the preview. Drag the pill body to move it in time; drag its left/right edges to resize. A `+` button adds a new caption at the current playhead; a red `✕` deletes a track.
-- **Film-strip scrubber** (bottom): click/drag moves the playhead. A separate yellow-highlighted, drag-handled range on the same strip sets the GIF export in/out points, independent of caption timing. Zoom in/out controls adjust density.
+- **Style panel** (top-right): edits whichever caption is currently selected — multi-line text box, font-family dropdown, size slider, a color picker (with quick-select swatches, see §14), left/center/right alignment buttons, "Set start/end to playhead" buttons with a read-only time display (see §14), an "All tracks" checkbox to apply the current style to every caption at once.
+- **Timeline lanes**: one draggable/resizable track row per caption below the preview. Drag the pill body to move it in time; drag its left/right edges to resize — both can snap to the playhead or to other captions'/the range's edges (see §14). A red `✕` deletes a track.
+- **Film-strip scrubber** (bottom): click/drag moves the playhead. A separate yellow-highlighted, drag-handled range on the same strip sets the GIF export in/out points, independent of caption timing. Zoom in/out controls, or scrolling the mouse wheel while hovering the timeline, adjust density (see §14). A small `+` button tracking the playhead adds a new caption at the current position — it stays accessible at any zoom/scroll position (see §14).
 - **Position**: captions are draggable directly on the live preview to set `x`/`y` — defaults to bottom-center on creation.
 - **Make GIF**: a prominent button in the controls row beside the film-strip; requires a non-empty `name` (see §5, `POST /api/exports`).
 
@@ -104,7 +104,7 @@ Frinkiac-style visual timeline editor. Reference prototype: `.scratch/gifiac/pro
   "text": "Just testing.",
   "fontFamily": "Impact, sans-serif",
   "fontSize": 28,
-  "color": "#ffffff",
+  "color": "#fcfcfc",
   "align": "center",
   "x": 0.5,
   "y": 0.88
@@ -329,7 +329,39 @@ No new table — a single nullable `external_url` column on the existing `gifs` 
 
 ---
 
-## 14. Out of scope
+## 14. Caption editor: precision and navigation
+
+Enhancements to the caption editor (§4) addressing two problems: losing access to the "add caption" action once zoomed/scrolled, and having no way to line up caption or range boundaries precisely.
+
+### Playhead-anchored add-caption control
+
+- The caption-adding action moves from the standalone `+` button above the timeline lanes to a small `+` button tracking the playhead just below the film-strip. It is always visible and moves with the playhead, so it stays reachable at any scroll position or zoom level with no separate step to relocate it. (The existing drag grip itself sits mostly clipped by the film-strip's own overflow boundary, so the new button is rendered just outside that boundary rather than literally on top of the grip — but it's positioned at the grip's same x, immediately by it.)
+- It is a distinct element from the drag grip, not layered on it — dragging the grip still seeks as before; clicking the new button adds a caption; there's no ambiguity between the two gestures.
+
+### Auto-scroll on zoom
+
+- Whenever the zoom level changes — via the existing +/− buttons or wheel-zoom (below) — the film-strip scrolls so the playhead is centered in the visible window, so zooming never leaves the playhead (and its add-caption button) off-screen.
+
+### Wheel zoom
+
+- Hovering the pointer anywhere over the scrollable timeline region (film-strip and caption track rows) and scrolling the mouse wheel vertically zooms the timeline: up zooms in, down zooms out.
+- Each wheel event steps exactly one of the existing zoom levels, with a ~150ms cooldown between steps so a single fast trackpad gesture doesn't skip through multiple levels at once.
+- Only vertical scroll input is captured for zoom; horizontal trackpad swipes (a distinct gesture) are left alone and continue to pan the timeline left/right as before.
+
+### Caption and range precision
+
+- The style panel gains, for the currently selected caption: a read-only display of its start/end times, and "Set start to playhead" / "Set end to playhead" buttons — mirroring the equivalent buttons that already exist for the GIF export range.
+- Dragging a caption's resize handle, dragging a caption's whole pill (moving both edges together), or dragging a GIF range handle snaps into exact alignment whenever it comes within 8 screen pixels of the playhead or of another caption's/the range's start or end. A thin vertical guide line is shown at the snap point while snapped.
+
+### Color quick-select swatches
+
+- The text-color and outline-color pickers in the style panel each gain a row of 7 quick-select swatches, shown alongside — not replacing — the existing native color picker: `#fff35c`, `#00ff99`, `#00ccff`, `#ff6666`, `#9933ff`, `#fcfcfc`, `#000000`. Clicking a swatch sets that color immediately; manual picking via the native input remains available for any other color.
+- A swatch shows a highlighted border when it matches the caption's current color.
+- New-caption default text color changes from `#ffffff` to `#fcfcfc`; the outline default remains `#000000` (both already present in the swatch list above).
+
+---
+
+## 15. Out of scope
 
 - Multi-user / authentication.
 - YouTube URL import (nice-to-have, explicitly deferred).

@@ -9,9 +9,10 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
  * mousedown handler and unmounted mid-drag (e.g. navigating away) would
  * otherwise leak a listener still calling back into stale state setters.
  */
-export function useWindowDrag<T>(onMove: (e: MouseEvent, origin: T) => void): (origin: T) => void {
+export function useWindowDrag<T>(onMove: (e: MouseEvent, origin: T) => void, onEnd?: () => void): (origin: T) => void {
   const dragRef = useRef<T | null>(null)
   const onMoveRef = useRef(onMove)
+  const onEndRef = useRef(onEnd)
 
   // Refs shouldn't be written during render (React may retry/discard a
   // render pass); syncing in a layout effect keeps onMoveRef current
@@ -19,6 +20,7 @@ export function useWindowDrag<T>(onMove: (e: MouseEvent, origin: T) => void): (o
   // synchronous mousemove in between.
   useLayoutEffect(() => {
     onMoveRef.current = onMove
+    onEndRef.current = onEnd
   })
 
   useEffect(() => {
@@ -26,6 +28,7 @@ export function useWindowDrag<T>(onMove: (e: MouseEvent, origin: T) => void): (o
       if (dragRef.current !== null) onMoveRef.current(e, dragRef.current)
     }
     function handleUp() {
+      if (dragRef.current !== null) onEndRef.current?.()
       dragRef.current = null
     }
     window.addEventListener('mousemove', handleMove)

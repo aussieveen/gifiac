@@ -81,6 +81,42 @@ export function linesFromCharTops(text: string, topForChar: (i: number) => numbe
   return lines
 }
 
+export interface SnapResult {
+  value: number
+  snappedTo: number | null
+}
+
+/**
+ * Finds the closest of `targets` within `threshold` of `value` — used to
+ * snap a dragged caption/range edge into exact alignment with the playhead
+ * or another caption's/the range's boundary once it gets close enough
+ * (SPEC.md §14). Falls back to `value` unchanged (`snappedTo: null`) when
+ * no target qualifies.
+ */
+export function snapValue(value: number, targets: number[], threshold: number): SnapResult {
+  let best: number | null = null
+  let bestDistance = Infinity
+  for (const target of targets) {
+    const distance = Math.abs(value - target)
+    if (distance <= threshold && distance < bestDistance) {
+      best = target
+      bestDistance = distance
+    }
+  }
+  return best === null ? { value, snappedTo: null } : { value: best, snappedTo: best }
+}
+
+/**
+ * The `scrollLeft` that centers `targetX` within a `containerWidth`-wide
+ * scroll viewport over `contentWidth`-wide content, clamped so the
+ * viewport never scrolls past the content's start/end — used to keep the
+ * playhead in view whenever the timeline's zoom level changes (SPEC.md
+ * §14).
+ */
+export function centeredScrollLeft(targetX: number, containerWidth: number, contentWidth: number): number {
+  return clamp(targetX - containerWidth / 2, 0, Math.max(0, contentWidth - containerWidth))
+}
+
 export interface SpriteSheetGrid extends SpriteGrid {
   rows: number
 }

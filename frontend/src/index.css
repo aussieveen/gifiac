@@ -221,6 +221,26 @@ button {
   border-color: #f5c518;
 }
 
+/* SPEC.md §14: quick-select swatches alongside the native color pickers. */
+.va-swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.va-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #333;
+  padding: 0;
+  cursor: pointer;
+}
+
+.va-swatch.active {
+  border-color: #f5c518;
+  border-width: 2px;
+}
+
 /* ---------- timeline / tracks / film-strip ---------- */
 
 .va-timeline {
@@ -231,9 +251,17 @@ button {
 }
 
 /* Tracks + film-strip scroll/zoom together; .va-controls (Make GIF, name,
-   zoom buttons) lives outside this so it's never scrolled out of view. */
+   zoom buttons) lives outside this so it's never scrolled out of view.
+   overflow-y is explicit (not left to default to `auto`, which it would
+   per spec whenever overflow-x isn't `visible`): only horizontal scrolling
+   is ever intended here, so no vertical scrollbar should appear even
+   though the playhead's add-caption button (SPEC.md §14) sits just
+   outside .va-filmstrip's own clipped box and adds a few px of vertical
+   overflow. Harmless to hide since this container's height is auto — it
+   already grows to fit that overflow, nothing is actually clipped. */
 .va-timeline-scroll {
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .va-track-row {
@@ -292,17 +320,25 @@ button {
   font-size: 14px;
 }
 
-.va-add-track {
-  margin-top: 4px;
-  background: transparent;
-  border: 1px dashed #444;
-  color: #888;
-  border-radius: 4px;
-  padding: 4px 10px;
-  font-size: 12px;
+.va-timeline-tracks {
+  position: relative;
+}
+
+/* SPEC.md §14: a thin guide line at the point a dragged caption/range edge
+   has just snapped to — spans the full tracks + film-strip height since
+   it's positioned relative to .va-timeline-tracks, not just one row. */
+.va-snap-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #5ac8fa;
+  pointer-events: none;
+  z-index: 5;
 }
 
 .va-filmstrip-wrap {
+  position: relative;
   margin-top: 14px;
 }
 
@@ -376,6 +412,32 @@ button {
   border-radius: 50%;
   background: #fff;
   pointer-events: none;
+}
+
+/* SPEC.md §14: sits just below the film-strip, tracking the playhead's x
+   position exactly (same timeToX value), so it's always right there to
+   click — no more scrolling back to a separate button after zooming in
+   and moving the playhead to find a spot. `top` is set inline in pixels
+   (not `top: 100%` of .va-filmstrip-wrap) because .va-filmstrip-wrap's own
+   height is sized to already include this button's clearance — an
+   absolutely positioned element doesn't otherwise contribute to its
+   flow-parent's layout height, which left it relying on scrollable
+   overflow (and vanishing the moment that overflow got hidden to kill an
+   unwanted vertical scrollbar; see the .va-timeline-scroll comment). */
+.va-playhead-add {
+  position: absolute;
+  transform: translateX(-50%);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5c518;
+  color: #111;
+  border: none;
+  font-size: 13px;
+  line-height: 18px;
+  padding: 0;
+  cursor: pointer;
+  z-index: 4;
 }
 
 .va-controls {

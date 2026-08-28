@@ -608,4 +608,174 @@ describe('CaptionEditor', () => {
     expect(playSpy).toHaveBeenCalled()
     playSpy.mockRestore()
   })
+
+  it('defaults new captions to a light-grey text color and a black outline', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    expect(screen.getByLabelText('Caption color')).toHaveValue('#fcfcfc')
+    expect(screen.getByLabelText('Outline color')).toHaveValue('#000000')
+  })
+
+  it('there is exactly one add-caption-at-playhead control, attached to the playhead', async () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(screen.getAllByRole('button', { name: /add caption at playhead/i })).toHaveLength(1)
+    expect(document.querySelector('.va-playhead-add')).toBeInTheDocument()
+    expect(document.querySelector('.va-add-track')).not.toBeInTheDocument()
+  })
+
+  it('the playhead add-caption button adds a caption at the current time without pausing/seeking', () => {
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    fireEvent.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    expect(pauseSpy).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Caption text')).toHaveValue('New caption')
+    expect(screen.getByText(/3\.00s – 4\.00s/)).toBeInTheDocument()
+    pauseSpy.mockRestore()
+  })
+
+  it('clicking a text-color swatch sets the caption color and highlights that swatch', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    await user.click(screen.getByRole('button', { name: 'Text color #00ccff' }))
+
+    expect(screen.getByLabelText('Caption color')).toHaveValue('#00ccff')
+    expect(screen.getByRole('button', { name: 'Text color #00ccff' })).toHaveClass('active')
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ color: '#00ccff' })
+  })
+
+  it('clicking an outline-color swatch sets the outline color and highlights that swatch', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+    // Default outline is already #000000, which is itself one of the
+    // swatches — switch away first so the click below is a real change.
+    await user.click(screen.getByRole('button', { name: 'Outline color #ff6666' }))
+
+    expect(screen.getByLabelText('Outline color')).toHaveValue('#ff6666')
+    expect(screen.getByRole('button', { name: 'Outline color #ff6666' })).toHaveClass('active')
+    expect(screen.getByRole('button', { name: 'Outline color #000000' })).not.toHaveClass('active')
+  })
+
+  it('"Set start/end to playhead" set the selected caption\'s timing to the current playhead', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 0.5, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    await user.click(screen.getByRole('button', { name: 'Set start to playhead' }))
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 6, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    await user.click(screen.getByRole('button', { name: 'Set end to playhead' }))
+
+    expect(screen.getByText(/0\.50s – 6\.00s/)).toBeInTheDocument()
+  })
+
+  it('zooms in/out when scrolling the mouse wheel over the timeline, up to zoom in', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const scrollEl = document.querySelector('.va-timeline-scroll') as HTMLElement
+    expect(document.querySelector('.va-filmstrip')).toHaveStyle({ width: '700px' })
+
+    fireEvent.wheel(scrollEl, { deltaY: -100 })
+
+    expect(document.querySelector('.va-filmstrip')).toHaveStyle({ width: '1050px' })
+  })
+
+  it('zooms out on a downward wheel scroll', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const scrollEl = document.querySelector('.va-timeline-scroll') as HTMLElement
+
+    fireEvent.wheel(scrollEl, { deltaY: 100 })
+
+    expect(document.querySelector('.va-filmstrip')).toHaveStyle({ width: '525px' })
+  })
+
+  it('ignores a horizontal-only wheel gesture (trackpad pan), leaving zoom unchanged', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const scrollEl = document.querySelector('.va-timeline-scroll') as HTMLElement
+
+    fireEvent.wheel(scrollEl, { deltaX: 100, deltaY: 0 })
+
+    expect(document.querySelector('.va-filmstrip')).toHaveStyle({ width: '700px' })
+  })
+
+  it('debounces rapid wheel events so one gesture only steps the zoom once', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const scrollEl = document.querySelector('.va-timeline-scroll') as HTMLElement
+
+    fireEvent.wheel(scrollEl, { deltaY: -100 })
+    fireEvent.wheel(scrollEl, { deltaY: -100 })
+    fireEvent.wheel(scrollEl, { deltaY: -100 })
+
+    // Three rapid events fired within the same cooldown window step the
+    // zoom level exactly once (700px -> 1050px), not three times.
+    expect(document.querySelector('.va-filmstrip')).toHaveStyle({ width: '1050px' })
+  })
+
+  it('re-centers the playhead in the visible window whenever the zoom level changes', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    const scrollEl = document.querySelector('.va-timeline-scroll') as HTMLElement
+    Object.defineProperty(scrollEl, 'clientWidth', { value: 200, configurable: true })
+    Object.defineProperty(videoEl, 'currentTime', { value: 4, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    fireEvent.click(screen.getByRole('button', { name: '🔍+' }))
+
+    // New timelineWidth is 1050 (zoom level 1.5x); playhead at t=4/8 -> x=525;
+    // centered in a 200px-wide viewport -> scrollLeft = 525 - 100 = 425.
+    expect(scrollEl.scrollLeft).toBe(425)
+  })
+
+  it('snaps a dragged caption edge onto the playhead and shows a guide line while snapped', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i })) // caption: 0s - 1s
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    const rightHandle = document.querySelectorAll('.va-track-handle.right')[0] as HTMLElement
+
+    // Timeline is 700px wide for an 8s clip -> 87.5px/s. Dragging the right
+    // edge by 175px (2s) from its default 1s end lands it exactly on the
+    // playhead at t=3s.
+    fireEvent.mouseDown(rightHandle, { clientX: 0 })
+    fireEvent.mouseMove(window, { clientX: 175 })
+
+    expect(screen.getByText(/0\.00s – 3\.00s/)).toBeInTheDocument()
+    const guide = document.querySelector('.va-snap-guide') as HTMLElement
+    expect(guide).toBeInTheDocument()
+    expect(guide).toHaveStyle({ left: '262.5px' })
+
+    fireEvent.mouseUp(window)
+    expect(document.querySelector('.va-snap-guide')).not.toBeInTheDocument()
+  })
+
+  it('snaps a dragged GIF range handle onto a caption edge', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+    fireEvent.click(screen.getByRole('button', { name: /add caption at playhead/i })) // caption: 3s - 4s
+    const startHandle = document.querySelectorAll('.va-range-handle')[0] as HTMLElement
+
+    // Drag the range's start handle (orig 0) by 350px (4s at 87.5px/s) so it
+    // lands exactly on the caption's end time (4s), not the playhead (3s).
+    fireEvent.mouseDown(startHandle, { clientX: 0 })
+    fireEvent.mouseMove(window, { clientX: 350 })
+
+    expect(screen.getByText(/GIF range: 4\.00s – 8\.00s/)).toBeInTheDocument()
+  })
 })

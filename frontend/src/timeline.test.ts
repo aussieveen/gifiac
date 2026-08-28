@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, frameIndexForTime, linesFromCharTops, spriteBackgroundStyle, spriteTileOffset, timeToX, xToTime } from './timeline'
+import {
+  centeredScrollLeft,
+  clamp,
+  frameIndexForTime,
+  linesFromCharTops,
+  snapValue,
+  spriteBackgroundStyle,
+  spriteTileOffset,
+  timeToX,
+  xToTime,
+} from './timeline'
 
 describe('clamp', () => {
   it('passes values already in range through unchanged', () => {
@@ -121,6 +131,46 @@ describe('linesFromCharTops', () => {
 
   it('returns a single empty line for empty text', () => {
     expect(linesFromCharTops('', () => 0)).toEqual([''])
+  })
+})
+
+describe('snapValue', () => {
+  it('passes the value through unchanged when nothing is within range', () => {
+    expect(snapValue(5, [1, 10], 1)).toEqual({ value: 5, snappedTo: null })
+  })
+
+  it('snaps to a target within the threshold', () => {
+    expect(snapValue(5.05, [1, 5, 10], 0.1)).toEqual({ value: 5, snappedTo: 5 })
+  })
+
+  it('snaps to the nearest of several targets in range', () => {
+    expect(snapValue(5.05, [4.9, 5.0, 10], 0.2)).toEqual({ value: 5.0, snappedTo: 5.0 })
+  })
+
+  it('treats the threshold as inclusive', () => {
+    expect(snapValue(5.1, [5], 0.1)).toEqual({ value: 5, snappedTo: 5 })
+  })
+
+  it('returns the value unchanged for an empty target list', () => {
+    expect(snapValue(5, [], 1)).toEqual({ value: 5, snappedTo: null })
+  })
+})
+
+describe('centeredScrollLeft', () => {
+  it('centers a target within a smaller container', () => {
+    expect(centeredScrollLeft(500, 200, 1000)).toBe(400)
+  })
+
+  it('clamps to 0 when centering would scroll past the start', () => {
+    expect(centeredScrollLeft(50, 200, 1000)).toBe(0)
+  })
+
+  it('clamps to the max scroll when centering would scroll past the end', () => {
+    expect(centeredScrollLeft(950, 200, 1000)).toBe(800)
+  })
+
+  it('never scrolls when the content already fits inside the container', () => {
+    expect(centeredScrollLeft(100, 800, 700)).toBe(0)
   })
 })
 
