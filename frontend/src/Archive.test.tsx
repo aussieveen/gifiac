@@ -194,6 +194,64 @@ describe('Archive', () => {
     await screen.findByText(/link copied/i)
   })
 
+  it('copy embed writes an <img> tag to the clipboard', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    })
+    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+
+    expect(writeText).toHaveBeenCalledWith(`<img src="${gifA.gif_url}" alt="cat jumping">`)
+    await screen.findByText(/embed copied/i)
+  })
+
+  it('copy embed falls back to execCommand when navigator.clipboard is unavailable', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    })
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+
+    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    await screen.findByText(/embed copied/i)
+  })
+
+  it('copy embed escapes HTML-sensitive characters in the alt attribute', async () => {
+    const gifWithSpecialName = { ...gifA, name: 'cat & dog <"jumping">' }
+    vi.mocked(listGifs).mockResolvedValue([gifWithSpecialName])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: gifWithSpecialName.name }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    })
+    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+
+    expect(writeText).toHaveBeenCalledWith(
+      `<img src="${gifA.gif_url}" alt="cat &amp; dog &lt;&quot;jumping&quot;&gt;">`,
+    )
+  })
+
   it('the download action links directly to the gif url', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()

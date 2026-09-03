@@ -44,6 +44,13 @@ async function copyToClipboard(text: string) {
   }
 }
 
+/** Escapes characters that would break an HTML attribute value, so a GIF's
+ * free-text (user-renameable) name can be safely interpolated into a copied
+ * `<img alt="...">` snippet. */
+function escapeHtml(text: string) {
+  return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 interface Props {
   /** Pre-selects this GIF in the detail panel once it loads — used when
    * arriving here right after making a GIF, so its link/download/rename
@@ -110,6 +117,20 @@ export function Archive({ initialSelectedId }: Props) {
     try {
       await copyToClipboard(selected.gif_url)
       toast.show('Link copied')
+    } catch {
+      toast.show('Copy failed')
+    }
+  }
+
+  // Copies a minimal `<img>` tag suitable for pasting into a GitHub comment,
+  // issue, or PR description — GitHub strips most attributes there anyway,
+  // so we only emit `src`/`alt`.
+  async function copyEmbed() {
+    if (!selected?.gif_url) return
+    const tag = `<img src="${selected.gif_url}" alt="${escapeHtml(selected.name)}">`
+    try {
+      await copyToClipboard(tag)
+      toast.show('Embed copied')
     } catch {
       toast.show('Copy failed')
     }
@@ -281,6 +302,9 @@ export function Archive({ initialSelectedId }: Props) {
               <div className="archive-panel-actions">
                 <button className="va-btn" onClick={copyLink}>
                   🔗 Copy link
+                </button>
+                <button className="va-btn" onClick={copyEmbed}>
+                  {'</> Copy embed'}
                 </button>
                 {selected.external_url ? (
                   <a className="va-btn" href={selected.external_url} target="_blank" rel="noopener noreferrer">
