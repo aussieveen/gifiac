@@ -162,6 +162,9 @@ pub struct Gif {
     /// never downloaded or re-hosted on R2 (SPEC.md §13).
     pub external_url: Option<String>,
     pub created_at: String,
+    /// A GIF unlikely to be reused, per the user — toggled via `PATCH
+    /// /api/gifs/{id}`, sorts to the bottom of the archive (SPEC.md §8).
+    pub is_one_off: bool,
 }
 
 impl Gif {

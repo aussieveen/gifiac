@@ -57,6 +57,7 @@ No status column, no stored file-path column. A row is only inserted once FFmpeg
 | `height` | INTEGER | **nullable**, same as `width` |
 | `external_url` | TEXT | **nullable**; non-NULL marks a **linked GIF** — hotlinked to a third-party URL, never downloaded or re-hosted on R2 (see §13). Drives the "external" badge in the archive. |
 | `created_at` | TEXT | ISO8601 |
+| `is_one_off` | INTEGER | boolean, default `0`. Marks a GIF the user doesn't expect to reuse — sorts it to the bottom of the archive, behind a "One-offs" divider (see §8). Toggled via `PATCH /api/gifs/{id}`; does not affect search matching. |
 
 No S3 key/URL columns for GIFs created or imported natively. Output file locations are **always derived** from `id` (see §6):
 - `{R2_PUBLIC_BASE_URL}/gifs/{id}.gif`
@@ -143,9 +144,9 @@ No `DELETE /api/videos/{id}` — see §3.
 
 | Method + path | Purpose |
 |---|---|
-| `GET /api/gifs?q={query}` | list/search — `q` matches `name` and `caption_text` together; omitted `q` returns everything, newest first. No pagination for v1. |
+| `GET /api/gifs?q={query}` | list/search — `q` matches `name` and `caption_text` together; omitted `q` returns everything, sorted `is_one_off ASC, created_at DESC` (reusable GIFs first, one-offs last, newest-first within each group — see §8). No pagination for v1. |
 | `GET /api/gifs/{id}` | single GIF, including `captions_json`, for viewing or re-editing |
-| `PATCH /api/gifs/{id}` | body `{name}` — rename without a full re-export. `external_url` is not editable — to fix a wrong or moved link, delete and re-add (see §13). |
+| `PATCH /api/gifs/{id}` | body `{name?, is_one_off?}` — both fields independently optional; at least one required. Renames without a full re-export, and/or toggles the "one-off" flag (see §8). `external_url` is not editable — to fix a wrong or moved link, delete and re-add (see §13). |
 | `DELETE /api/gifs/{id}` | removes the SQLite row **and** its R2 objects (all three formats) — for a linked GIF (`external_url` set) there are no R2 objects, so only the row is removed |
 
 ### Bulk import
@@ -207,7 +208,9 @@ Reference prototype: `.scratch/gifiac/prototypes/archive-browse/` (Variant C won
 - Preview thumbnail **auto-plays as soon as a GIF is selected** (not gated behind hover) — restarts when selecting a different item. For a linked GIF, this is simply the live `<img src={external_url}>`.
 - Inline-editable `name` field (rename via `PATCH /api/gifs/{id}`, no full re-export needed).
 - Caption text, created date.
-- Centralized actions: **Copy link** (writes the derived public R2 URL to the clipboard — or, for a linked GIF, the `external_url` itself), **Download**, **Delete**. For a linked GIF, **Download is replaced by Open original** (opens `external_url` in a new tab) — there's no R2-hosted file to serve as a clean download.
+- Centralized actions: **Copy link** (writes the derived public R2 URL to the clipboard — or, for a linked GIF, the `external_url` itself), **Copy embed** (writes a minimal `<img src alt>` tag to the clipboard, sized for pasting straight into a GitHub comment, issue, or PR description — GitHub strips most other attributes there anyway), **Mark as one-off / Mark as reusable** (a single toggle button whose label reflects the GIF's current `is_one_off` state, via `PATCH /api/gifs/{id}` — see below), **Download**, **Delete**. For a linked GIF, **Download is replaced by Open original** (opens `external_url` in a new tab) — there's no R2-hosted file to serve as a clean download.
+
+**One-off GIFs**: a GIF the user doesn't expect to reuse can be marked `is_one_off` from the detail panel — it immediately sorts to the bottom of the archive grid (`GET /api/gifs` orders `is_one_off ASC, created_at DESC`, so reusable GIFs always come first), behind a "One-offs" divider that separates it from the default, reusable set. The divider is a plain section break (no per-thumbnail badge, unlike the external-link badge above) and only renders when the current result set — including a search — actually contains at least one one-off GIF. Marking is fully reversible: the same toggle button flips a one-off back to reusable, removing it from the one-off group. The flag has no effect on search matching — a one-off GIF that matches `q` still appears, just positioned last.
 
 **Search**: a single search bar, live-filtering as you type, matching `GET /api/gifs?q={query}` exactly — one combined query against `name` + `caption_text`, no separate name/tag filters.
 

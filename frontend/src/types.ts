@@ -76,6 +76,10 @@ export interface Gif {
   // third-party URL, never downloaded or re-hosted on R2.
   external_url: string | null
   created_at: string
+  // Whether this GIF has been marked "unlikely to be reused" (toggled via
+  // `PATCH /api/gifs/{id}`) — sorts to the bottom of the archive, behind
+  // a "One-offs" divider (SPEC.md §8).
+  is_one_off: boolean
   gif_url?: string
   // `null` (not just absent) for a linked GIF — see GifResponse in the
   // backend, which always includes these keys, `null` or not.

@@ -10,9 +10,10 @@ vi.mock('./api', () => ({
   deleteGif: vi.fn(),
   importGifs: vi.fn(),
   linkGif: vi.fn(),
+  setGifOneOff: vi.fn(),
 }))
 
-import { deleteGif, importGifs, linkGif, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff } from './api'
 
 const gifA: Gif = {
   id: 'g1',
@@ -26,6 +27,7 @@ const gifA: Gif = {
   height: 270,
   external_url: null,
   created_at: '2026-01-01T00:00:00Z',
+  is_one_off: false,
   gif_url: 'http://localhost:19000/gifiac-test/gifs/g1.gif',
   mp4_url: 'http://localhost:19000/gifiac-test/clips/g1.mp4',
   webm_url: 'http://localhost:19000/gifiac-test/clips/g1.webm',
@@ -53,6 +55,7 @@ const linkedGif: Gif = {
   height: null,
   external_url: 'https://example.com/meme.gif',
   created_at: '2026-01-01T00:00:00Z',
+  is_one_off: false,
   gif_url: 'https://example.com/meme.gif',
   mp4_url: null,
   webm_url: null,
@@ -64,6 +67,7 @@ beforeEach(() => {
   vi.mocked(deleteGif).mockReset()
   vi.mocked(importGifs).mockReset()
   vi.mocked(linkGif).mockReset()
+  vi.mocked(setGifOneOff).mockReset()
 })
 
 afterEach(() => {
@@ -261,6 +265,47 @@ describe('Archive', () => {
 
     const downloadLink = screen.getByRole('link', { name: /download/i }) as HTMLAnchorElement
     expect(downloadLink.href).toBe(gifA.gif_url)
+  })
+
+  it('marking a gif as one-off calls the API and updates the button label', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: true })
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByRole('button', { name: /mark as one-off/i }))
+
+    expect(setGifOneOff).toHaveBeenCalledWith('g1', true)
+    await screen.findByRole('button', { name: /mark as reusable/i })
+    await screen.findByText(/marked as one-off/i)
+  })
+
+  it('marking a gif back as reusable calls the API with false', async () => {
+    const oneOffGif = { ...gifA, is_one_off: true }
+    vi.mocked(listGifs).mockResolvedValue([oneOffGif])
+    vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: false })
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByRole('button', { name: /mark as reusable/i }))
+
+    expect(setGifOneOff).toHaveBeenCalledWith('g1', false)
+    await screen.findByRole('button', { name: /mark as one-off/i })
+    await screen.findByText(/marked as reusable/i)
+  })
+
+  it('shows a "One-offs" divider above one-off gifs in the grid, only when one exists', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
+    const { rerender } = render(<Archive />)
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.queryByText('One-offs')).not.toBeInTheDocument()
+
+    vi.mocked(listGifs).mockResolvedValue([gifA, { ...gifB, is_one_off: true }])
+    rerender(<Archive key="reload" />)
+    await screen.findByRole('button', { name: 'dog running' })
+    expect(screen.getByText('One-offs')).toBeInTheDocument()
   })
 
   it('deleting asks for confirmation, then calls the API and clears the selection', async () => {

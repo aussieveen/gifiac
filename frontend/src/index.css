@@ -682,6 +682,28 @@ button {
   padding: 3px 4px;
 }
 
+/* Wraps each grid cell so the "One-offs" divider (below) can be injected
+   immediately before the first one-off thumbnail without breaking the
+   grid's column tracks — a bare <button> per cell couldn't also host a
+   full-width sibling. */
+.archive-grid-item {
+  display: contents;
+}
+
+/* Spans every column so the divider reads as a full-width section break
+   between the reusable and one-off groups (SPEC.md §8), not just another
+   grid cell. */
+.archive-grid-divider {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #333;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #888;
+}
+
 .archive-panel-external-note {
   margin: 0;
 }

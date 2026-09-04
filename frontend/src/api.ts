@@ -128,6 +128,16 @@ export function renameGif(id: string, name: string): Promise<Gif> {
   })
 }
 
+// SPEC.md §8: toggles the "one-off" flag — the same button flips it back
+// to `false` to return a GIF to the reusable group.
+export function setGifOneOff(id: string, isOneOff: boolean): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_one_off: isOneOff }),
+  })
+}
+
 export async function deleteGif(id: string): Promise<void> {
   const input = `/api/gifs/${id}`
   await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))

@@ -198,6 +198,123 @@ async fn rename_unknown_gif_returns_404() {
 }
 
 #[tokio::test]
+async fn patch_gif_with_neither_field_is_rejected() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "old name", "").await;
+    let id = gif["id"].as_str().unwrap();
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_gif_toggles_is_one_off_and_back() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "a one-off gif", "").await;
+    let id = gif["id"].as_str().unwrap();
+    assert_eq!(gif["is_one_off"], false);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_one_off": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let marked: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marked["is_one_off"], true);
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_one_off": false }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let unmarked: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(unmarked["is_one_off"], false);
+}
+
+#[tokio::test]
+async fn list_gifs_sorts_one_off_gifs_after_reusable_gifs() {
+    let test_app = spawn_app().await;
+    let reusable = create_gif(&test_app, "reusable", "").await;
+    let one_off = create_gif(&test_app, "one-off", "").await;
+    let one_off_id = one_off["id"].as_str().unwrap();
+
+    test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/gifs/{one_off_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_one_off": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/api/gifs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    // "one-off" was created after "reusable" (newer), but the one-off
+    // flag still sorts it last, after all reusable GIFs (SPEC.md §8).
+    let ids: Vec<&str> = gifs.iter().map(|g| g.get("id").unwrap().as_str().unwrap()).collect();
+    assert_eq!(ids, vec![reusable["id"].as_str().unwrap(), one_off_id]);
+}
+
+#[tokio::test]
 async fn delete_gif_removes_the_row_and_all_three_r2_objects() {
     let test_app = spawn_app().await;
     let gif = create_gif(&test_app, "to delete", "").await;

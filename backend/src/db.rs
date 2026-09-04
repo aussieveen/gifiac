@@ -6,7 +6,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use crate::models::{Gif, NewGif, NewVideo, TemplatePayload, Video, VideoListItem, VideoTemplate};
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off";
+/// The columns a fresh insert actually supplies — `is_one_off` is
+/// deliberately excluded: every newly created GIF (export, import, or
+/// link) starts out reusable, relying on the schema's `DEFAULT 0` rather
+/// than binding it explicitly.
+const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
 
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
@@ -64,7 +69,7 @@ pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<VideoListItem>> {
 
 pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Result<Gif> {
     let sql = format!(
-        "INSERT INTO gifs ({GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -85,12 +90,15 @@ pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Re
 
 /// SPEC.md §5: `q` matches `name` and `caption_text` **together** — one
 /// combined filter, no separate name/tag params. `None`/empty returns
-/// everything, newest first, no pagination (v1).
+/// everything, newest first, no pagination (v1). Sorted `is_one_off ASC`
+/// first (SPEC.md §8): reusable GIFs come before one-offs, each group
+/// newest-first — the frontend renders the "One-offs" divider wherever
+/// the flag flips in this single ordered list.
 pub async fn list_gifs(pool: &SqlitePool, q: Option<&str>) -> Result<Vec<Gif>> {
     match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             let sql = format!(
-                "SELECT {GIF_COLUMNS} FROM gifs WHERE name LIKE ? ESCAPE '\\' OR caption_text LIKE ? ESCAPE '\\' ORDER BY created_at DESC"
+                "SELECT {GIF_COLUMNS} FROM gifs WHERE name LIKE ? ESCAPE '\\' OR caption_text LIKE ? ESCAPE '\\' ORDER BY is_one_off ASC, created_at DESC"
             );
             let pattern = format!("%{}%", escape_like(q));
             sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
@@ -101,7 +109,7 @@ pub async fn list_gifs(pool: &SqlitePool, q: Option<&str>) -> Result<Vec<Gif>> {
                 .map_err(Into::into)
         }
         None => {
-            let sql = format!("SELECT {GIF_COLUMNS} FROM gifs ORDER BY created_at DESC");
+            let sql = format!("SELECT {GIF_COLUMNS} FROM gifs ORDER BY is_one_off ASC, created_at DESC");
             sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
                 .fetch_all(pool)
                 .await
@@ -133,6 +141,23 @@ pub async fn rename_gif(pool: &SqlitePool, id: &str, name: &str) -> Result<Optio
     let sql = format!("UPDATE gifs SET name = ? WHERE id = ? RETURNING {GIF_COLUMNS}");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(name)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Flips the "one-off" flag (SPEC.md §8) — the same `PATCH
+/// /api/gifs/{id}` toggle button in the archive detail panel sets this
+/// back to `false` to return a GIF to the reusable group. A separate
+/// function from `rename_gif` rather than one combined dynamic-SQL
+/// update: each field is independently optional in the request, and two
+/// plain, statically-checked `UPDATE`s are simpler than building a SQL
+/// string conditionally.
+pub async fn set_gif_one_off(pool: &SqlitePool, id: &str, is_one_off: bool) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET is_one_off = ? WHERE id = ? RETURNING {GIF_COLUMNS}");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(is_one_off)
         .bind(id)
         .fetch_optional(pool)
         .await
@@ -475,6 +500,64 @@ mod tests {
     async fn rename_gif_returns_none_for_a_missing_id() {
         let pool = test_pool().await;
         assert!(rename_gif(&pool, "missing", "x").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn new_gifs_default_to_not_one_off() {
+        let pool = test_pool().await;
+        let gif = insert_gif(&pool, &sample_gif("g1", "a", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(!gif.is_one_off);
+    }
+
+    #[tokio::test]
+    async fn set_gif_one_off_flips_the_flag_and_back() {
+        let pool = test_pool().await;
+        insert_gif(&pool, &sample_gif("g1", "a", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        let marked = set_gif_one_off(&pool, "g1", true).await.unwrap().unwrap();
+        assert!(marked.is_one_off);
+        assert!(get_gif(&pool, "g1").await.unwrap().unwrap().is_one_off);
+
+        let unmarked = set_gif_one_off(&pool, "g1", false).await.unwrap().unwrap();
+        assert!(!unmarked.is_one_off);
+    }
+
+    #[tokio::test]
+    async fn set_gif_one_off_returns_none_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(set_gif_one_off(&pool, "missing", true).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_gifs_sorts_one_off_gifs_after_reusable_ones() {
+        let pool = test_pool().await;
+        // Newest first within each group, but one-offs always after
+        // reusable GIFs regardless of creation time (SPEC.md §8).
+        insert_gif(&pool, &sample_gif("old-reusable", "a", ""), "2026-08-19T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("new-one-off", "b", ""), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("new-reusable", "c", ""), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("old-one-off", "d", ""), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        set_gif_one_off(&pool, "new-one-off", true).await.unwrap();
+        set_gif_one_off(&pool, "old-one-off", true).await.unwrap();
+
+        let gifs = list_gifs(&pool, None).await.unwrap();
+        let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["new-reusable", "old-reusable", "new-one-off", "old-one-off"]
+        );
     }
 
     #[tokio::test]

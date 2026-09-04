@@ -80,22 +80,44 @@ pub async fn get_gif(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RenameGifRequest {
-    name: String,
+pub struct PatchGifRequest {
+    name: Option<String>,
+    is_one_off: Option<bool>,
 }
 
+/// `PATCH /api/gifs/{id}` (SPEC.md §5/§8): both fields are independently
+/// optional — a request can rename, toggle the one-off flag, or both in
+/// one call. At least one must be present, otherwise there's nothing to
+/// update and the client likely made a mistake.
 pub async fn rename_gif(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
-    Json(request): Json<RenameGifRequest>,
+    Json(request): Json<PatchGifRequest>,
 ) -> Result<Json<GifResponse>, AppError> {
-    let name = request.name.trim().to_string();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("name must not be empty".to_string()));
+    if request.name.is_none() && request.is_one_off.is_none() {
+        return Err(AppError::BadRequest(
+            "expected at least one of name or is_one_off".to_string(),
+        ));
     }
-    let gif = db::rename_gif(&state.pool, &id, &name)
-        .await?
-        .ok_or(AppError::NotFound)?;
+
+    let mut gif = db::get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+
+    if let Some(name) = request.name {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(AppError::BadRequest("name must not be empty".to_string()));
+        }
+        gif = db::rename_gif(&state.pool, &id, &name)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    }
+
+    if let Some(is_one_off) = request.is_one_off {
+        gif = db::set_gif_one_off(&state.pool, &id, is_one_off)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    }
+
     Ok(Json(with_urls(gif, &state.storage)?))
 }
 

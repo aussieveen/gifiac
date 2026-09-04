@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteGif, importGifs, linkGif, listGifs, renameGif } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff } from './api'
 import type { Gif } from './types'
 
 /** Auto-dismisses after a beat, matching the archive prototype's toast. */
@@ -136,6 +136,20 @@ export function Archive({ initialSelectedId }: Props) {
     }
   }
 
+  // Flips `is_one_off` (SPEC.md §8) — the same button un-marks a GIF back
+  // to reusable, moving it from the bottom "One-offs" group back to the
+  // main list.
+  async function toggleOneOff() {
+    if (!selected) return
+    try {
+      const updated = await setGifOneOff(selected.id, !selected.is_one_off)
+      setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
+      toast.show(updated.is_one_off ? 'Marked as one-off' : 'Marked as reusable')
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   async function handleImport(files: FileList | null) {
     if (!files || files.length === 0) return
     setImporting(true)
@@ -251,25 +265,35 @@ export function Archive({ initialSelectedId }: Props) {
 
       <div className="archive-layout">
         <div className="archive-grid">
-          {gifs.map((g) => (
-            <button
-              key={g.id}
-              className={`archive-thumb ${g.id === selectedId ? 'selected' : ''}`}
-              onClick={() => setSelectedId(g.id)}
-              aria-label={g.name}
-            >
-              {g.gif_url && <img src={g.gif_url} alt={g.name} />}
-              {/* SPEC.md §13/§8: marks a GIF hotlinked to a third-party
-                  URL — media outside our controlled R2 that could vanish
-                  if the source does. File-based imports don't get this;
-                  they're fully re-hosted, same as native GIFs. */}
-              {g.external_url && (
-                <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
-                  🔗
-                </span>
-              )}
-            </button>
-          ))}
+          {gifs.map((g, i) => {
+            // SPEC.md §8: the backend already sorts reusable GIFs before
+            // one-offs (each group newest-first) — the divider goes
+            // wherever the flag first flips to true in that single
+            // ordered list, and only renders when a one-off actually
+            // exists in the current results (search included).
+            const showDivider = g.is_one_off && (i === 0 || !gifs[i - 1].is_one_off)
+            return (
+              <div key={g.id} className="archive-grid-item">
+                {showDivider && <div className="archive-grid-divider">One-offs</div>}
+                <button
+                  className={`archive-thumb ${g.id === selectedId ? 'selected' : ''}`}
+                  onClick={() => setSelectedId(g.id)}
+                  aria-label={g.name}
+                >
+                  {g.gif_url && <img src={g.gif_url} alt={g.name} />}
+                  {/* SPEC.md §13/§8: marks a GIF hotlinked to a third-party
+                      URL — media outside our controlled R2 that could vanish
+                      if the source does. File-based imports don't get this;
+                      they're fully re-hosted, same as native GIFs. */}
+                  {g.external_url && (
+                    <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
+                      🔗
+                    </span>
+                  )}
+                </button>
+              </div>
+            )
+          })}
           {!loading && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
         </div>
 
@@ -305,6 +329,9 @@ export function Archive({ initialSelectedId }: Props) {
                 </button>
                 <button className="va-btn" onClick={copyEmbed}>
                   {'</> Copy embed'}
+                </button>
+                <button className="va-btn" onClick={toggleOneOff}>
+                  {selected.is_one_off ? '↩ Mark as reusable' : '⤵ Mark as one-off'}
                 </button>
                 {selected.external_url ? (
                   <a className="va-btn" href={selected.external_url} target="_blank" rel="noopener noreferrer">
