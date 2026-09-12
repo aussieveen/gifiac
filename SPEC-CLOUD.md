@@ -76,9 +76,13 @@ This forces a change to templates (`SPEC.md` §12): today a template is just the
 
 **A template becomes a self-contained clipped asset.** At save time, the video is trimmed to exactly the template's start/end range, producing its own independent media file (not a reference into the longer source video). The template's thumbnail is the first frame of that trimmed clip, not an arbitrary frame from the original video's timeline. This is also a UX fix in its own right: today, opening a template still shows footage on either side of the in/out points from the original video; trimming at save time makes the template a true like-for-like re-creation of the original edit.
 
-**Fixed vs. changeable captions.** Within a template, captions split into:
-- **Fixed** captions — locked; only the original creator can edit/overwrite them.
-- **Changeable** captions — freely editable by anyone using the template's pre-fill.
+**Fixed vs. changeable captions** (`captions[].locked: boolean`, default `false`). Each caption in a template is independently marked locked or unlocked; the flag governs the whole caption object — text, timing (start/end), style, and position alike, no field-level split:
+- **Fixed** (`locked: true`) captions — fully immutable to anyone but the creator; every field can only change by the creator overwriting the template itself.
+- **Changeable** (`locked: false`, the default) captions — fully editable by whoever is using the template to pre-fill an export, every field, no restrictions.
+
+**Editor UX**: a non-creator using someone else's template sees every caption, including fixed ones, in the caption list — fixed captions render read-only/disabled rather than being hidden, so the template's full layout stays visible and comprehensible.
+
+**Enforcement is server-side, not just a UI toggle**: `templates.user_id` (below) gates the template's overwrite/delete endpoints — a non-creator's request is rejected with 403. Loading a template to pre-fill an export has no ownership check, only the usual public-sharing check. On export, the server silently normalizes away any client-submitted change to a fixed caption's fields rather than rejecting the request — it just applies the template's saved values for those fields and proceeds.
 
 **Templates stay one-per-video** (unique constraint on `video_id` unchanged from `SPEC.md` §12).
 
@@ -93,7 +97,7 @@ This forces a change to templates (`SPEC.md` §12): today a template is just the
 | `user_id` | TEXT | FK → `users.id`, the creator |
 | `clip_s3_key` | TEXT | the trimmed clip's own media file, produced at save time |
 | `thumbnail_s3_key` | TEXT | first frame of the trimmed clip |
-| `payload_json` | TEXT | export payload: captions (each tagged fixed/changeable), gif range, output dimensions |
+| `payload_json` | TEXT | export payload: captions (each carrying a `locked` boolean), gif range, output dimensions |
 | `is_public` | INTEGER | boolean — opted into the global library (see §7) |
 | `saved_at` | TEXT | ISO8601 |
 
@@ -229,9 +233,7 @@ Two other structurally distinct variants (a sidebar app-shell; a GitHub-org-styl
 - **Monetization / billing** — no plans until real AWS cost data is available.
 - **Self-service account deletion** — out of scope for this launch. Account removal stays admin-only via the disable action (§7); there is no self-service delete button.
 - **Self-service data export** — out of scope; no feature for a user to download their own gifs/templates/data. (Together with the point above: there is no account-deletion mechanism at all right now, self-service or admin — only disable, which already leaves public content untouched.)
-- **Heavier moderation tooling** (report queues, audit logs) — beyond the publish-immediately + admin-takedown policy in §7.
-
-**Not yet specified** (in scope eventually, not sharp enough to design yet): a moderation queue for the global library, once it outgrows a friends-only trust model. Revisit alongside the items above if the userbase or trust model changes.
+- **Heavier moderation tooling** (report queues, audit logs, a moderation queue) — beyond the publish-immediately + admin-takedown policy in §7; deferred until the global library outgrows a friends-only trust model, which this launch's destination doesn't need to design for.
 
 ---
 
@@ -257,4 +259,4 @@ This applies to any code produced along the way too — e.g. throwaway or semi-t
 
 ## Appendix: process record
 
-This spec was assembled from a structured decision process on this repo's issue tracker: **Map: Gifiac multi-tenant AWS launch** ([issue #1](https://github.com/aussieveen/gifiac/issues/1)) and its 22 resolved child tickets (issues #2–#22, #24), each holding the full question, reasoning, and resolution behind one decision above. `SPEC.md` itself was not edited by this effort — only referenced; reconciling/merging the two documents is a follow-up outside this effort's scope.
+This spec was assembled from a structured decision process on this repo's issue tracker: **Map: Gifiac multi-tenant AWS launch** ([issue #1](https://github.com/aussieveen/gifiac/issues/1)) and its 23 resolved child tickets (issues #2–#24), each holding the full question, reasoning, and resolution behind one decision above. `SPEC.md` itself was not edited by this effort — only referenced; reconciling/merging the two documents is a follow-up outside this effort's scope.
