@@ -1,0 +1,60 @@
+services:
+  # Local Postgres for `cargo run` and `cargo test` (each test creates its
+  # own throwaway database against this instance — see
+  # `db::create_ephemeral_test_pool`). Matches config.rs's default
+  # DATABASE_URL, so no env var overrides are needed to use it as-is.
+  postgres:
+    image: postgres:16-alpine
+    container_name: gifiac-dev-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: gifiac
+      POSTGRES_PASSWORD: gifiac
+      POSTGRES_DB: gifiac
+    volumes:
+      - gifiac-dev-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gifiac"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # S3-compatible stand-in for Cloudflare R2 (real R2 credentials aren't
+  # needed for local dev/tests — see backend/tests/common::test_storage,
+  # which points at this same host/bucket/credentials). Exposed on 19000,
+  # not MinIO's default 9000, so it doesn't collide with anything else
+  # listening on 9000.
+  minio:
+    image: minio/minio
+    container_name: gifiac-dev-minio
+    restart: unless-stopped
+    command: server /data
+    ports:
+      - "19000:9000"
+    environment:
+      MINIO_ROOT_USER: gifiac
+      MINIO_ROOT_PASSWORD: gifiac-test-secret
+    volumes:
+      - gifiac-dev-minio-data:/data
+
+  # One-shot: creates the `gifiac-test` bucket and makes it public-read
+  # (matching R2's bucket policy, SPEC.md §9), then exits. Safe to re-run
+  # (`--ignore-existing`) on every `docker compose up`.
+  minio-init:
+    image: minio/mc
+    container_name: gifiac-dev-minio-init
+    depends_on:
+      - minio
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        until mc alias set local http://minio:9000 gifiac gifiac-test-secret; do sleep 1; done
+        mc mb --ignore-existing local/gifiac-test
+        mc anonymous set public local/gifiac-test
+    restart: "no"
+
+volumes:
+  gifiac-dev-postgres-data:
+  gifiac-dev-minio-data:

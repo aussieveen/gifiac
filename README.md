@@ -69,16 +69,16 @@ on every push to `main` — no local build required.
    docker compose up -d
    ```
 
-Gifiac stores its SQLite database and source videos under the single
-`/data` volume mount — back that up, everything else (finished GIFs/clips)
-lives in R2.
+Gifiac stores source videos under the `/data` volume mount — back that up
+alongside the Postgres database, which lives outside the container; the
+finished GIFs/clips live in R2.
 
 ### Configuration
 
 | Env var | Default | Notes |
 |---|---|---|
 | `GIFIAC_VIDEO_DIR` | `/data/videos` | Source video storage root |
-| `GIFIAC_DB_PATH` | `/data/gifiac.db` | SQLite database file |
+| `DATABASE_URL` | `postgres://gifiac:gifiac@localhost:5432/gifiac` | Postgres connection URL |
 | `R2_ACCOUNT_ID` | *(required)* | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | *(required)* | R2 API token access key |
 | `R2_SECRET_ACCESS_KEY` | *(required)* | R2 API token secret |
@@ -111,20 +111,37 @@ Run the backend and frontend as two separate dev processes; Vite proxies
 
 **Backend** (from `backend/`):
 
+Local dev/test dependencies (Postgres + a MinIO stand-in for R2, used only
+by the test suite) run via [`docker-compose.dev.yml`](docker-compose.dev.yml):
+
+```sh
+docker compose -f docker-compose.dev.yml up -d
+```
+
+This matches `config.rs`'s default `DATABASE_URL`
+(`postgres://gifiac:gifiac@localhost:5432/gifiac`) and
+`backend/tests/common::test_storage`'s hardcoded MinIO endpoint/bucket
+exactly, so no env var overrides are needed to use either as-is.
+
 ```sh
 export GIFIAC_VIDEO_DIR=./data/videos
-export GIFIAC_DB_PATH=./data/gifiac.db
-export R2_ACCOUNT_ID=...          # real Cloudflare R2 credentials
-export R2_ACCESS_KEY_ID=...
-export R2_SECRET_ACCESS_KEY=...
-export R2_BUCKET_NAME=...
+export R2_ACCOUNT_ID=...          # real Cloudflare R2 credentials — MinIO
+export R2_ACCESS_KEY_ID=...       # above is a test-only stand-in, not
+export R2_SECRET_ACCESS_KEY=...   # something `cargo run` talks to; a
+export R2_BUCKET_NAME=...         # running server still needs real R2.
 export R2_PUBLIC_BASE_URL=...
 
 cargo run
 ```
 
-The database and its schema migrations are created/applied automatically
-on startup — no manual migration step. The server listens on `:8080`.
+Schema migrations are applied automatically on startup against
+`DATABASE_URL` — no manual migration step. The server listens on `:8080`.
+
+Backend tests (`cargo test`) need the same Postgres instance reachable —
+override its admin connection via `TEST_DATABASE_URL` if you're not using
+`docker-compose.dev.yml` — since each test creates and migrates its own
+throwaway database against it for isolation. Tests exercising R2 uploads
+need the MinIO service from that same compose file running too.
 
 Useful commands while working on the backend:
 

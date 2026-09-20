@@ -145,12 +145,12 @@ mod tests {
         );
     }
 
-    /// Exercises upload/delete against a real S3-compatible server (a
-    /// local MinIO instance started for this session — see AGENT setup
-    /// notes) rather than mocking the SDK, since the whole point of R2
-    /// integration is the wire format actually working. Ignored by
-    /// default so `cargo test` doesn't require MinIO to be running; run
-    /// explicitly with `cargo test -- --ignored`.
+    /// Exercises upload/delete against a real S3-compatible server (the
+    /// local MinIO instance from `docker-compose.dev.yml`) rather than
+    /// mocking the SDK, since the whole point of R2 integration is the
+    /// wire format actually working. Ignored by default so `cargo test`
+    /// doesn't require MinIO to be running; run explicitly with
+    /// `cargo test -- --ignored`.
     #[tokio::test]
     #[ignore = "requires a local MinIO instance on :19000"]
     async fn upload_then_delete_round_trips_against_minio() {

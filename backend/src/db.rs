@@ -1,7 +1,6 @@
-use std::path::Path;
-
 use anyhow::Result;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::postgres::{PgPool, PgPoolOptions};
+use uuid::Uuid;
 
 use crate::models::{Gif, NewGif, NewVideo, TemplatePayload, Video, VideoListItem, VideoTemplate};
 
@@ -9,29 +8,63 @@ const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, 
 const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
-/// link) starts out reusable, relying on the schema's `DEFAULT 0` rather
-/// than binding it explicitly.
+/// link) starts out reusable, relying on the schema's `DEFAULT false`
+/// rather than binding it explicitly.
 const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
 
-pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let options = SqliteConnectOptions::new()
-        .filename(db_path)
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new().connect_with(options).await?;
+pub async fn create_pool(database_url: &str) -> Result<PgPool> {
+    let pool = PgPoolOptions::new().connect(database_url).await?;
     Ok(pool)
 }
 
-pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
+pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
 }
 
-pub async fn insert_video(pool: &SqlitePool, video: &NewVideo, uploaded_at: &str) -> Result<Video> {
+/// Spins up a throwaway Postgres database (via a maintenance connection to
+/// `TEST_DATABASE_URL`, default a local `postgres` superuser database) and
+/// runs migrations against it, so a test gets the same complete isolation
+/// SQLite's `:memory:` used to give for free — this is what let many tests
+/// in this file (and every integration-test binary under
+/// `backend/tests/`) reuse hardcoded ids like `"v1"`/`"g1"` without
+/// clashing. The created database is never dropped: Postgres has no
+/// synchronous "drop this pool's own database" hook, and leaking scratch
+/// test databases locally is the same accepted tradeoff already made for
+/// MinIO test objects in `backend/tests/common::test_storage` — periodic
+/// manual cleanup (`dropdb`) is fine for a dev/CI Postgres instance that
+/// only ever holds throwaway data.
+pub async fn create_ephemeral_test_pool() -> PgPool {
+    let admin_url = std::env::var("TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://gifiac:gifiac@localhost:5432/gifiac".to_string());
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("failed to connect to TEST_DATABASE_URL for ephemeral test database setup");
+
+    let db_name = format!("gifiac_test_{}", Uuid::new_v4().simple());
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{db_name}\"")))
+        .execute(&admin_pool)
+        .await
+        .expect("failed to create ephemeral test database");
+    admin_pool.close().await;
+
+    let (base, _) = admin_url
+        .rsplit_once('/')
+        .expect("TEST_DATABASE_URL must be a postgres:// URL with a database path");
+    let test_url = format!("{base}/{db_name}");
+
+    let pool = create_pool(&test_url)
+        .await
+        .expect("failed to connect to newly created ephemeral test database");
+    run_migrations(&pool).await.expect("failed to run migrations against ephemeral test database");
+    pool
+}
+
+pub async fn insert_video(pool: &PgPool, video: &NewVideo, uploaded_at: &str) -> Result<Video> {
     let sql = format!(
-        "INSERT INTO videos ({VIDEO_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING {VIDEO_COLUMNS}"
+        "INSERT INTO videos ({VIDEO_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {VIDEO_COLUMNS}"
     );
     sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
         .bind(&video.id)
@@ -47,8 +80,8 @@ pub async fn insert_video(pool: &SqlitePool, video: &NewVideo, uploaded_at: &str
         .map_err(Into::into)
 }
 
-pub async fn get_video(pool: &SqlitePool, id: &str) -> Result<Option<Video>> {
-    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos WHERE id = ?");
+pub async fn get_video(pool: &PgPool, id: &str) -> Result<Option<Video>> {
+    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos WHERE id = $1");
     sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
@@ -58,18 +91,18 @@ pub async fn get_video(pool: &SqlitePool, id: &str) -> Result<Option<Video>> {
 
 /// `has_template` is resolved at the join level (SPEC.md §12) rather than
 /// with a per-video follow-up query.
-pub async fn list_videos(pool: &SqlitePool) -> Result<Vec<VideoListItem>> {
+pub async fn list_videos(pool: &PgPool) -> Result<Vec<VideoListItem>> {
     let sql = "SELECT v.id, v.original_filename, v.extension, v.file_size_bytes, v.duration_seconds, v.width, v.height, v.uploaded_at, (t.video_id IS NOT NULL) AS has_template \
-         FROM videos v LEFT JOIN video_templates t ON t.video_id = v.id ORDER BY v.uploaded_at DESC";
+         FROM videos v LEFT JOIN templates t ON t.video_id = v.id ORDER BY v.uploaded_at DESC";
     sqlx::query_as::<_, VideoListItem>(sql)
         .fetch_all(pool)
         .await
         .map_err(Into::into)
 }
 
-pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Result<Gif> {
+pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result<Gif> {
     let sql = format!(
-        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -94,11 +127,14 @@ pub async fn insert_gif(pool: &SqlitePool, gif: &NewGif, created_at: &str) -> Re
 /// first (SPEC.md §8): reusable GIFs come before one-offs, each group
 /// newest-first — the frontend renders the "One-offs" divider wherever
 /// the flag flips in this single ordered list.
-pub async fn list_gifs(pool: &SqlitePool, q: Option<&str>) -> Result<Vec<Gif>> {
+pub async fn list_gifs(pool: &PgPool, q: Option<&str>) -> Result<Vec<Gif>> {
     match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
+            // `ILIKE`, not `LIKE`: SQLite's `LIKE` is case-insensitive for
+            // ASCII by default, Postgres' isn't — `ILIKE` is what
+            // reproduces that original case-insensitive search behavior.
             let sql = format!(
-                "SELECT {GIF_COLUMNS} FROM gifs WHERE name LIKE ? ESCAPE '\\' OR caption_text LIKE ? ESCAPE '\\' ORDER BY is_one_off ASC, created_at DESC"
+                "SELECT {GIF_COLUMNS} FROM gifs WHERE name ILIKE $1 ESCAPE '\\' OR caption_text ILIKE $2 ESCAPE '\\' ORDER BY is_one_off ASC, created_at DESC"
             );
             let pattern = format!("%{}%", escape_like(q));
             sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
@@ -118,15 +154,15 @@ pub async fn list_gifs(pool: &SqlitePool, q: Option<&str>) -> Result<Vec<Gif>> {
     }
 }
 
-/// Escapes SQLite `LIKE` wildcards (`%`, `_`) in user-supplied search text,
-/// paired with `ESCAPE '\'` at the call site, so a search containing them
-/// is matched literally instead of as a pattern.
+/// Escapes `LIKE` wildcards (`%`, `_`) in user-supplied search text, paired
+/// with `ESCAPE '\'` at the call site, so a search containing them is
+/// matched literally instead of as a pattern.
 fn escape_like(input: &str) -> String {
     input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
-pub async fn get_gif(pool: &SqlitePool, id: &str) -> Result<Option<Gif>> {
-    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = ?");
+pub async fn get_gif(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = $1");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
@@ -137,8 +173,8 @@ pub async fn get_gif(pool: &SqlitePool, id: &str) -> Result<Option<Gif>> {
 /// Renames a GIF in place (SPEC.md §5 `PATCH /api/gifs/{id}` — no
 /// re-export needed). Returns `None` if no row matched, so the route can
 /// tell "renamed" apart from "doesn't exist" without a separate lookup.
-pub async fn rename_gif(pool: &SqlitePool, id: &str, name: &str) -> Result<Option<Gif>> {
-    let sql = format!("UPDATE gifs SET name = ? WHERE id = ? RETURNING {GIF_COLUMNS}");
+pub async fn rename_gif(pool: &PgPool, id: &str, name: &str) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET name = $1 WHERE id = $2 RETURNING {GIF_COLUMNS}");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(name)
         .bind(id)
@@ -154,8 +190,8 @@ pub async fn rename_gif(pool: &SqlitePool, id: &str, name: &str) -> Result<Optio
 /// update: each field is independently optional in the request, and two
 /// plain, statically-checked `UPDATE`s are simpler than building a SQL
 /// string conditionally.
-pub async fn set_gif_one_off(pool: &SqlitePool, id: &str, is_one_off: bool) -> Result<Option<Gif>> {
-    let sql = format!("UPDATE gifs SET is_one_off = ? WHERE id = ? RETURNING {GIF_COLUMNS}");
+pub async fn set_gif_one_off(pool: &PgPool, id: &str, is_one_off: bool) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET is_one_off = $1 WHERE id = $2 RETURNING {GIF_COLUMNS}");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(is_one_off)
         .bind(id)
@@ -166,8 +202,8 @@ pub async fn set_gif_one_off(pool: &SqlitePool, id: &str, is_one_off: bool) -> R
 
 /// Returns `true` if a row was actually deleted, so the route can 404 on a
 /// nonexistent id rather than reporting a no-op delete as success.
-pub async fn delete_gif(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM gifs WHERE id = ?")
+pub async fn delete_gif(pool: &PgPool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM gifs WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -177,25 +213,25 @@ pub async fn delete_gif(pool: &SqlitePool, id: &str) -> Result<bool> {
 /// Whether this video has a saved template — checked before deleting it
 /// (SPEC.md §12: "a video can only be deleted if it has no template",
 /// replacing the earlier "no GIFs were made from it" guard entirely).
-pub async fn has_template(pool: &SqlitePool, video_id: &str) -> Result<bool> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_templates WHERE video_id = ?")
+pub async fn has_template(pool: &PgPool, video_id: &str) -> Result<bool> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM templates WHERE video_id = $1")
         .bind(video_id)
         .fetch_one(pool)
         .await?;
     Ok(count > 0)
 }
 
-pub async fn delete_video(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM videos WHERE id = ?")
+pub async fn delete_video(pool: &PgPool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM videos WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn get_template(pool: &SqlitePool, video_id: &str) -> Result<Option<TemplatePayload>> {
+pub async fn get_template(pool: &PgPool, video_id: &str) -> Result<Option<TemplatePayload>> {
     let row: Option<VideoTemplate> =
-        sqlx::query_as("SELECT video_id, payload_json, saved_at FROM video_templates WHERE video_id = ?")
+        sqlx::query_as("SELECT video_id, payload_json, saved_at FROM templates WHERE video_id = $1")
             .bind(video_id)
             .fetch_optional(pool)
             .await?;
@@ -204,18 +240,25 @@ pub async fn get_template(pool: &SqlitePool, video_id: &str) -> Result<Option<Te
 }
 
 /// Upserts the template for `video_id` (SPEC.md §12: "Upserts (creates or
-/// overwrites) the template with the request body").
+/// overwrites) the template with the request body"). `templates` now has
+/// its own `id` (SPEC-CLOUD.md §4, distinct from `video_id`, for
+/// `gifs.template_id` to eventually reference) — a fresh id is generated
+/// on every call but only actually lands when there's no existing row to
+/// conflict with; `ON CONFLICT` deliberately leaves `id` alone on an
+/// overwrite so a template's identity survives being re-saved.
 pub async fn upsert_template(
-    pool: &SqlitePool,
+    pool: &PgPool,
     video_id: &str,
     payload: &TemplatePayload,
     saved_at: &str,
 ) -> Result<()> {
     let payload_json = serde_json::to_string(payload)?;
+    let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO video_templates (video_id, payload_json, saved_at) VALUES (?, ?, ?) \
+        "INSERT INTO templates (id, video_id, payload_json, saved_at) VALUES ($1, $2, $3, $4) \
          ON CONFLICT (video_id) DO UPDATE SET payload_json = excluded.payload_json, saved_at = excluded.saved_at",
     )
+    .bind(id)
     .bind(video_id)
     .bind(payload_json)
     .bind(saved_at)
@@ -225,8 +268,8 @@ pub async fn upsert_template(
 }
 
 /// Returns `true` if a template was actually deleted.
-pub async fn delete_template(pool: &SqlitePool, video_id: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM video_templates WHERE video_id = ?")
+pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM templates WHERE video_id = $1")
         .bind(video_id)
         .execute(pool)
         .await?;
@@ -237,22 +280,8 @@ pub async fn delete_template(pool: &SqlitePool, video_id: &str) -> Result<bool> 
 mod tests {
     use super::*;
 
-    async fn test_pool() -> SqlitePool {
-        // A single pooled connection over `:memory:` — sqlx gives each
-        // pooled connection its own private in-memory database, so a pool
-        // size > 1 here would see "no such table" once a query landed on a
-        // connection other than the one migrations ran on.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(":memory:")
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
-        run_migrations(&pool).await.unwrap();
-        pool
+    async fn test_pool() -> PgPool {
+        create_ephemeral_test_pool().await
     }
 
     fn sample_video(id: &str) -> NewVideo {

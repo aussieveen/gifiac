@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ use crate::exports::ExportEvent;
 use crate::storage::Storage;
 
 pub struct AppState {
-    pub pool: SqlitePool,
+    pub pool: PgPool,
     pub config: Config,
     pub storage: Storage,
     /// Shared client for the light URL sanity check behind linked GIFs

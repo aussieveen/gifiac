@@ -42,7 +42,7 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let config = Config::from_env();
     std::fs::create_dir_all(&config.video_dir)?;
 
-    let pool = db::create_pool(&config.db_path).await?;
+    let pool = db::create_pool(&config.database_url).await?;
     db::run_migrations(&pool).await?;
 
     let r2 = storage::R2Config::from_env()?;

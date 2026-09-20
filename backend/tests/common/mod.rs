@@ -9,12 +9,12 @@ use gifiac_backend::state::AppState;
 use gifiac_backend::storage::Storage;
 use tempfile::TempDir;
 
-/// Points at the local MinIO instance this session set up as an
-/// S3-compatible stand-in for R2 (real credentials aren't available in
-/// this environment, and the whole point of testing against something
-/// real is exercising the actual wire protocol rather than mocking the
-/// SDK). Bucket `gifiac-test` is public-read, matching R2's bucket policy
-/// per SPEC.md §9.
+/// Points at the local MinIO instance from `docker-compose.dev.yml` as an
+/// S3-compatible stand-in for R2 (real credentials aren't needed for
+/// local dev/tests, and the whole point of testing against something real
+/// is exercising the actual wire protocol rather than mocking the SDK).
+/// Bucket `gifiac-test` is public-read, matching R2's bucket policy per
+/// SPEC.md §9.
 pub fn test_storage() -> Storage {
     Storage::new(
         "http://localhost:19000",
@@ -44,16 +44,17 @@ pub async fn spawn_app() -> TestApp {
     let tempdir = TempDir::new().unwrap();
     let video_dir = tempdir.path().join("videos");
     std::fs::create_dir_all(&video_dir).unwrap();
-    let db_path = tempdir.path().join("gifiac.db");
+
+    // A fresh, isolated Postgres database per test (see
+    // `db::create_ephemeral_test_pool`) — video files still get a scratch
+    // tempdir since those aren't part of what moved to Postgres.
+    let pool = db::create_ephemeral_test_pool().await;
 
     let config = Config {
         video_dir: video_dir.clone(),
-        db_path,
+        database_url: String::new(),
         port: 0,
     };
-
-    let pool = db::create_pool(&config.db_path).await.unwrap();
-    db::run_migrations(&pool).await.unwrap();
 
     let storage = test_storage();
     let http_client = gifiac_backend::link_check::build_client().unwrap();
