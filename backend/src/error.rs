@@ -9,6 +9,9 @@ pub enum AppError {
     /// deleting a video that GIFs still depend on) — 409, distinct from a
     /// malformed request (400).
     Conflict(String),
+    /// No valid session (SPEC-CLOUD.md §2) — missing, unknown, or expired
+    /// session cookie.
+    Unauthorized,
     Internal(anyhow::Error),
 }
 
@@ -18,6 +21,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
             AppError::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (

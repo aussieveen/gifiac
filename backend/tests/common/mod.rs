@@ -3,11 +3,24 @@ use std::process::Command;
 use std::sync::Arc;
 
 use axum::Router;
+use gifiac_backend::auth::{GoogleAuthConfig, SESSION_COOKIE_NAME};
 use gifiac_backend::config::Config;
 use gifiac_backend::db;
 use gifiac_backend::state::AppState;
 use gifiac_backend::storage::Storage;
+use sqlx::PgPool;
 use tempfile::TempDir;
+
+/// Never actually used to call Google — real OAuth can't run in tests, so
+/// `login_as` bypasses the flow entirely by writing `users`/`sessions`
+/// rows directly. Only exists so `AppState` has something to construct.
+fn test_google_auth() -> GoogleAuthConfig {
+    GoogleAuthConfig {
+        client_id: "test-client-id".to_string(),
+        client_secret: "test-client-secret".to_string(),
+        app_base_url: "http://localhost:5173".to_string(),
+    }
+}
 
 /// Points at the local MinIO instance from `docker-compose.dev.yml` as an
 /// S3-compatible stand-in for R2 (real credentials aren't needed for
@@ -37,6 +50,10 @@ pub struct TestApp {
     pub app: Router,
     pub video_dir: PathBuf,
     pub storage: Storage,
+    /// Kept alongside the copy moved into `AppState` so `login_as` can
+    /// write `users`/`sessions` rows directly — `PgPool` is a cheap
+    /// `Arc`-backed handle, so cloning it doesn't open a second pool.
+    pub pool: PgPool,
     _tempdir: TempDir,
 }
 
@@ -59,10 +76,11 @@ pub async fn spawn_app() -> TestApp {
     let storage = test_storage();
     let http_client = gifiac_backend::link_check::build_client().unwrap();
     let state = Arc::new(AppState {
-        pool,
+        pool: pool.clone(),
         config,
         storage: storage.clone(),
         http_client,
+        google_auth: test_google_auth(),
         export_jobs: Default::default(),
     });
     let app = gifiac_backend::build_app(state);
@@ -71,8 +89,39 @@ pub async fn spawn_app() -> TestApp {
         app,
         video_dir,
         storage,
+        pool,
         _tempdir: tempdir,
     }
+}
+
+/// Bypasses the real Google OAuth flow (which can't run in tests) by
+/// writing `users`/`identities`/`sessions` rows directly — the same "skip
+/// only what's truly external" spirit as `test_storage()` standing in for
+/// R2. Returns a `Cookie` header value ready to attach to a request via
+/// `.header("cookie", login_as(&test_app, "a@example.com").await)`.
+#[allow(dead_code)]
+pub async fn login_as(test_app: &TestApp, email: &str) -> String {
+    let now = chrono::Utc::now().to_rfc3339();
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let provider_user_id = uuid::Uuid::new_v4().to_string();
+    db::create_user_with_identity(
+        &test_app.pool,
+        &user_id,
+        &now,
+        "google",
+        &provider_user_id,
+        Some(email),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    db::create_session(&test_app.pool, &session_id, &user_id, &now)
+        .await
+        .unwrap();
+
+    format!("{SESSION_COOKIE_NAME}={session_id}")
 }
 
 /// Generates a synthetic test clip deliberately too large to fit under

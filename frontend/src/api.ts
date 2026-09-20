@@ -1,4 +1,4 @@
-import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
+import type { Caption, CurrentUser, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 
 async function throwIfNotOk(input: string, response: Response): Promise<void> {
   if (response.ok) return
@@ -10,6 +10,21 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
   await throwIfNotOk(input, response)
   return (await response.json()) as T
+}
+
+// Auth per SPEC-CLOUD.md §2. Sign-in itself isn't a fetch call — it's a
+// full-page navigation to `/api/auth/login`, which redirects on to
+// Google, since the whole point is the browser following Google's own
+// sign-in UI.
+export const LOGIN_URL = '/api/auth/login'
+
+export function getCurrentUser(): Promise<CurrentUser | null> {
+  return request<CurrentUser | null>('/api/auth/me')
+}
+
+export async function logout(): Promise<void> {
+  const input = '/api/auth/logout'
+  await throwIfNotOk(input, await fetch(input, { method: 'POST' }))
 }
 
 export function listVideos(): Promise<Video[]> {

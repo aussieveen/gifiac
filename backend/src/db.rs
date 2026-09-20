@@ -2,7 +2,9 @@ use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
-use crate::models::{Gif, NewGif, NewVideo, TemplatePayload, Video, VideoListItem, VideoTemplate};
+use crate::models::{
+    Gif, NewGif, NewVideo, Session, TemplatePayload, User, Video, VideoListItem, VideoTemplate,
+};
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
 const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off";
@@ -274,6 +276,125 @@ pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url";
+
+/// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a
+/// user — no merging by email, since Google is (for now) the only
+/// provider and there's nothing to merge across yet.
+pub async fn find_user_by_identity(pool: &PgPool, provider: &str, provider_user_id: &str) -> Result<Option<User>> {
+    let sql = format!(
+        "SELECT {USER_COLUMNS} FROM users u JOIN identities i ON i.user_id = u.id WHERE i.provider = $1 AND i.provider_user_id = $2"
+    );
+    sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(provider)
+        .bind(provider_user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_user(pool: &PgPool, id: &str) -> Result<Option<User>> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1");
+    sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Creates a brand-new user plus the identity that resolves to it, in one
+/// transaction — a first-time Google login always creates both together
+/// (SPEC-CLOUD.md §2), never a user without at least one identity.
+/// `handle` starts `NULL`: picking one is the M5 profiles ticket's job,
+/// not this one's.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_user_with_identity(
+    pool: &PgPool,
+    user_id: &str,
+    created_at: &str,
+    provider: &str,
+    provider_user_id: &str,
+    email: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<User> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO users (id, role, created_at, email, avatar_url) VALUES ($1, 'user', $2, $3, $4)")
+        .bind(user_id)
+        .bind(created_at)
+        .bind(email)
+        .bind(avatar_url)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO identities (provider, provider_user_id, user_id) VALUES ($1, $2, $3)")
+        .bind(provider)
+        .bind(provider_user_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    get_user(pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user row vanished immediately after insert"))
+}
+
+/// Refreshes the profile fields captured from the OAuth payload (§2/§5) —
+/// called on every login, not just the first, since a display name or
+/// avatar can change on Google's side over time.
+pub async fn update_user_profile_fields(
+    pool: &PgPool,
+    user_id: &str,
+    email: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET email = $1, avatar_url = $2 WHERE id = $3")
+        .bind(email)
+        .bind(avatar_url)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn create_session(pool: &PgPool, id: &str, user_id: &str, now: &str) -> Result<()> {
+    sqlx::query("INSERT INTO sessions (id, user_id, created_at, last_active_at) VALUES ($1, $2, $3, $3)")
+        .bind(id)
+        .bind(user_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_session(pool: &PgPool, id: &str) -> Result<Option<Session>> {
+    sqlx::query_as::<_, Session>("SELECT id, user_id, created_at, last_active_at FROM sessions WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Refreshes the sliding expiry (SPEC-CLOUD.md §2) — called on every
+/// authenticated request that passes the `CurrentUser` extractor.
+pub async fn touch_session(pool: &PgPool, id: &str, now: &str) -> Result<()> {
+    sqlx::query("UPDATE sessions SET last_active_at = $1 WHERE id = $2")
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Revoking a session (logout, or an admin disabling an account per §7)
+/// is just deleting this row — no separate "revoked" flag to check.
+pub async fn delete_session(pool: &PgPool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

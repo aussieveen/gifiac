@@ -84,6 +84,9 @@ finished GIFs/clips live in R2.
 | `R2_SECRET_ACCESS_KEY` | *(required)* | R2 API token secret |
 | `R2_BUCKET_NAME` | *(required)* | Target R2 bucket, public-read |
 | `R2_PUBLIC_BASE_URL` | *(required)* | Public base URL GIF/clip links are derived from |
+| `GOOGLE_CLIENT_ID` | *(required)* | Google OAuth client id |
+| `GOOGLE_CLIENT_SECRET` | *(required)* | Google OAuth client secret |
+| `APP_BASE_URL` | *(required)* | Public site origin (e.g. `https://gifiac.example.com`) — builds the Google redirect URI and the post-login redirect target. `http://localhost:5173` in local dev; session cookies are only marked `Secure` when this is `https://` |
 
 The container listens on port `8080` internally; map it to whatever host
 port you like (`docker-compose.yml` maps `8123:8080` by default).
@@ -130,6 +133,9 @@ export R2_ACCESS_KEY_ID=...       # above is a test-only stand-in, not
 export R2_SECRET_ACCESS_KEY=...   # something `cargo run` talks to; a
 export R2_BUCKET_NAME=...         # running server still needs real R2.
 export R2_PUBLIC_BASE_URL=...
+export GOOGLE_CLIENT_ID=...        # real Google OAuth client — see
+export GOOGLE_CLIENT_SECRET=...    # SPEC-CLOUD.md §2 for the flow
+export APP_BASE_URL=http://localhost:5173
 
 cargo run
 ```

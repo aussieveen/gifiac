@@ -5,6 +5,9 @@ import App from './App'
 import type { FilmstripMeta, Video } from './types'
 
 vi.mock('./api', () => ({
+  LOGIN_URL: '/api/auth/login',
+  getCurrentUser: vi.fn(),
+  logout: vi.fn(),
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
   deleteVideo: vi.fn(),
@@ -23,8 +26,19 @@ vi.mock('./api', () => ({
   deleteTemplate: vi.fn(),
 }))
 
-import { createExport, getFilmstripMeta, getTemplate, listGifs, listVideos, subscribeExportProgress } from './api'
+import {
+  createExport,
+  getCurrentUser,
+  getFilmstripMeta,
+  getTemplate,
+  listGifs,
+  listVideos,
+  subscribeExportProgress,
+} from './api'
 import type { ExportProgressHandlers } from './api'
+import type { CurrentUser } from './types'
+
+const loggedInUser: CurrentUser = { id: 'u1', handle: null, role: 'user', avatarUrl: null }
 
 const video: Video = {
   id: 'v1',
@@ -56,6 +70,7 @@ beforeEach(() => {
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
+  vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
 })
 
 describe('App', () => {

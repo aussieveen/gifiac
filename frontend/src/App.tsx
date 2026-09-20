@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Archive } from './Archive'
-import { getFilmstripMeta } from './api'
+import { LOGIN_URL, getFilmstripMeta, logout } from './api'
 import { CaptionEditor } from './CaptionEditor'
 import type { FilmstripMeta, Gif, Video } from './types'
+import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
 
 type View = 'videos' | 'archive'
 
 export default function App() {
+  // SPEC-CLOUD.md §2: nothing else renders until we know whether there's
+  // a valid session — this is intentionally minimal (no routing, no tab
+  // bar yet) since the full nav redesign is a later milestone.
+  const { user, loading: authLoading } = useCurrentUser()
+
   // SPEC.md §8: the archive is the app's landing page — browsing/finding
   // existing GIFs is the more common action than starting a new one.
   const [view, setView] = useState<View>('archive')
@@ -47,6 +53,24 @@ export default function App() {
     setView('archive')
   }
 
+  if (authLoading) {
+    return (
+      <div className="page">
+        <p className="va-hint">Loading…</p>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="page">
+        <a className="app-nav-btn" href={LOGIN_URL}>
+          Sign in with Google
+        </a>
+      </div>
+    )
+  }
+
   const nav = (
     <nav className="app-nav">
       <button className={`app-nav-btn ${view === 'videos' ? 'active' : ''}`} onClick={() => setView('videos')}>
@@ -54,6 +78,9 @@ export default function App() {
       </button>
       <button className={`app-nav-btn ${view === 'archive' ? 'active' : ''}`} onClick={() => setView('archive')}>
         Archive
+      </button>
+      <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
+        Sign out
       </button>
     </nav>
   )

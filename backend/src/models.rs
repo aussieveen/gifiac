@@ -175,6 +175,67 @@ impl Gif {
     }
 }
 
+/// SPEC-CLOUD.md §2: a user's row is created on first login, independent
+/// of which provider identity created it (see `Identity`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct User {
+    pub id: String,
+    pub handle: Option<String>,
+    pub role: String,
+    pub created_at: String,
+    /// Refreshed from the OAuth payload on every login — not part of
+    /// SPEC-CLOUD.md §2's original `users` table, added alongside
+    /// `avatar_url` once it became clear neither was captured anywhere
+    /// (see `0003_user_profile_fields.sql`).
+    pub email: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// The shape of `GET /api/auth/me` — deliberately narrower than the full
+/// `User` row (no need to leak internal fields the frontend doesn't use
+/// yet), and the point at which a client learns its own `role` for
+/// admin-gating later (SPEC-CLOUD.md §7).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentUserView {
+    pub id: String,
+    pub handle: Option<String>,
+    pub role: String,
+    pub avatar_url: Option<String>,
+}
+
+impl From<User> for CurrentUserView {
+    fn from(user: User) -> Self {
+        Self {
+            id: user.id,
+            handle: user.handle,
+            role: user.role,
+            avatar_url: user.avatar_url,
+        }
+    }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Session {
+    pub id: String,
+    pub user_id: String,
+    pub created_at: String,
+    pub last_active_at: String,
+}
+
+/// The subset of Google's OIDC `userinfo` response this app actually uses.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoogleUserInfo {
+    pub sub: String,
+    pub email: Option<String>,
+    pub picture: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoogleTokenResponse {
+    pub access_token: String,
+}
+
 pub struct NewGif {
     pub id: String,
     pub video_id: Option<String>,

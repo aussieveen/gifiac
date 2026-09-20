@@ -46,6 +46,15 @@ export interface TemplatePayload {
   height: number
 }
 
+// GET /api/auth/me response shape (SPEC-CLOUD.md §2) — camelCase, matching
+// the backend's `CurrentUserView`. `null` overall means logged out.
+export interface CurrentUser {
+  id: string
+  handle: string | null
+  role: string
+  avatarUrl: string | null
+}
+
 // GET /api/videos/{id}/filmstrip response shape (SPEC.md §5) — camelCase.
 export interface FilmstripMeta {
   frameCount: number

@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::auth::GoogleAuthConfig;
 use crate::config::Config;
 use crate::exports::ExportEvent;
 use crate::storage::Storage;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
     pub storage: Storage,
+    pub google_auth: GoogleAuthConfig,
     /// Shared client for the light URL sanity check behind linked GIFs
     /// (SPEC.md §13, see link_check.rs) — reused across requests rather
     /// than building a fresh one per submission.

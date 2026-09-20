@@ -1,4 +1,5 @@
 pub mod ass;
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -55,12 +56,14 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     );
 
     let http_client = link_check::build_client()?;
+    let google_auth = auth::GoogleAuthConfig::from_env()?;
 
     Ok(Arc::new(AppState {
         pool,
         config,
         storage,
         http_client,
+        google_auth,
         export_jobs: Default::default(),
     }))
 }

@@ -1,3 +1,4 @@
+mod auth;
 mod exports;
 mod gifs;
 mod videos;
@@ -11,6 +12,10 @@ use crate::state::AppState;
 
 pub fn api_router() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/auth/login", get(auth::login))
+        .route("/auth/callback", get(auth::callback))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me))
         .route(
             "/videos",
             get(videos::list_videos).post(videos::upload_video),
