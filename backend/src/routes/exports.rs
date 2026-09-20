@@ -11,6 +11,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{self, ExportEvent};
@@ -24,6 +25,7 @@ pub struct ExportAccepted {
 
 pub async fn create_export(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     Json(mut request): Json<ExportRequest>,
 ) -> Result<(StatusCode, Json<ExportAccepted>), AppError> {
     request.name = request.name.trim().to_string();
@@ -36,7 +38,7 @@ pub async fn create_export(
         ));
     }
 
-    let video = db::get_video(&state.pool, &request.video_id)
+    let video = db::get_video(&state.pool, &request.video_id, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -48,9 +50,13 @@ pub async fn create_export(
         .unwrap()
         .insert(export_id, tx.clone());
 
+    // Captured before spawning — this is a detached background task with
+    // no request to re-extract `CurrentUser` from later (SPEC-CLOUD.md
+    // §3: the resulting `gifs` row still needs an owner).
+    let owner_id = user.id.clone();
     let job_state = state.clone();
     tokio::spawn(async move {
-        exports::run_export_job(&job_state, export_id, video, request, tx).await;
+        exports::run_export_job(&job_state, export_id, video, request, &owner_id, tx).await;
         job_state.export_jobs.lock().unwrap().remove(&export_id);
     });
 
@@ -64,6 +70,7 @@ pub async fn create_export(
 
 pub async fn export_progress(
     State(state): State<Arc<AppState>>,
+    _current_user: CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;

@@ -4,7 +4,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 mod common;
-use common::{create_gif, spawn_app};
+use common::{authed, create_gif, login_as, spawn_app};
 
 #[tokio::test]
 async fn list_gifs_returns_everything_newest_first_with_no_query() {
@@ -16,7 +16,7 @@ async fn list_gifs_returns_everything_newest_first_with_no_query() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/gifs")
                 .body(Body::empty())
                 .unwrap(),
@@ -46,7 +46,7 @@ async fn list_gifs_filters_by_the_q_param_against_name_and_caption_text() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/gifs?q=cat")
                 .body(Body::empty())
                 .unwrap(),
@@ -75,7 +75,7 @@ async fn get_gif_returns_the_full_row_including_captions_json() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -113,8 +113,9 @@ async fn get_unknown_gif_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/gifs/00000000-0000-0000-0000-000000000000")
                 .body(Body::empty())
                 .unwrap(),
@@ -135,7 +136,7 @@ async fn rename_gif_updates_the_name_without_a_re_export() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{id}"))
                 .header("content-type", "application/json")
@@ -163,8 +164,9 @@ async fn rename_gif_with_an_empty_name_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{id}"))
                 .header("content-type", "application/json")
@@ -183,8 +185,9 @@ async fn rename_unknown_gif_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri("/api/gifs/00000000-0000-0000-0000-000000000000")
                 .header("content-type", "application/json")
@@ -205,8 +208,9 @@ async fn patch_gif_with_neither_field_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{id}"))
                 .header("content-type", "application/json")
@@ -230,7 +234,7 @@ async fn patch_gif_toggles_is_one_off_and_back() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{id}"))
                 .header("content-type", "application/json")
@@ -250,8 +254,9 @@ async fn patch_gif_toggles_is_one_off_and_back() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{id}"))
                 .header("content-type", "application/json")
@@ -281,7 +286,7 @@ async fn list_gifs_sorts_one_off_gifs_after_reusable_gifs() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PATCH")
                 .uri(format!("/api/gifs/{one_off_id}"))
                 .header("content-type", "application/json")
@@ -293,8 +298,9 @@ async fn list_gifs_sorts_one_off_gifs_after_reusable_gifs() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/gifs")
                 .body(Body::empty())
                 .unwrap(),
@@ -329,7 +335,7 @@ async fn delete_gif_removes_the_row_and_all_three_r2_objects() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
@@ -341,8 +347,9 @@ async fn delete_gif_removes_the_row_and_all_three_r2_objects() {
 
     let get_response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -359,13 +366,102 @@ async fn delete_gif_removes_the_row_and_all_three_r2_objects() {
 }
 
 #[tokio::test]
+async fn list_gifs_with_no_session_cookie_is_rejected() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .oneshot(Request::builder().uri("/api/gifs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// SPEC-CLOUD.md §3: another user's gif simply doesn't resolve (same 404
+/// as a nonexistent id), can't be renamed or deleted, and is absent from
+/// their own `GET /api/gifs` list.
+#[tokio::test]
+async fn a_second_user_cannot_see_fetch_rename_or_delete_the_first_users_gif() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "mine", "").await;
+    let id = gif["id"].as_str().unwrap();
+
+    let other_cookie = login_as(&test_app, "other@example.com").await;
+
+    let get_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/gifs/{id}"))
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+
+    let list_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/gifs")
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(list.as_array().unwrap().is_empty());
+
+    let rename_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .header("cookie", &other_cookie)
+                .body(Body::from(json!({ "name": "hijacked" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rename_response.status(), StatusCode::NOT_FOUND);
+
+    let delete_response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/gifs/{id}"))
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn delete_unknown_gif_returns_404() {
     let test_app = spawn_app().await;
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri("/api/gifs/00000000-0000-0000-0000-000000000000")
                 .body(Body::empty())

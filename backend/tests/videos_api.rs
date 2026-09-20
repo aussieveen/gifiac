@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{create_gif, make_large_test_video, make_test_video, multipart_body, spawn_app};
+use common::{authed, create_gif, login_as, make_large_test_video, make_test_video, multipart_body, spawn_app};
 
 #[tokio::test]
 async fn upload_probes_generates_thumbnail_and_lists_the_video() {
@@ -19,7 +19,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -50,7 +50,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/videos")
                 .body(Body::empty())
                 .unwrap(),
@@ -70,7 +70,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -84,7 +84,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/thumbnail"))
                 .body(Body::empty())
                 .unwrap(),
@@ -102,7 +102,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/filmstrip"))
                 .body(Body::empty())
                 .unwrap(),
@@ -122,7 +122,7 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/filmstrip.jpg"))
                 .body(Body::empty())
                 .unwrap(),
@@ -152,8 +152,9 @@ async fn upload_accepts_a_file_well_over_axums_default_2mb_body_limit() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -181,7 +182,7 @@ async fn video_file_serves_full_content_and_honors_range_requests() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -207,7 +208,7 @@ async fn video_file_serves_full_content_and_honors_range_requests() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/file"))
                 .body(Body::empty())
                 .unwrap(),
@@ -231,7 +232,7 @@ async fn video_file_serves_full_content_and_honors_range_requests() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/file"))
                 .header("range", "bytes=0-99")
                 .body(Body::empty())
@@ -253,8 +254,9 @@ async fn video_file_for_unknown_video_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/videos/00000000-0000-0000-0000-000000000000/file")
                 .body(Body::empty())
                 .unwrap(),
@@ -271,8 +273,9 @@ async fn get_unknown_video_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/videos/00000000-0000-0000-0000-000000000000")
                 .body(Body::empty())
                 .unwrap(),
@@ -290,8 +293,9 @@ async fn upload_without_extension_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -319,8 +323,9 @@ async fn upload_of_unparseable_video_is_rejected_and_leaves_no_file_behind() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -353,7 +358,7 @@ async fn delete_video_removes_the_row_and_its_files() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -380,7 +385,7 @@ async fn delete_video_removes_the_row_and_its_files() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/filmstrip.jpg"))
                 .body(Body::empty())
                 .unwrap(),
@@ -392,7 +397,7 @@ async fn delete_video_removes_the_row_and_its_files() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
@@ -404,8 +409,9 @@ async fn delete_video_removes_the_row_and_its_files() {
 
     let get_response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -437,7 +443,7 @@ async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/videos/{video_id}"))
                 .body(Body::empty())
@@ -450,8 +456,9 @@ async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
 
     let gif_response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{gif_id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -479,7 +486,7 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -510,7 +517,7 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PUT")
                 .uri(format!("/api/videos/{id}/template"))
                 .header("content-type", "application/json")
@@ -525,7 +532,7 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
@@ -540,7 +547,7 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
@@ -552,8 +559,9 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
 
     let delete_response2 = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
@@ -575,7 +583,7 @@ async fn get_template_returns_404_when_none_is_saved() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -597,8 +605,9 @@ async fn get_template_returns_404_when_none_is_saved() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
                 .unwrap(),
@@ -621,7 +630,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -644,7 +653,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     let list_before = test_app
         .app
         .clone()
-        .oneshot(Request::builder().uri("/api/videos").body(Body::empty()).unwrap())
+        .oneshot(authed(&test_app, Request::builder()).uri("/api/videos").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let list_before: serde_json::Value = serde_json::from_slice(
@@ -670,7 +679,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("PUT")
                 .uri(format!("/api/videos/{id}/template"))
                 .header("content-type", "application/json")
@@ -685,7 +694,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
                 .unwrap(),
@@ -704,7 +713,8 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
 
     let list_after = test_app
         .app
-        .oneshot(Request::builder().uri("/api/videos").body(Body::empty()).unwrap())
+        .clone()
+        .oneshot(authed(&test_app, Request::builder()).uri("/api/videos").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let list_after: serde_json::Value = serde_json::from_slice(
@@ -722,8 +732,9 @@ async fn delete_template_for_unknown_video_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri("/api/videos/00000000-0000-0000-0000-000000000000/template")
                 .body(Body::empty())
@@ -736,13 +747,109 @@ async fn delete_template_for_unknown_video_returns_404() {
 }
 
 #[tokio::test]
+async fn list_and_get_video_with_no_session_cookie_is_rejected() {
+    let test_app = spawn_app().await;
+
+    let list_response = test_app
+        .app
+        .clone()
+        .oneshot(Request::builder().uri("/api/videos").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::UNAUTHORIZED);
+
+    let get_response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/api/videos/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// SPEC-CLOUD.md §3: another user's video simply doesn't resolve — same
+/// 404 as a nonexistent id, and it's absent from their own `GET
+/// /api/videos` list entirely, not just blocked from direct access.
+#[tokio::test]
+async fn a_second_user_cannot_see_or_fetch_the_first_users_video() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    let other_cookie = login_as(&test_app, "other@example.com").await;
+
+    let get_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}"))
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+
+    let list_response = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/api/videos")
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(list.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn delete_unknown_video_returns_404() {
     let test_app = spawn_app().await;
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri("/api/videos/00000000-0000-0000-0000-000000000000")
                 .body(Body::empty())

@@ -54,6 +54,14 @@ pub struct TestApp {
     /// write `users`/`sessions` rows directly — `PgPool` is a cheap
     /// `Arc`-backed handle, so cloning it doesn't open a second pool.
     pub pool: PgPool,
+    /// A ready-to-attach `Cookie` header value (`.header("cookie",
+    /// &test_app.owner_cookie)`) for a default signed-in user, logged in
+    /// once per `spawn_app()` call — SPEC-CLOUD.md §3 gates every
+    /// video/gif/export route behind login now, so almost every test
+    /// needs to authenticate as *someone* to reach the handler under
+    /// test. Tests specifically about cross-user isolation call
+    /// `login_as` again for a second, distinct user.
+    pub owner_cookie: String,
     _tempdir: TempDir,
 }
 
@@ -66,6 +74,7 @@ pub async fn spawn_app() -> TestApp {
     // `db::create_ephemeral_test_pool`) — video files still get a scratch
     // tempdir since those aren't part of what moved to Postgres.
     let pool = db::create_ephemeral_test_pool().await;
+    let owner_cookie = create_session_cookie(&pool, "owner@example.com").await;
 
     let config = Config {
         video_dir: video_dir.clone(),
@@ -90,6 +99,7 @@ pub async fn spawn_app() -> TestApp {
         video_dir,
         storage,
         pool,
+        owner_cookie,
         _tempdir: tempdir,
     }
 }
@@ -101,25 +111,32 @@ pub async fn spawn_app() -> TestApp {
 /// `.header("cookie", login_as(&test_app, "a@example.com").await)`.
 #[allow(dead_code)]
 pub async fn login_as(test_app: &TestApp, email: &str) -> String {
+    create_session_cookie(&test_app.pool, email).await
+}
+
+/// Attaches `test_app`'s default owner's session cookie to a request
+/// builder — SPEC-CLOUD.md §3 gates every video/gif/export route behind
+/// login now, so this is what almost every request in these suites needs.
+/// A test specifically about being logged out, or about a second user,
+/// builds its request directly instead (with no cookie, or a different
+/// one from a second `login_as` call).
+#[allow(dead_code)]
+pub fn authed(test_app: &TestApp, builder: axum::http::request::Builder) -> axum::http::request::Builder {
+    builder.header("cookie", &test_app.owner_cookie)
+}
+
+/// Shared by `login_as` and `spawn_app` (which needs a ready-to-use
+/// `owner_cookie` before a `TestApp` exists to call `login_as` on).
+async fn create_session_cookie(pool: &PgPool, email: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let user_id = uuid::Uuid::new_v4().to_string();
     let provider_user_id = uuid::Uuid::new_v4().to_string();
-    db::create_user_with_identity(
-        &test_app.pool,
-        &user_id,
-        &now,
-        "google",
-        &provider_user_id,
-        Some(email),
-        None,
-    )
-    .await
-    .unwrap();
-
-    let session_id = uuid::Uuid::new_v4().to_string();
-    db::create_session(&test_app.pool, &session_id, &user_id, &now)
+    db::create_user_with_identity(pool, &user_id, &now, "google", &provider_user_id, Some(email), None)
         .await
         .unwrap();
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    db::create_session(pool, &session_id, &user_id, &now).await.unwrap();
 
     format!("{SESSION_COOKIE_NAME}={session_id}")
 }
@@ -231,6 +248,7 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
+                .header("cookie", &test_app.owner_cookie)
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -275,6 +293,7 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
                 .method("POST")
                 .uri("/api/exports")
                 .header("content-type", "application/json")
+                .header("cookie", &test_app.owner_cookie)
                 .body(Body::from(request_body.to_string()))
                 .unwrap(),
         )
@@ -294,6 +313,7 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
         test_app.app.clone().oneshot(
             Request::builder()
                 .uri(format!("/api/exports/{export_id}/progress"))
+                .header("cookie", &test_app.owner_cookie)
                 .body(Body::empty())
                 .unwrap(),
         ),

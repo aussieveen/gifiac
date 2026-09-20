@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{make_test_video, multipart_body, spawn_app};
+use common::{authed, login_as, make_test_video, multipart_body, spawn_app};
 
 /// Parses a raw SSE response body (`event: X\ndata: Y\n\n` blocks) into
 /// `(event, data)` pairs, in the order they were sent.
@@ -39,7 +39,7 @@ async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> serd
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(test_app, Request::builder())
                 .method("POST")
                 .uri("/api/videos")
                 .header(
@@ -87,7 +87,7 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/exports")
                 .header("content-type", "application/json")
@@ -111,7 +111,7 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     let progress_response = tokio::time::timeout(
         Duration::from_secs(60),
         test_app.app.clone().oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/exports/{export_id}/progress"))
                 .body(Body::empty())
                 .unwrap(),
@@ -182,6 +182,24 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
         .unwrap()
         .status();
     assert!(webm_status.is_success());
+
+    // The `gifs` row `run_pipeline` inserted is owned by whoever created
+    // the export (SPEC-CLOUD.md §3) — provable end-to-end via the API
+    // surface even though `GifResponse` never exposes `user_id` directly:
+    // the exporting user can fetch it, a second user gets a 404.
+    let other_cookie = login_as(&test_app, "other@example.com").await;
+    let other_users_view = test_app
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/gifs/{gif_id}"))
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_users_view.status(), StatusCode::NOT_FOUND);
 }
 
 /// Regression test for a real bug: `encode_gif`'s ffmpeg invocation has a
@@ -214,7 +232,7 @@ async fn export_output_duration_matches_the_requested_range_not_the_source_video
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/exports")
                 .header("content-type", "application/json")
@@ -234,7 +252,7 @@ async fn export_output_duration_matches_the_requested_range_not_the_source_video
     let progress_response = tokio::time::timeout(
         Duration::from_secs(60),
         test_app.app.clone().oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/exports/{export_id}/progress"))
                 .body(Body::empty())
                 .unwrap(),
@@ -295,8 +313,9 @@ async fn export_with_empty_name_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/exports")
                 .header("content-type", "application/json")
@@ -323,11 +342,46 @@ async fn export_for_unknown_video_returns_404() {
 
     let response = test_app
         .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// SPEC-CLOUD.md §3: exporting from a video you don't own 404s exactly
+/// like exporting from a nonexistent video — `create_export`'s lookup is
+/// scoped to the caller, so another user's video simply isn't there.
+#[tokio::test]
+async fn export_from_another_users_video_returns_404() {
+    let test_app = spawn_app().await;
+    let video = upload_video(&test_app, 3.0).await;
+    let other_cookie = login_as(&test_app, "other@example.com").await;
+
+    let request_body = json!({
+        "video_id": video["id"],
+        "name": "not mine to export",
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.0
+    });
+
+    let response = test_app
+        .app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/exports")
                 .header("content-type", "application/json")
+                .header("cookie", &other_cookie)
                 .body(Body::from(request_body.to_string()))
                 .unwrap(),
         )
@@ -343,8 +397,9 @@ async fn progress_for_unknown_export_returns_404() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri("/api/exports/00000000-0000-0000-0000-000000000000/progress")
                 .body(Body::empty())
                 .unwrap(),

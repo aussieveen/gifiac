@@ -4,7 +4,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 mod common;
-use common::spawn_app;
+use common::{authed, spawn_app};
 
 /// A long-standing, stable Wikimedia Commons asset — real network access,
 /// same testing philosophy this suite already uses for MinIO/FFmpeg (real
@@ -21,7 +21,7 @@ async fn link_gif_creates_a_row_with_the_external_url_and_no_r2_objects() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -57,7 +57,7 @@ async fn link_gif_appears_in_the_archive_list_and_can_be_fetched_by_id() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -78,7 +78,7 @@ async fn link_gif_appears_in_the_archive_list_and_can_be_fetched_by_id() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -89,7 +89,8 @@ async fn link_gif_appears_in_the_archive_list_and_can_be_fetched_by_id() {
 
     let list_response = test_app
         .app
-        .oneshot(Request::builder().uri("/api/gifs").body(Body::empty()).unwrap())
+        .clone()
+        .oneshot(authed(&test_app, Request::builder()).uri("/api/gifs").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let gifs: Vec<serde_json::Value> = serde_json::from_slice(
@@ -111,7 +112,7 @@ async fn deleting_a_linked_gif_only_removes_the_row() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -132,7 +133,7 @@ async fn deleting_a_linked_gif_only_removes_the_row() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("DELETE")
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
@@ -144,8 +145,9 @@ async fn deleting_a_linked_gif_only_removes_the_row() {
 
     let get_response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -161,8 +163,9 @@ async fn link_gif_with_an_empty_name_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -181,8 +184,9 @@ async fn link_gif_with_an_unparseable_url_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -204,8 +208,9 @@ async fn link_gif_pointed_at_a_loopback_address_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")
@@ -226,8 +231,9 @@ async fn link_gif_pointed_at_a_non_image_url_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/link")
                 .header("content-type", "application/json")

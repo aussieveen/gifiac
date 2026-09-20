@@ -32,13 +32,14 @@ pub async fn run_export_job(
     export_id: Uuid,
     video: Video,
     request: ExportRequest,
+    owner_id: &str,
     events: broadcast::Sender<ExportEvent>,
 ) {
     let send = |event: ExportEvent| {
         let _ = events.send(event);
     };
 
-    match run_pipeline(state, export_id, &video, &request, &send).await {
+    match run_pipeline(state, export_id, &video, &request, owner_id, &send).await {
         Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
         Err(err) => {
             tracing::error!(export_id = %export_id, error = ?err, "export job failed");
@@ -54,6 +55,7 @@ async fn run_pipeline(
     export_id: Uuid,
     video: &Video,
     request: &ExportRequest,
+    owner_id: &str,
     send: &impl Fn(ExportEvent),
 ) -> anyhow::Result<Gif> {
     let clip_duration = request.gif_range_end - request.gif_range_start;
@@ -103,6 +105,7 @@ async fn run_pipeline(
         width: Some(result.width),
         height: Some(result.height),
         external_url: None,
+        user_id: owner_id.to_string(),
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 

@@ -14,6 +14,7 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::ass::generate_ass;
+use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{ExportEvent, transcode_and_upload};
@@ -61,9 +62,10 @@ pub struct ListQuery {
 
 pub async fn list_gifs(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<GifResponse>>, AppError> {
-    let gifs = db::list_gifs(&state.pool, query.q.as_deref()).await?;
+    let gifs = db::list_gifs(&state.pool, &user.id, query.q.as_deref()).await?;
     let responses = gifs
         .into_iter()
         .map(|gif| with_urls(gif, &state.storage))
@@ -73,9 +75,10 @@ pub async fn list_gifs(
 
 pub async fn get_gif(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<GifResponse>, AppError> {
-    let gif = db::get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let gif = db::get_gif(&state.pool, &id, &user.id).await?.ok_or(AppError::NotFound)?;
     Ok(Json(with_urls(gif, &state.storage)?))
 }
 
@@ -91,6 +94,7 @@ pub struct PatchGifRequest {
 /// update and the client likely made a mistake.
 pub async fn rename_gif(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
     Json(request): Json<PatchGifRequest>,
 ) -> Result<Json<GifResponse>, AppError> {
@@ -100,20 +104,20 @@ pub async fn rename_gif(
         ));
     }
 
-    let mut gif = db::get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let mut gif = db::get_gif(&state.pool, &id, &user.id).await?.ok_or(AppError::NotFound)?;
 
     if let Some(name) = request.name {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(AppError::BadRequest("name must not be empty".to_string()));
         }
-        gif = db::rename_gif(&state.pool, &id, &name)
+        gif = db::rename_gif(&state.pool, &id, &user.id, &name)
             .await?
             .ok_or(AppError::NotFound)?;
     }
 
     if let Some(is_one_off) = request.is_one_off {
-        gif = db::set_gif_one_off(&state.pool, &id, is_one_off)
+        gif = db::set_gif_one_off(&state.pool, &id, &user.id, is_one_off)
             .await?
             .ok_or(AppError::NotFound)?;
     }
@@ -129,10 +133,11 @@ pub async fn rename_gif(
 /// (SPEC.md §13) has no R2 objects at all — that step is skipped for it.
 pub async fn delete_gif(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
-    let gif = db::get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
-    let deleted = db::delete_gif(&state.pool, &id).await?;
+    let gif = db::get_gif(&state.pool, &id, &user.id).await?.ok_or(AppError::NotFound)?;
+    let deleted = db::delete_gif(&state.pool, &id, &user.id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
@@ -163,6 +168,7 @@ pub struct LinkGifRequest {
 /// there's no real processing pipeline behind this to background.
 pub async fn link_gif(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     Json(request): Json<LinkGifRequest>,
 ) -> Result<(StatusCode, Json<GifResponse>), AppError> {
     let name = request.name.trim().to_string();
@@ -189,6 +195,7 @@ pub async fn link_gif(
         width: None,
         height: None,
         external_url: Some(url),
+        user_id: user.id,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
     Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage)?)))
@@ -205,6 +212,7 @@ pub async fn link_gif(
 /// against.
 pub async fn import_gifs(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Vec<GifResponse>>), AppError> {
     let mut created = Vec::new();
@@ -283,6 +291,7 @@ pub async fn import_gifs(
             width: Some(result.width),
             height: Some(result.height),
             external_url: None,
+            user_id: user.id.clone(),
         };
         let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
         created.push(with_urls(gif, &state.storage)?);

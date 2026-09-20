@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{make_test_gif, multipart_body, multipart_body_multi, spawn_app};
+use common::{authed, make_test_gif, multipart_body, multipart_body_multi, spawn_app};
 
 #[tokio::test]
 async fn import_creates_a_gif_row_with_all_three_formats_and_no_source_video() {
@@ -18,7 +18,7 @@ async fn import_creates_a_gif_row_with_all_three_formats_and_no_source_video() {
         .app
         .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/import")
                 .header(
@@ -75,8 +75,9 @@ async fn import_creates_a_gif_row_with_all_three_formats_and_no_source_video() {
     // And the archive endpoints see it like any other gif.
     let get_response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .uri(format!("/api/gifs/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -100,8 +101,9 @@ async fn import_accepts_multiple_files_in_one_request() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/import")
                 .header(
@@ -137,8 +139,9 @@ async fn import_of_an_unparseable_file_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/import")
                 .header(
@@ -161,8 +164,9 @@ async fn import_with_no_files_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(
-            Request::builder()
+            authed(&test_app, Request::builder())
                 .method("POST")
                 .uri("/api/gifs/import")
                 .header(

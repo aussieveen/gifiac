@@ -11,6 +11,7 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use uuid::Uuid;
 
+use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
@@ -19,12 +20,15 @@ use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListIt
 use crate::paths;
 use crate::state::AppState;
 
-/// Looks up a video by its (string) path-param id, parsing it as a UUID
-/// along the way so callers that need the id for path derivation don't
-/// have to parse it a second time.
-async fn load_video(state: &AppState, id: &str) -> Result<(Uuid, Video), AppError> {
+/// Looks up a video by its (string) path-param id, scoped to `owner_id`
+/// (SPEC-CLOUD.md §3) — another user's video simply doesn't resolve, the
+/// same `NotFound` path as a nonexistent id, rather than a separate
+/// Forbidden response that would leak whether the id exists at all. Also
+/// parses the id as a UUID along the way so callers that need it for path
+/// derivation don't have to parse it a second time.
+async fn load_video(state: &AppState, id: &str, owner_id: &str) -> Result<(Uuid, Video), AppError> {
     let uuid = Uuid::parse_str(id).map_err(|_| AppError::NotFound)?;
-    let video = db::get_video(&state.pool, id)
+    let video = db::get_video(&state.pool, id, owner_id)
         .await?
         .ok_or(AppError::NotFound)?;
     Ok((uuid, video))
@@ -45,6 +49,7 @@ async fn remove_partial_upload(video_path: &std::path::Path, reason: &str) {
 
 pub async fn upload_video(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Video>), AppError> {
     let mut field = multipart
@@ -115,6 +120,7 @@ pub async fn upload_video(
         duration_seconds: probe.duration_seconds,
         width: probe.width,
         height: probe.height,
+        user_id: user.id,
     };
 
     let uploaded_at = Utc::now().to_rfc3339();
@@ -125,24 +131,27 @@ pub async fn upload_video(
 
 pub async fn list_videos(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
 ) -> Result<Json<Vec<VideoListItem>>, AppError> {
-    let videos = db::list_videos(&state.pool).await?;
+    let videos = db::list_videos(&state.pool, &user.id).await?;
     Ok(Json(videos))
 }
 
 pub async fn get_video(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<Video>, AppError> {
-    let (_, video) = load_video(&state, &id).await?;
+    let (_, video) = load_video(&state, &id, &user.id).await?;
     Ok(Json(video))
 }
 
 pub async fn get_thumbnail(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let (uuid, _video) = load_video(&state, &id).await?;
+    let (uuid, _video) = load_video(&state, &id, &user.id).await?;
 
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
     let bytes = tokio::fs::read(&thumb_path)
@@ -158,10 +167,11 @@ pub async fn get_thumbnail(
 /// feature).
 pub async fn get_video_file(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let (uuid, video) = load_video(&state, &id).await?;
+    let (uuid, video) = load_video(&state, &id, &user.id).await?;
     let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
 
     // ServeFile's Service is Infallible — a missing/unreadable file
@@ -173,9 +183,10 @@ pub async fn get_video_file(
 
 pub async fn get_filmstrip_meta(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<FilmstripMeta>, AppError> {
-    let (_, video) = load_video(&state, &id).await?;
+    let (_, video) = load_video(&state, &id, &user.id).await?;
     let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
 
     Ok(Json(FilmstripMeta {
@@ -195,9 +206,10 @@ pub async fn get_filmstrip_meta(
 /// a video whose saved template would silently vanish is not.
 pub async fn delete_video(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
-    let (uuid, video) = load_video(&state, &id).await?;
+    let (uuid, video) = load_video(&state, &id, &user.id).await?;
 
     if db::has_template(&state.pool, &id).await? {
         return Err(AppError::Conflict(
@@ -205,7 +217,7 @@ pub async fn delete_video(
         ));
     }
 
-    db::delete_video(&state.pool, &id).await?;
+    db::delete_video(&state.pool, &id, &user.id).await?;
 
     let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
@@ -223,9 +235,10 @@ pub async fn delete_video(
 
 pub async fn get_filmstrip_image(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let (uuid, video) = load_video(&state, &id).await?;
+    let (uuid, video) = load_video(&state, &id, &user.id).await?;
 
     let sprite_path = paths::filmstrip_sprite_path(&state.config.video_dir, &uuid);
     let sprite_exists = match tokio::fs::try_exists(&sprite_path).await {
@@ -257,9 +270,10 @@ pub async fn get_filmstrip_image(
 /// distinct from a 404 for the video itself not existing.
 pub async fn get_template(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<TemplatePayload>, AppError> {
-    load_video(&state, &id).await?;
+    load_video(&state, &id, &user.id).await?;
     let template = db::get_template(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
     Ok(Json(template))
 }
@@ -268,10 +282,11 @@ pub async fn get_template(
 /// overwrites) the template with the request body.
 pub async fn put_template(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
     Json(payload): Json<TemplatePayload>,
 ) -> Result<Json<TemplatePayload>, AppError> {
-    load_video(&state, &id).await?;
+    load_video(&state, &id, &user.id).await?;
     db::upsert_template(&state.pool, &id, &payload, &Utc::now().to_rfc3339()).await?;
     Ok(Json(payload))
 }
@@ -280,9 +295,10 @@ pub async fn put_template(
 /// be deleted afterwards.
 pub async fn delete_template(
     State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
-    load_video(&state, &id).await?;
+    load_video(&state, &id, &user.id).await?;
     let deleted = db::delete_template(&state.pool, &id).await?;
     if !deleted {
         return Err(AppError::NotFound);

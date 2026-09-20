@@ -20,6 +20,7 @@ pub struct NewVideo {
     pub duration_seconds: f64,
     pub width: i64,
     pub height: i64,
+    pub user_id: String,
 }
 
 /// `GET /api/videos` row shape (SPEC.md §12) — every `Video` field plus
@@ -247,4 +248,5 @@ pub struct NewGif {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub external_url: Option<String>,
+    pub user_id: String,
 }
