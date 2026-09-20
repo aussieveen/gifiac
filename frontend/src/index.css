@@ -320,6 +320,27 @@ button {
   font-size: 14px;
 }
 
+/* SPEC-CLOUD.md §4/§23: marks a caption as immutable to anyone but the
+   template's creator once templates can be shared (not yet enforced —
+   see CaptionEditor.tsx). */
+.va-track-lock {
+  position: absolute;
+  right: -84px;
+  top: 2px;
+  background: transparent;
+  border: 1px solid #444c5e;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #9aa4b8;
+  cursor: pointer;
+}
+
+.va-track-lock.locked {
+  border-color: #f5c518;
+  color: #f5c518;
+}
+
 .va-timeline-tracks {
   position: relative;
 }

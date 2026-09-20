@@ -136,6 +136,7 @@ function defaultCaption(id: string, start: number, end: number): Caption {
     width: DEFAULT_CAPTION_WIDTH,
     outlineColor: '#000000',
     lineHeight: DEFAULT_LINE_HEIGHT,
+    locked: false,
   }
 }
 
@@ -892,6 +893,13 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                 <div className="va-track-handle left" onMouseDown={(e) => startPillDrag(e, c.id, 'left')} />
                 <div className="va-track-handle right" onMouseDown={(e) => startPillDrag(e, c.id, 'right')} />
               </div>
+              <button
+                className={`va-track-lock ${c.locked ? 'locked' : ''}`}
+                aria-label={c.locked ? `Unlock caption "${c.text}"` : `Lock caption "${c.text}"`}
+                onClick={() => updateCaption(c.id, { locked: !c.locked })}
+              >
+                {c.locked ? 'Locked' : 'Lock'}
+              </button>
               <button className="va-track-delete" aria-label={`Delete caption "${c.text}"`} onClick={() => deleteCaption(c.id)}>
                 ✕
               </button>

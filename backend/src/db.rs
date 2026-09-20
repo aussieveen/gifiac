@@ -263,27 +263,42 @@ pub async fn get_template(pool: &PgPool, video_id: &str) -> Result<Option<Templa
         .transpose()
 }
 
+/// The `id` of the template already saved for `video_id`, if any — lets
+/// the caller reuse it across an overwrite (SPEC-CLOUD.md §4: the clip/
+/// thumbnail files on disk are named after this id, via `paths.rs`, so
+/// reusing it means an overwrite replaces those files in place instead of
+/// orphaning the previous save's).
+pub async fn get_template_id(pool: &PgPool, video_id: &str) -> Result<Option<String>> {
+    sqlx::query_scalar("SELECT id FROM templates WHERE video_id = $1")
+        .bind(video_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
 /// Upserts the template for `video_id` (SPEC.md §12: "Upserts (creates or
-/// overwrites) the template with the request body"). `templates` now has
-/// its own `id` (SPEC-CLOUD.md §4, distinct from `video_id`, for
-/// `gifs.template_id` to eventually reference) — a fresh id is generated
-/// on every call but only actually lands when there's no existing row to
-/// conflict with; `ON CONFLICT` deliberately leaves `id` alone on an
-/// overwrite so a template's identity survives being re-saved.
+/// overwrites) the template with the request body"). `id` is the
+/// caller's to generate (or reuse, via `get_template_id`, on an
+/// overwrite) — unlike before M3, the route needs it *before* this call
+/// to name the clip/thumbnail files it writes to disk. `ON CONFLICT`
+/// leaves `id`/`user_id` alone on an overwrite: a template's identity and
+/// creator survive being re-saved.
 pub async fn upsert_template(
     pool: &PgPool,
+    id: &str,
     video_id: &str,
+    user_id: &str,
     payload: &TemplatePayload,
     saved_at: &str,
 ) -> Result<()> {
     let payload_json = serde_json::to_string(payload)?;
-    let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO templates (id, video_id, payload_json, saved_at) VALUES ($1, $2, $3, $4) \
+        "INSERT INTO templates (id, video_id, user_id, payload_json, saved_at) VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (video_id) DO UPDATE SET payload_json = excluded.payload_json, saved_at = excluded.saved_at",
     )
     .bind(id)
     .bind(video_id)
+    .bind(user_id)
     .bind(payload_json)
     .bind(saved_at)
     .execute(pool)
@@ -533,7 +548,7 @@ mod tests {
         insert_video(&pool, &sample_video("v2", &user), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
-        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:02Z")
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:02Z")
             .await
             .unwrap();
 
@@ -887,7 +902,7 @@ mod tests {
 
         assert!(!has_template(&pool, "v1").await.unwrap());
 
-        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 
@@ -908,7 +923,7 @@ mod tests {
             .await
             .unwrap();
 
-        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
         let first = get_template(&pool, "v1").await.unwrap().unwrap();
@@ -916,12 +931,36 @@ mod tests {
 
         let mut overwrite = sample_template();
         overwrite.width = 320;
-        upsert_template(&pool, "v1", &overwrite, "2026-08-22T00:00:02Z")
+        upsert_template(&pool, "t1", "v1", &user, &overwrite, "2026-08-22T00:00:02Z")
             .await
             .unwrap();
 
         let second = get_template(&pool, "v1").await.unwrap().unwrap();
         assert_eq!(second.width, 320);
+    }
+
+    /// SPEC-CLOUD.md §4: reusing the existing template's id across an
+    /// overwrite (via `get_template_id`) is what lets the route replace a
+    /// template's clip/thumbnail files in place instead of orphaning the
+    /// previous save's — this is the id-stability guarantee that depends on.
+    #[tokio::test]
+    async fn get_template_id_stays_stable_across_an_overwrite() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(get_template_id(&pool, "v1").await.unwrap().is_none());
+
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        assert_eq!(get_template_id(&pool, "v1").await.unwrap().as_deref(), Some("t1"));
+
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+        assert_eq!(get_template_id(&pool, "v1").await.unwrap().as_deref(), Some("t1"));
     }
 
     #[tokio::test]
@@ -931,7 +970,7 @@ mod tests {
         insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        upsert_template(&pool, "v1", &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 

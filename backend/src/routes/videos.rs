@@ -279,15 +279,60 @@ pub async fn get_template(
 }
 
 /// SPEC.md §12: `PUT /api/videos/{id}/template` — upserts (creates or
-/// overwrites) the template with the request body.
+/// overwrites) the template with the request body. SPEC-CLOUD.md §4: the
+/// video is trimmed to the template's range into its own independent
+/// clip file (+ thumbnail), rather than the template just referencing
+/// offsets into the original video.
 pub async fn put_template(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
     Json(payload): Json<TemplatePayload>,
 ) -> Result<Json<TemplatePayload>, AppError> {
-    load_video(&state, &id, &user.id).await?;
-    db::upsert_template(&state.pool, &id, &payload, &Utc::now().to_rfc3339()).await?;
+    if payload.gif_range_end <= payload.gif_range_start {
+        return Err(AppError::BadRequest(
+            "gif_range_end must be after gif_range_start".to_string(),
+        ));
+    }
+    let (video_uuid, video) = load_video(&state, &id, &user.id).await?;
+
+    // Reusing an existing template's id (rather than always generating a
+    // fresh one) means an overwrite replaces its clip/thumbnail files in
+    // place — `paths::template_clip_path`/`template_thumbnail_path` are
+    // named after this id — instead of orphaning the previous save's.
+    let template_id = match db::get_template_id(&state.pool, &id).await? {
+        Some(existing) => Uuid::parse_str(&existing)?,
+        None => Uuid::new_v4(),
+    };
+
+    let source_path = paths::video_path(&state.config.video_dir, &video_uuid, &video.extension);
+    let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
+    let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
+
+    ffmpeg::trim_video(
+        &source_path,
+        &clip_path,
+        payload.gif_range_start,
+        payload.gif_range_end - payload.gif_range_start,
+    )
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to clip template video: {e}")))?;
+
+    // Seeking to 0.0 on the just-produced clip is the "first frame of the
+    // trimmed clip" §4 asks for.
+    ffmpeg::generate_thumbnail(&clip_path, &thumb_path, 0.0)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template thumbnail: {e}")))?;
+
+    db::upsert_template(
+        &state.pool,
+        &template_id.to_string(),
+        &id,
+        &user.id,
+        &payload,
+        &Utc::now().to_rfc3339(),
+    )
+    .await?;
     Ok(Json(payload))
 }
 
@@ -299,9 +344,23 @@ pub async fn delete_template(
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
     load_video(&state, &id, &user.id).await?;
+    let template_id = db::get_template_id(&state.pool, &id).await?;
     let deleted = db::delete_template(&state.pool, &id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
+
+    if let Some(template_id) = template_id.and_then(|t| Uuid::parse_str(&t).ok()) {
+        let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
+        let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
+        for path in [clip_path, thumb_path] {
+            if let Err(err) = tokio::fs::remove_file(&path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), error = %err, "failed to remove file for deleted template");
+            }
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }

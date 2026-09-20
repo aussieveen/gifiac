@@ -63,6 +63,25 @@ describe('CaptionEditor', () => {
     expect(screen.getByRole('button', { name: /delete caption/i })).toBeInTheDocument()
   })
 
+  it('toggling the lock button marks the caption locked and persists it into an export', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    const lockButton = screen.getByRole('button', { name: /^lock caption/i })
+    expect(lockButton).toHaveTextContent('Lock')
+    await user.click(lockButton)
+    expect(screen.getByRole('button', { name: /unlock caption/i })).toHaveTextContent('Locked')
+
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+
+    await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
+    const payload = vi.mocked(createExport).mock.calls[0][0]
+    expect(payload.captions[0].locked).toBe(true)
+  })
+
   it('editing the style-panel textarea updates the caption text', async () => {
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
@@ -293,6 +312,7 @@ describe('CaptionEditor', () => {
           width: 0.6,
           outlineColor: null,
           lineHeight: 0.65,
+          locked: false,
         },
       ],
       gif_range_start: 1,

@@ -1,9 +1,11 @@
+mod clip;
 pub mod export;
 mod filmstrip;
 mod probe;
 pub mod progress;
 mod thumbnail;
 
+pub use clip::trim_video;
 pub use filmstrip::generate_filmstrip_sprite;
 pub use probe::probe_video;
 pub use thumbnail::generate_thumbnail;

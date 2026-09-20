@@ -14,6 +14,20 @@ pub fn filmstrip_sprite_path(video_dir: &Path, id: &Uuid) -> PathBuf {
     video_dir.join(format!("{id}_filmstrip.jpg"))
 }
 
+/// A template's self-contained clip (SPEC-CLOUD.md §4) — derived from the
+/// template's own id, same convention as every other asset path here,
+/// rather than a separately stored key (see
+/// `0005_drop_template_asset_keys.sql`). Always `.mp4` regardless of the
+/// source video's extension — nothing needs this file to match the
+/// source's container format, it's re-encoded either way.
+pub fn template_clip_path(video_dir: &Path, template_id: &Uuid) -> PathBuf {
+    video_dir.join(format!("{template_id}_template.mp4"))
+}
+
+pub fn template_thumbnail_path(video_dir: &Path, template_id: &Uuid) -> PathBuf {
+    video_dir.join(format!("{template_id}_template_thumb.jpg"))
+}
+
 /// R2 object keys for a GIF export's three output formats (SPEC.md §6) —
 /// derived from the export id, sharing the same UUID across all three.
 pub fn gif_object_key(id: &Uuid) -> String {
@@ -69,6 +83,24 @@ mod tests {
         assert_eq!(
             filmstrip_sprite_path(dir, &id()),
             PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_filmstrip.jpg")
+        );
+    }
+
+    #[test]
+    fn template_clip_path_appends_template_suffix_and_is_always_mp4() {
+        let dir = Path::new("/data/videos");
+        assert_eq!(
+            template_clip_path(dir, &id()),
+            PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_template.mp4")
+        );
+    }
+
+    #[test]
+    fn template_thumbnail_path_appends_template_thumb_suffix() {
+        let dir = Path::new("/data/videos");
+        assert_eq!(
+            template_thumbnail_path(dir, &id()),
+            PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_template_thumb.jpg")
         );
     }
 

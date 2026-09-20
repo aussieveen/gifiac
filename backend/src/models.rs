@@ -116,6 +116,14 @@ pub struct Caption {
     /// value that reproduces the old (complained-about) spacing.
     #[serde(default = "default_line_height")]
     pub line_height: f64,
+    /// SPEC-CLOUD.md §4/§23: a locked caption is fully immutable to anyone
+    /// but the template's creator once templates can be shared — not yet
+    /// enforced (nothing but a template's own creator can reach it today,
+    /// see M3's plan notes), just persisted so a creator can mark intent
+    /// ahead of that. `#[serde(default)]` so existing/omitted payloads
+    /// deserialize as unlocked.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 fn default_caption_width() -> f64 {

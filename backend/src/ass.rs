@@ -259,6 +259,7 @@ mod tests {
             width: 0.6,
             outline_color: Some("#000000".to_string()),
             line_height: 0.65,
+            locked: false,
         }
     }
 

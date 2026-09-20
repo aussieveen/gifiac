@@ -724,6 +724,92 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     )
     .unwrap();
     assert_eq!(list_after[0]["has_template"], true);
+
+    // SPEC-CLOUD.md §4: saving a template trims the source video into its
+    // own independent clip file + a first-frame thumbnail, on disk right
+    // alongside the source video/thumbnail files.
+    let (clip_path, thumb_path) = template_asset_paths(&test_app);
+    assert!(clip_path.exists(), "expected a template clip file on disk");
+    assert!(thumb_path.exists(), "expected a template thumbnail file on disk");
+    let first_probe = gifiac_backend::ffmpeg::probe_video(&clip_path).unwrap();
+    assert!(
+        first_probe.duration_seconds < 2.0,
+        "template clip should be trimmed to ~1.5s, not the 2.0s source, got {}",
+        first_probe.duration_seconds
+    );
+
+    // Overwriting with a different range regenerates the same files in
+    // place (same template id — reused via `db::get_template_id`) rather
+    // than orphaning the previous save's.
+    let overwrite_body = serde_json::json!({
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 0.5,
+        "width": 480,
+        "height": 270
+    });
+    let overwrite_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri(format!("/api/videos/{id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(overwrite_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overwrite_response.status(), StatusCode::OK);
+    let (clip_path_after_overwrite, _) = template_asset_paths(&test_app);
+    assert_eq!(
+        clip_path, clip_path_after_overwrite,
+        "overwrite should reuse the same template id/file, not create a second one"
+    );
+    let second_probe = gifiac_backend::ffmpeg::probe_video(&clip_path).unwrap();
+    assert!(
+        second_probe.duration_seconds < first_probe.duration_seconds,
+        "overwrite should have regenerated the clip to the new, shorter range"
+    );
+
+    let delete_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}/template"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    assert!(!clip_path.exists(), "expected the template clip file to be removed");
+    assert!(!thumb_path.exists(), "expected the template thumbnail file to be removed");
+}
+
+/// Locates the template clip/thumbnail files written to `test_app`'s
+/// video dir by filename suffix — the API never exposes the template's
+/// internal id, so tests find the files the same way a human debugging
+/// this on a real box would.
+fn template_asset_paths(test_app: &common::TestApp) -> (std::path::PathBuf, std::path::PathBuf) {
+    let entries: Vec<_> = std::fs::read_dir(&test_app.video_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    let clip = entries
+        .iter()
+        .find(|e| e.file_name().to_string_lossy().ends_with("_template.mp4"))
+        .expect("expected a template clip file")
+        .path();
+    let thumb = entries
+        .iter()
+        .find(|e| e.file_name().to_string_lossy().ends_with("_template_thumb.jpg"))
+        .expect("expected a template thumbnail file")
+        .path();
+    (clip, thumb)
 }
 
 #[tokio::test]

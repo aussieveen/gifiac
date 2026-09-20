@@ -17,6 +17,11 @@ export interface Caption {
   width: number // 0-1 fractional box width, centered on x — controls text wrap
   outlineColor: string | null // hex, or null for no outline
   lineHeight: number // multiplier of fontSize -> gap between wrapped lines
+  // SPEC-CLOUD.md §4/§23: fully immutable to anyone but the template's
+  // creator once templates can be shared. Not yet enforced anywhere in
+  // the UI (no way to load a template you didn't create exists yet) —
+  // just persisted so a creator can mark intent ahead of that.
+  locked: boolean
 }
 
 // `videos` row shape returned by the backend (SPEC.md §2) — snake_case,
