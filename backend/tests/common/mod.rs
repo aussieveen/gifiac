@@ -149,7 +149,7 @@ async fn create_session_cookie(pool: &PgPool, email: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let user_id = uuid::Uuid::new_v4().to_string();
     let provider_user_id = uuid::Uuid::new_v4().to_string();
-    db::create_user_with_identity(pool, &user_id, &now, "google", &provider_user_id, Some(email), None)
+    db::create_user_with_identity(pool, &user_id, &now, "google", &provider_user_id, Some(email), None, None)
         .await
         .unwrap();
 

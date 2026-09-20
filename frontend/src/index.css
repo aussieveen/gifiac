@@ -675,6 +675,27 @@ button {
   align-items: flex-start;
 }
 
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.profile-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+}
+
+.profile-gif-tile {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #0d0e12;
+}
+
 .archive-grid {
   flex: 1;
   display: grid;

@@ -1,4 +1,4 @@
-import type { Caption, CurrentUser, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
+import type { Caption, CurrentUser, FilmstripMeta, Gif, Profile, TemplatePayload, Video } from './types'
 
 async function throwIfNotOk(input: string, response: Response): Promise<void> {
   if (response.ok) return
@@ -25,6 +25,20 @@ export function getCurrentUser(): Promise<CurrentUser | null> {
 export async function logout(): Promise<void> {
   const input = '/api/auth/logout'
   await throwIfNotOk(input, await fetch(input, { method: 'POST' }))
+}
+
+// SPEC-CLOUD.md §5: a handle can only ever be set once — a second call
+// 409s, which the caller surfaces as an error like any other failed request.
+export function setHandle(handle: string): Promise<CurrentUser> {
+  return request<CurrentUser>('/api/users/me/handle', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ handle }),
+  })
+}
+
+export function getProfile(handle: string): Promise<Profile> {
+  return request<Profile>(`/api/profiles/${encodeURIComponent(handle)}`)
 }
 
 export function listVideos(): Promise<Video[]> {

@@ -5,6 +5,10 @@ import type { CurrentUser } from './types'
 export interface UseCurrentUserResult {
   user: CurrentUser | null
   loading: boolean
+  // Exposed so a caller that already has a fresh `CurrentUser` from some
+  // other request (e.g. `setHandle`'s response) can update local state
+  // directly, without a redundant re-fetch of `/api/auth/me`.
+  setUser: (user: CurrentUser | null) => void
 }
 
 // SPEC-CLOUD.md §2: `GET /api/auth/me` is the frontend's only way to learn
@@ -31,5 +35,5 @@ export function useCurrentUser(): UseCurrentUserResult {
     }
   }, [])
 
-  return { user, loading }
+  return { user, loading, setUser }
 }

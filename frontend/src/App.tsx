@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, logout } from './api'
 import { CaptionEditor } from './CaptionEditor'
+import { HandlePicker } from './HandlePicker'
 import type { FilmstripMeta, Gif, Video } from './types'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
@@ -12,7 +13,7 @@ export default function App() {
   // SPEC-CLOUD.md §2: nothing else renders until we know whether there's
   // a valid session — this is intentionally minimal (no routing, no tab
   // bar yet) since the full nav redesign is a later milestone.
-  const { user, loading: authLoading } = useCurrentUser()
+  const { user, loading: authLoading, setUser } = useCurrentUser()
 
   // SPEC.md §8: the archive is the app's landing page — browsing/finding
   // existing GIFs is the more common action than starting a new one.
@@ -69,6 +70,10 @@ export default function App() {
         </a>
       </div>
     )
+  }
+
+  if (user.handle === null) {
+    return <HandlePicker suggestedHandle={user.suggestedHandle} onHandleSet={setUser} />
   }
 
   const nav = (

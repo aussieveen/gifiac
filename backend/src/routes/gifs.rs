@@ -37,7 +37,7 @@ pub struct GifResponse {
     webm_url: Option<String>,
 }
 
-fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppError> {
+pub(crate) fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppError> {
     if let Some(external_url) = gif.external_url.clone() {
         return Ok(GifResponse {
             gif_url: external_url,

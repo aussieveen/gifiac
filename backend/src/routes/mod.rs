@@ -1,12 +1,13 @@
 mod auth;
 mod exports;
-mod gifs;
+pub(crate) mod gifs;
+mod profiles;
 mod videos;
 
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 
 use crate::state::AppState;
 
@@ -16,6 +17,8 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/users/me/handle", put(profiles::set_handle))
+        .route("/profiles/{handle}", get(profiles::get_profile))
         .route(
             "/videos",
             get(videos::list_videos).post(videos::upload_video),

@@ -6,6 +6,7 @@ pub mod error;
 pub mod exports;
 pub mod ffmpeg;
 pub mod filmstrip_layout;
+pub mod handle;
 pub mod link_check;
 pub mod models;
 pub mod paths;

@@ -301,7 +301,7 @@ pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url";
+const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url, display_name";
 
 /// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a
 /// user — no merging by email, since Google is (for now) the only
@@ -341,15 +341,19 @@ pub async fn create_user_with_identity(
     provider_user_id: &str,
     email: Option<&str>,
     avatar_url: Option<&str>,
+    display_name: Option<&str>,
 ) -> Result<User> {
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO users (id, role, created_at, email, avatar_url) VALUES ($1, 'user', $2, $3, $4)")
-        .bind(user_id)
-        .bind(created_at)
-        .bind(email)
-        .bind(avatar_url)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO users (id, role, created_at, email, avatar_url, display_name) VALUES ($1, 'user', $2, $3, $4, $5)",
+    )
+    .bind(user_id)
+    .bind(created_at)
+    .bind(email)
+    .bind(avatar_url)
+    .bind(display_name)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("INSERT INTO identities (provider, provider_user_id, user_id) VALUES ($1, $2, $3)")
         .bind(provider)
         .bind(provider_user_id)
@@ -371,14 +375,58 @@ pub async fn update_user_profile_fields(
     user_id: &str,
     email: Option<&str>,
     avatar_url: Option<&str>,
+    display_name: Option<&str>,
 ) -> Result<()> {
-    sqlx::query("UPDATE users SET email = $1, avatar_url = $2 WHERE id = $3")
+    sqlx::query("UPDATE users SET email = $1, avatar_url = $2, display_name = $3 WHERE id = $4")
         .bind(email)
         .bind(avatar_url)
+        .bind(display_name)
         .bind(user_id)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Sets a user's handle exactly once — `false` covers both "already set"
+/// (the `WHERE handle IS NULL` matches no row) and "taken by someone
+/// else" (a unique-constraint violation, caught here rather than
+/// propagated) so the route can turn either into the same 409 without
+/// needing to tell them apart (SPEC-CLOUD.md §5: "locked permanently once
+/// set").
+pub async fn set_handle(pool: &PgPool, user_id: &str, handle: &str) -> Result<bool> {
+    let result = sqlx::query("UPDATE users SET handle = $1 WHERE id = $2 AND handle IS NULL")
+        .bind(handle)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+    match result {
+        Ok(result) => Ok(result.rows_affected() > 0),
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+pub async fn get_user_by_handle(pool: &PgPool, handle: &str) -> Result<Option<User>> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE handle = $1");
+    sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(handle)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// A user's public gifs (SPEC-CLOUD.md §5's profile page) — no owner
+/// check, this is the one gif-listing query meant to be reachable by
+/// anyone, scoped by `is_public` instead of by caller identity.
+pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Vec<Gif>> {
+    let sql = format!(
+        "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 AND is_public = true ORDER BY created_at DESC"
+    );
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn create_session(pool: &PgPool, id: &str, user_id: &str, now: &str) -> Result<()> {
@@ -1011,5 +1059,74 @@ mod tests {
             .await
             .unwrap();
         assert!(video_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_handle_succeeds_once_then_fails_even_with_a_different_value() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+
+        assert!(set_handle(&pool, &user, "simon").await.unwrap());
+        assert!(!set_handle(&pool, &user, "someone-else").await.unwrap());
+        assert_eq!(
+            get_user(&pool, &user).await.unwrap().unwrap().handle.as_deref(),
+            Some("simon")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_handle_fails_when_it_collides_with_another_users_handle() {
+        let pool = test_pool().await;
+        let first = seed_user(&pool).await;
+        let second = seed_user(&pool).await;
+
+        assert!(set_handle(&pool, &first, "taken").await.unwrap());
+        assert!(!set_handle(&pool, &second, "taken").await.unwrap());
+        assert!(get_user(&pool, &second).await.unwrap().unwrap().handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_user_by_handle_round_trips() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        set_handle(&pool, &user, "simon").await.unwrap();
+
+        let found = get_user_by_handle(&pool, "simon").await.unwrap().unwrap();
+        assert_eq!(found.id, user);
+        assert!(get_user_by_handle(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_public_gifs_by_user_only_returns_that_users_public_gifs() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("public", "a", "", &owner), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("private", "b", "", &owner), "2026-08-20T00:00:01Z")
+            .await
+            .unwrap();
+        insert_gif(
+            &pool,
+            &sample_gif("someone-elses-public", "c", "", &other),
+            "2026-08-20T00:00:02Z",
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE gifs SET is_public = true WHERE id = $1")
+            .bind("public")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE gifs SET is_public = true WHERE id = $1")
+            .bind("someone-elses-public")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let gifs = list_public_gifs_by_user(&pool, &owner).await.unwrap();
+        let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, vec!["public"]);
     }
 }

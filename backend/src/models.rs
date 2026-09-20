@@ -198,12 +198,18 @@ pub struct User {
     /// (see `0003_user_profile_fields.sql`).
     pub email: Option<String>,
     pub avatar_url: Option<String>,
+    /// SPEC-CLOUD.md §5: captured from the Google OAuth payload's `name`
+    /// field to seed the handle picker's suggested slug — not itself
+    /// shown anywhere.
+    pub display_name: Option<String>,
 }
 
 /// The shape of `GET /api/auth/me` — deliberately narrower than the full
 /// `User` row (no need to leak internal fields the frontend doesn't use
 /// yet), and the point at which a client learns its own `role` for
-/// admin-gating later (SPEC-CLOUD.md §7).
+/// admin-gating later (SPEC-CLOUD.md §7). `suggested_handle` is computed,
+/// not stored — only meaningful while `handle` is still `None`, see
+/// `routes::auth::me`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentUserView {
@@ -211,15 +217,22 @@ pub struct CurrentUserView {
     pub handle: Option<String>,
     pub role: String,
     pub avatar_url: Option<String>,
+    pub suggested_handle: Option<String>,
 }
 
 impl From<User> for CurrentUserView {
     fn from(user: User) -> Self {
+        let suggested_handle = user
+            .handle
+            .is_none()
+            .then(|| user.display_name.as_deref().map(crate::handle::slugify))
+            .flatten();
         Self {
             id: user.id,
             handle: user.handle,
             role: user.role,
             avatar_url: user.avatar_url,
+            suggested_handle,
         }
     }
 }
@@ -238,6 +251,7 @@ pub struct GoogleUserInfo {
     pub sub: String,
     pub email: Option<String>,
     pub picture: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

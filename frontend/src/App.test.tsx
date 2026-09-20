@@ -7,6 +7,7 @@ import type { FilmstripMeta, Video } from './types'
 vi.mock('./api', () => ({
   LOGIN_URL: '/api/auth/login',
   getCurrentUser: vi.fn(),
+  setHandle: vi.fn(),
   logout: vi.fn(),
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
@@ -33,12 +34,20 @@ import {
   getTemplate,
   listGifs,
   listVideos,
+  setHandle,
   subscribeExportProgress,
 } from './api'
 import type { ExportProgressHandlers } from './api'
 import type { CurrentUser } from './types'
 
-const loggedInUser: CurrentUser = { id: 'u1', handle: null, role: 'user', avatarUrl: null }
+const loggedInUser: CurrentUser = {
+  id: 'u1',
+  handle: 'testuser',
+  role: 'user',
+  avatarUrl: null,
+  suggestedHandle: null,
+}
+const userWithoutAHandle: CurrentUser = { ...loggedInUser, handle: null, suggestedHandle: 'sim-on' }
 
 const video: Video = {
   id: 'v1',
@@ -71,9 +80,27 @@ beforeEach(() => {
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
+  vi.mocked(setHandle).mockReset()
 })
 
 describe('App', () => {
+  it('shows the handle picker prefilled with the suggestion, and proceeds once set', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(userWithoutAHandle)
+    vi.mocked(setHandle).mockResolvedValue({ ...loggedInUser, handle: 'sim-on' })
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<App />)
+
+    const input = await screen.findByLabelText('Handle')
+    expect(input).toHaveValue('sim-on')
+
+    await user.click(screen.getByRole('button', { name: 'Confirm handle' }))
+
+    expect(setHandle).toHaveBeenCalledWith('sim-on')
+    await screen.findByText(/no gifs yet/i)
+  })
+
   it('starts on the archive', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     render(<App />)

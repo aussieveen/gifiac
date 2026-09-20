@@ -71,6 +71,7 @@ pub async fn callback(
                 &existing.id,
                 info.email.as_deref(),
                 info.picture.as_deref(),
+                info.name.as_deref(),
             )
             .await?;
             existing
@@ -85,6 +86,7 @@ pub async fn callback(
                 &info.sub,
                 info.email.as_deref(),
                 info.picture.as_deref(),
+                info.name.as_deref(),
             )
             .await?
         }

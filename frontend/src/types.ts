@@ -58,6 +58,18 @@ export interface CurrentUser {
   handle: string | null
   role: string
   avatarUrl: string | null
+  // SPEC-CLOUD.md §5: a slugified guess at a handle, computed server-side
+  // from the Google display name — only meaningful while `handle` is
+  // still null, to prefill the handle picker.
+  suggestedHandle: string | null
+}
+
+// GET /api/profiles/{handle} response shape (SPEC-CLOUD.md §5) —
+// camelCase, matching the backend's `ProfileResponse`.
+export interface Profile {
+  handle: string
+  avatarUrl: string | null
+  gifs: Gif[]
 }
 
 // GET /api/videos/{id}/filmstrip response shape (SPEC.md §5) — camelCase.
