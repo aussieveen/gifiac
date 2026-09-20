@@ -13,7 +13,7 @@ use crate::ass::generate_ass;
 use crate::ffmpeg::export as ffmpeg_export;
 use crate::models::{ExportRequest, Gif, NewGif, Video};
 use crate::state::AppState;
-use crate::{db, paths};
+use crate::{db, paths, source_video};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -60,7 +60,10 @@ async fn run_pipeline(
 ) -> anyhow::Result<Gif> {
     let clip_duration = request.gif_range_end - request.gif_range_start;
     let video_uuid = Uuid::parse_str(&video.id)?;
-    let video_path = paths::video_path(&state.config.video_dir, &video_uuid, &video.extension);
+    // SPEC-CLOUD.md §6: the source video's persistent home is a private
+    // S3 bucket, not local disk — re-fetches it if this instance doesn't
+    // already have a local copy cached.
+    let video_path = source_video::ensure_on_disk(state, &video_uuid, &video.extension).await?;
 
     // The captions are burned in *after* the video is scaled down (see
     // captioned_scale_filter's doc comment), so the ASS file's

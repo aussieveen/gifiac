@@ -87,6 +87,11 @@ finished GIFs/clips live in R2.
 | `GOOGLE_CLIENT_ID` | *(required)* | Google OAuth client id |
 | `GOOGLE_CLIENT_SECRET` | *(required)* | Google OAuth client secret |
 | `APP_BASE_URL` | *(required)* | Public site origin (e.g. `https://gifiac.example.com`) — builds the Google redirect URI and the post-login redirect target. `http://localhost:5173` in local dev; session cookies are only marked `Secure` when this is `https://` |
+| `SOURCE_VIDEOS_S3_ACCESS_KEY_ID` | *(required)* | Access key for the private source-video S3 bucket |
+| `SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY` | *(required)* | Secret key for the same bucket |
+| `SOURCE_VIDEOS_S3_BUCKET` | *(required)* | Bucket name |
+| `SOURCE_VIDEOS_S3_REGION` | *(required)* | AWS region the bucket lives in — also used to derive the S3 endpoint URL |
+| `SOURCE_VIDEOS_S3_ENDPOINT_URL` | *(optional)* | Overrides the derived endpoint — only set this in local dev, pointing at MinIO |
 
 The container listens on port `8080` internally; map it to whatever host
 port you like (`docker-compose.yml` maps `8123:8080` by default).
@@ -136,6 +141,13 @@ export R2_PUBLIC_BASE_URL=...
 export GOOGLE_CLIENT_ID=...        # real Google OAuth client — see
 export GOOGLE_CLIENT_SECRET=...    # SPEC-CLOUD.md §2 for the flow
 export APP_BASE_URL=http://localhost:5173
+# Same MinIO stand-in as above, but the private source-video bucket
+# (SPEC-CLOUD.md §6) — see backend/tests/common::test_source_storage.
+export SOURCE_VIDEOS_S3_ACCESS_KEY_ID=gifiac
+export SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
+export SOURCE_VIDEOS_S3_BUCKET=gifiac-source-videos-test
+export SOURCE_VIDEOS_S3_REGION=us-east-1
+export SOURCE_VIDEOS_S3_ENDPOINT_URL=http://localhost:19000
 
 cargo run
 ```
@@ -146,8 +158,9 @@ Schema migrations are applied automatically on startup against
 Backend tests (`cargo test`) need the same Postgres instance reachable —
 override its admin connection via `TEST_DATABASE_URL` if you're not using
 `docker-compose.dev.yml` — since each test creates and migrates its own
-throwaway database against it for isolation. Tests exercising R2 uploads
-need the MinIO service from that same compose file running too.
+throwaway database against it for isolation. Tests exercising R2 or
+source-video uploads need the MinIO service from that same compose file
+running too.
 
 Useful commands while working on the backend:
 

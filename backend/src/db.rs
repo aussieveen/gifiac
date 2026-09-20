@@ -230,20 +230,6 @@ pub async fn delete_gif(pool: &PgPool, id: &str, owner_id: &str) -> Result<bool>
     Ok(result.rows_affected() > 0)
 }
 
-/// Whether this video has a saved template — checked before deleting it
-/// (SPEC.md §12: "a video can only be deleted if it has no template",
-/// replacing the earlier "no GIFs were made from it" guard entirely).
-/// Not itself owner-scoped: every call site already resolved `video_id`
-/// through an owner-scoped `get_video` first, so by the time this runs
-/// the caller's ownership of the video is already established.
-pub async fn has_template(pool: &PgPool, video_id: &str) -> Result<bool> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM templates WHERE video_id = $1")
-        .bind(video_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(count > 0)
-}
-
 pub async fn delete_video(pool: &PgPool, id: &str, owner_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM videos WHERE id = $1 AND user_id = $2")
         .bind(id)
@@ -893,23 +879,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn has_template_reports_true_only_after_a_template_is_saved() {
-        let pool = test_pool().await;
-        let user = seed_user(&pool).await;
-        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
-            .await
-            .unwrap();
-
-        assert!(!has_template(&pool, "v1").await.unwrap());
-
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
-            .await
-            .unwrap();
-
-        assert!(has_template(&pool, "v1").await.unwrap());
-    }
-
-    #[tokio::test]
     async fn get_template_returns_none_when_no_template_is_saved() {
         let pool = test_pool().await;
         assert!(get_template(&pool, "v1").await.unwrap().is_none());
@@ -1014,5 +983,33 @@ mod tests {
 
         assert!(!delete_video(&pool, "v1", &other).await.unwrap());
         assert!(get_video(&pool, "v1", &owner).await.unwrap().is_some());
+    }
+
+    /// M4: deleting a video no longer needs to be blocked by a saved
+    /// template (SPEC-CLOUD.md §6 supersedes SPEC.md §12's guard) — the
+    /// template is a self-contained clipped asset (M3) that outlives its
+    /// source video, via `templates.video_id`'s `ON DELETE SET NULL`
+    /// (migration `0006_template_video_id_nullable.sql`).
+    #[tokio::test]
+    async fn deleting_a_video_survives_and_nulls_out_its_templates_video_id() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        assert!(delete_video(&pool, "v1", &user).await.unwrap());
+
+        // The template row itself survives, payload intact — just no
+        // longer pointing at a video that no longer exists.
+        let video_id: Option<String> = sqlx::query_scalar("SELECT video_id FROM templates WHERE id = $1")
+            .bind("t1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(video_id.is_none());
     }
 }

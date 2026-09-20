@@ -11,6 +11,7 @@ pub mod models;
 pub mod paths;
 pub mod routes;
 pub mod scale;
+pub mod source_video;
 pub mod state;
 pub mod storage;
 
@@ -50,9 +51,18 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let storage = storage::Storage::new(
         &r2.endpoint_url(),
         &r2.bucket_name,
-        &r2.public_base_url,
+        Some(&r2.public_base_url),
         &r2.access_key_id,
         &r2.secret_access_key,
+    );
+
+    let source_videos = storage::SourceStorageConfig::from_env()?;
+    let source_storage = storage::Storage::new(
+        &source_videos.endpoint_url(),
+        &source_videos.bucket_name,
+        None,
+        &source_videos.access_key_id,
+        &source_videos.secret_access_key,
     );
 
     let http_client = link_check::build_client()?;
@@ -62,6 +72,7 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         pool,
         config,
         storage,
+        source_storage,
         http_client,
         google_auth,
         export_jobs: Default::default(),

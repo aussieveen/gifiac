@@ -28,6 +28,14 @@ pub fn template_thumbnail_path(video_dir: &Path, template_id: &Uuid) -> PathBuf 
     video_dir.join(format!("{template_id}_template_thumb.jpg"))
 }
 
+/// The private source-video S3 bucket's object key (SPEC-CLOUD.md §6) —
+/// the `raw/` prefix is what the 7-day lifecycle rule targets, kept
+/// separate from the (not-yet-migrated, see M4's plan notes) template-clip
+/// prefix so that rule can't reach the wrong asset class.
+pub fn video_object_key(id: &Uuid, extension: &str) -> String {
+    format!("raw/{id}.{extension}")
+}
+
 /// R2 object keys for a GIF export's three output formats (SPEC.md §6) —
 /// derived from the export id, sharing the same UUID across all three.
 pub fn gif_object_key(id: &Uuid) -> String {
@@ -117,6 +125,14 @@ mod tests {
         assert_eq!(
             webm_object_key(&id()),
             "clips/11111111-1111-4111-8111-111111111111.webm"
+        );
+    }
+
+    #[test]
+    fn video_object_key_uses_the_raw_prefix_and_the_videos_own_extension() {
+        assert_eq!(
+            video_object_key(&id(), "mov"),
+            "raw/11111111-1111-4111-8111-111111111111.mov"
         );
     }
 }

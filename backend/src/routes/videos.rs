@@ -18,6 +18,7 @@ use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
 use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListItem};
 use crate::paths;
+use crate::source_video;
 use crate::state::AppState;
 
 /// Looks up a video by its (string) path-param id, scoped to `owner_id`
@@ -112,6 +113,36 @@ pub async fn upload_video(
         )));
     }
 
+    // SPEC-CLOUD.md §6: the video's persistent home is the private S3
+    // bucket, not local disk — pushed here, then the local copy is
+    // deleted; a later read re-fetches it on demand (see
+    // `source_video::ensure_on_disk`). The thumbnail stays local (small,
+    // regenerable from the video if it's ever missing — see
+    // `get_thumbnail`).
+    // Content type doesn't matter functionally here — nothing serves this
+    // object directly to a browser (playback always proxies through
+    // `GET /api/videos/{id}/file`, which derives its own content type from
+    // the local file) — but the source can be any video container, not
+    // just mp4, so a generic type is more honest than guessing wrong.
+    if let Err(err) = state
+        .source_storage
+        .upload_file(
+            &paths::video_object_key(&id, &extension),
+            &video_path,
+            "application/octet-stream",
+        )
+        .await
+    {
+        remove_partial_upload(&video_path, "uploading to source video storage failed").await;
+        remove_partial_upload(&thumb_path, "uploading to source video storage failed").await;
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "failed to upload video to object storage: {err}"
+        )));
+    }
+    if let Err(err) = tokio::fs::remove_file(&video_path).await {
+        tracing::warn!(path = %video_path.display(), error = %err, "failed to remove local copy after uploading to object storage");
+    }
+
     let new_video = NewVideo {
         id: id.to_string(),
         original_filename,
@@ -146,14 +177,28 @@ pub async fn get_video(
     Ok(Json(video))
 }
 
+/// Generate-if-missing, same pattern `get_filmstrip_image` already uses
+/// for its sprite — the thumbnail is cheap to regenerate from the source
+/// video and was never itself pushed to S3, so it isn't guaranteed to
+/// survive an instance replacement the way the video it's derived from is
+/// (SPEC-CLOUD.md §6).
 pub async fn get_thumbnail(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let (uuid, _video) = load_video(&state, &id, &user.id).await?;
+    let (uuid, video) = load_video(&state, &id, &user.id).await?;
 
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
+    if !tokio::fs::try_exists(&thumb_path).await.unwrap_or(false) {
+        let video_path = source_video::ensure_on_disk(&state, &uuid, &video.extension)
+            .await
+            .map_err(AppError::Internal)?;
+        ffmpeg::generate_thumbnail(&video_path, &thumb_path, video.duration_seconds)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to regenerate thumbnail: {e}")))?;
+    }
+
     let bytes = tokio::fs::read(&thumb_path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -164,7 +209,9 @@ pub async fn get_thumbnail(
 /// so HTTP Range requests work (required for smooth seeking in an HTML5
 /// `<video>` element — the caption editor's live preview plays this
 /// directly, per the "play the clip with captions to line up timing"
-/// feature).
+/// feature). SPEC-CLOUD.md §6: the video's persistent home is a private
+/// S3 bucket, not local disk — `ensure_on_disk` re-fetches it if this
+/// instance doesn't already have a local copy cached.
 pub async fn get_video_file(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
@@ -172,7 +219,9 @@ pub async fn get_video_file(
     request: Request,
 ) -> Result<Response, AppError> {
     let (uuid, video) = load_video(&state, &id, &user.id).await?;
-    let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
+    let video_path = source_video::ensure_on_disk(&state, &uuid, &video.extension)
+        .await
+        .map_err(AppError::Internal)?;
 
     // ServeFile's Service is Infallible — a missing/unreadable file
     // produces a 404/500 *response*, not an Err, so `.unwrap()` here can
@@ -200,10 +249,13 @@ pub async fn get_filmstrip_meta(
     }))
 }
 
-/// SPEC.md §12 replaced the original guard ("no GIFs were made from it")
-/// entirely: a video can now only be deleted if it has **no template** —
-/// deleting one out from under GIFs made from it is accepted, but deleting
-/// a video whose saved template would silently vanish is not.
+/// SPEC.md §12's original guard ("no GIFs were made from it") was already
+/// replaced by SPEC-CLOUD.md §4/§6 — a video can be deleted freely
+/// regardless of GIFs or a saved template made from it. A template is a
+/// self-contained clipped asset (M3) that doesn't depend on the source
+/// video continuing to exist (`templates.video_id` is nullable, `ON
+/// DELETE SET NULL` — migration `0006_template_video_id_nullable.sql`),
+/// so deleting the video can't orphan or break it.
 pub async fn delete_video(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
@@ -211,13 +263,15 @@ pub async fn delete_video(
 ) -> Result<StatusCode, AppError> {
     let (uuid, video) = load_video(&state, &id, &user.id).await?;
 
-    if db::has_template(&state.pool, &id).await? {
-        return Err(AppError::Conflict(
-            "can't delete: this video has a saved template".to_string(),
-        ));
-    }
-
     db::delete_video(&state.pool, &id, &user.id).await?;
+
+    if let Err(err) = state
+        .source_storage
+        .delete_object(&paths::video_object_key(&uuid, &video.extension))
+        .await
+    {
+        tracing::warn!(id = %uuid, error = %err, "failed to remove object storage copy of deleted video");
+    }
 
     let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
@@ -253,7 +307,9 @@ pub async fn get_filmstrip_image(
         }
     };
     if !sprite_exists {
-        let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
+        let video_path = source_video::ensure_on_disk(&state, &uuid, &video.extension)
+            .await
+            .map_err(AppError::Internal)?;
         let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
         ffmpeg::generate_filmstrip_sprite(&video_path, &sprite_path, &layout)
             .await
@@ -305,7 +361,9 @@ pub async fn put_template(
         None => Uuid::new_v4(),
     };
 
-    let source_path = paths::video_path(&state.config.video_dir, &video_uuid, &video.extension);
+    let source_path = source_video::ensure_on_disk(&state, &video_uuid, &video.extension)
+        .await
+        .map_err(AppError::Internal)?;
     let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
     let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
 

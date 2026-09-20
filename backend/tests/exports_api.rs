@@ -58,6 +58,12 @@ async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> serd
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Doubles as the export pipeline's coverage of SPEC-CLOUD.md §6's local
+/// cache: `upload_video` already deletes the source video's local copy
+/// right after upload (M4), so this test only passes if `run_pipeline`'s
+/// `source_video::ensure_on_disk` successfully re-fetches it from object
+/// storage before burning in captions — the real regression case that
+/// milestone exists to prevent.
 #[tokio::test]
 async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     let test_app = spawn_app().await;

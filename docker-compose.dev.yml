@@ -40,8 +40,11 @@ services:
       - gifiac-dev-minio-data:/data
 
   # One-shot: creates the `gifiac-test` bucket and makes it public-read
-  # (matching R2's bucket policy, SPEC.md §9), then exits. Safe to re-run
-  # (`--ignore-existing`) on every `docker compose up`.
+  # (matching R2's bucket policy, SPEC.md §9), plus `gifiac-source-videos-test`
+  # — the private stand-in for the source-video S3 bucket (SPEC-CLOUD.md
+  # §6, see backend/tests/common::test_source_storage) — left *without*
+  # a public policy, matching the real bucket's privacy. Exits after.
+  # Safe to re-run (`--ignore-existing`) on every `docker compose up`.
   minio-init:
     image: minio/mc
     container_name: gifiac-dev-minio-init
@@ -53,6 +56,7 @@ services:
         until mc alias set local http://minio:9000 gifiac gifiac-test-secret; do sleep 1; done
         mc mb --ignore-existing local/gifiac-test
         mc anonymous set public local/gifiac-test
+        mc mb --ignore-existing local/gifiac-source-videos-test
     restart: "no"
 
 volumes:

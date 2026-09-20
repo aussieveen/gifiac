@@ -32,7 +32,21 @@ pub fn test_storage() -> Storage {
     Storage::new(
         "http://localhost:19000",
         "gifiac-test",
-        "http://localhost:19000/gifiac-test",
+        Some("http://localhost:19000/gifiac-test"),
+        "gifiac",
+        "gifiac-test-secret",
+    )
+}
+
+/// Same MinIO instance, standing in for the private source-video S3
+/// bucket (SPEC-CLOUD.md §6) — a separate, non-public bucket so tests
+/// exercise the real "no public URL" shape too (`public_base_url: None`).
+#[allow(dead_code)]
+pub fn test_source_storage() -> Storage {
+    Storage::new(
+        "http://localhost:19000",
+        "gifiac-source-videos-test",
+        None,
         "gifiac",
         "gifiac-test-secret",
     )
@@ -50,6 +64,7 @@ pub struct TestApp {
     pub app: Router,
     pub video_dir: PathBuf,
     pub storage: Storage,
+    pub source_storage: Storage,
     /// Kept alongside the copy moved into `AppState` so `login_as` can
     /// write `users`/`sessions` rows directly — `PgPool` is a cheap
     /// `Arc`-backed handle, so cloning it doesn't open a second pool.
@@ -83,11 +98,13 @@ pub async fn spawn_app() -> TestApp {
     };
 
     let storage = test_storage();
+    let source_storage = test_source_storage();
     let http_client = gifiac_backend::link_check::build_client().unwrap();
     let state = Arc::new(AppState {
         pool: pool.clone(),
         config,
         storage: storage.clone(),
+        source_storage: source_storage.clone(),
         http_client,
         google_auth: test_google_auth(),
         export_jobs: Default::default(),
@@ -98,6 +115,7 @@ pub async fn spawn_app() -> TestApp {
         app,
         video_dir,
         storage,
+        source_storage,
         pool,
         owner_cookie,
         _tempdir: tempdir,

@@ -14,6 +14,10 @@ pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
     pub storage: Storage,
+    /// The private bucket source videos live in (SPEC-CLOUD.md §6) —
+    /// distinct from `storage`, which is the public R2 bucket finished
+    /// GIF/clip outputs go to.
+    pub source_storage: Storage,
     pub google_auth: GoogleAuthConfig,
     /// Shared client for the light URL sanity check behind linked GIFs
     /// (SPEC.md §13, see link_check.rs) — reused across requests rather

@@ -136,6 +136,230 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
     assert!(!sprite_bytes.is_empty());
 }
 
+/// SPEC-CLOUD.md §6: the video's persistent home is the private
+/// source-video S3 bucket, not local disk.
+#[tokio::test]
+async fn upload_pushes_the_video_to_object_storage_and_removes_the_local_copy() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    assert!(
+        !test_app.video_dir.join(format!("{id}.mp4")).exists(),
+        "expected no local video file left behind after upload"
+    );
+
+    let scratch = TempDir::new().unwrap();
+    test_app
+        .source_storage
+        .download_file(&format!("raw/{id}.mp4"), &scratch.path().join("downloaded.mp4"))
+        .await
+        .expect("expected the uploaded video to be present in object storage");
+}
+
+/// The local copy is deleted right after upload (see above) — this
+/// proves `GET /file` re-fetches it from object storage instead of 404ing.
+#[tokio::test]
+async fn get_video_file_still_works_after_the_local_copy_is_gone() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes.clone());
+
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let uploaded: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = uploaded["id"].as_str().unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{id}/file"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(bytes.len(), video_bytes.len());
+    assert!(
+        test_app.video_dir.join(format!("{id}.mp4")).exists(),
+        "expected the re-fetched copy to be cached locally"
+    );
+}
+
+/// The upload-time thumbnail is a plain local file, never pushed to S3 —
+/// if it's missing (e.g. after an instance replacement), `GET /thumbnail`
+/// regenerates it from the source video instead of 404ing, the same
+/// generate-if-missing pattern `get_filmstrip_image` already uses.
+#[tokio::test]
+async fn get_thumbnail_regenerates_if_the_local_copy_is_missing() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let uploaded: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = uploaded["id"].as_str().unwrap();
+
+    let thumb_path = test_app.video_dir.join(format!("{id}_thumb.jpg"));
+    assert!(thumb_path.exists(), "expected the upload-time thumbnail to exist");
+    std::fs::remove_file(&thumb_path).unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{id}/thumbnail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(!bytes.is_empty());
+    assert!(thumb_path.exists(), "expected the thumbnail to be regenerated on disk");
+}
+
+/// SPEC-CLOUD.md §6: deleting a video removes its object storage copy too.
+#[tokio::test]
+async fn delete_video_removes_the_object_storage_copy() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let uploaded: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = uploaded["id"].as_str().unwrap();
+    let key = format!("raw/{id}.mp4");
+
+    let scratch = TempDir::new().unwrap();
+    test_app
+        .source_storage
+        .download_file(&key, &scratch.path().join("before.mp4"))
+        .await
+        .expect("expected the video to exist in object storage before deletion");
+
+    let delete_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("DELETE")
+                .uri(format!("/api/videos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let after = test_app
+        .source_storage
+        .download_file(&key, &scratch.path().join("after.mp4"))
+        .await;
+    assert!(
+        after.is_err(),
+        "expected the object storage copy to be removed after deleting the video"
+    );
+}
+
 #[tokio::test]
 async fn upload_accepts_a_file_well_over_axums_default_2mb_body_limit() {
     let test_app = spawn_app().await;
@@ -475,8 +699,13 @@ async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
     assert!(gif_after["video_id"].is_null());
 }
 
+/// SPEC-CLOUD.md §6 supersedes SPEC.md §12's old guard entirely: a video
+/// can be deleted freely even with a saved template, since M3 made a
+/// template a self-contained clipped asset that doesn't depend on the
+/// source video continuing to exist (`templates.video_id` is nullable,
+/// `ON DELETE SET NULL` — migration `0006_template_video_id_nullable.sql`).
 #[tokio::test]
-async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
+async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_survives() {
     let test_app = spawn_app().await;
     let fixture_dir = TempDir::new().unwrap();
     let video_path = make_test_video(fixture_dir.path(), 2.0);
@@ -527,6 +756,7 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         .await
         .unwrap();
     assert_eq!(put_response.status(), StatusCode::OK);
+    let (clip_path, thumb_path) = template_asset_paths(&test_app);
 
     let delete_response = test_app
         .app
@@ -540,36 +770,26 @@ async fn delete_video_is_rejected_with_409_when_it_has_a_template() {
         )
         .await
         .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::CONFLICT);
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
-    // Removing the template first clears the way to delete the video.
-    let delete_template_response = test_app
+    let get_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .method("DELETE")
-                .uri(format!("/api/videos/{id}/template"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(delete_template_response.status(), StatusCode::NO_CONTENT);
-
-    let delete_response2 = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("DELETE")
                 .uri(format!("/api/videos/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(delete_response2.status(), StatusCode::NO_CONTENT);
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+
+    // The template's own clip/thumbnail files are untouched by the
+    // video's deletion — a self-contained asset, not derived at read time
+    // from the source video.
+    assert!(clip_path.exists(), "template clip should survive the source video's deletion");
+    assert!(thumb_path.exists(), "template thumbnail should survive the source video's deletion");
 }
 
 #[tokio::test]
@@ -846,6 +1066,7 @@ async fn list_and_get_video_with_no_session_cookie_is_rejected() {
 
     let get_response = test_app
         .app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/videos/00000000-0000-0000-0000-000000000000")
@@ -909,6 +1130,7 @@ async fn a_second_user_cannot_see_or_fetch_the_first_users_video() {
 
     let list_response = test_app
         .app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/videos")
