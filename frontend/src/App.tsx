@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AdminPage } from './AdminPage'
 import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, logout } from './api'
 import { CaptionEditor } from './CaptionEditor'
@@ -8,7 +9,7 @@ import type { FilmstripMeta, Gif, Video } from './types'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
 
-type View = 'videos' | 'archive' | 'library'
+type View = 'videos' | 'archive' | 'library' | 'admin'
 
 export default function App() {
   // SPEC-CLOUD.md §2: nothing else renders until we know whether there's
@@ -88,6 +89,13 @@ export default function App() {
       <button className={`app-nav-btn ${view === 'library' ? 'active' : ''}`} onClick={() => setView('library')}>
         Global Library
       </button>
+      {/* SPEC-CLOUD.md §7/§9: only rendered for an admin — the full nav
+          redesign's tab bar will do this same role check permanently. */}
+      {user.role === 'admin' && (
+        <button className={`app-nav-btn ${view === 'admin' ? 'active' : ''}`} onClick={() => setView('admin')}>
+          Admin
+        </button>
+      )}
       <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
         Sign out
       </button>
@@ -108,6 +116,15 @@ export default function App() {
       <>
         {nav}
         <Library />
+      </>
+    )
+  }
+
+  if (view === 'admin') {
+    return (
+      <>
+        {nav}
+        <AdminPage />
       </>
     )
   }

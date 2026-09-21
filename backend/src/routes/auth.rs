@@ -66,6 +66,12 @@ pub async fn callback(
     let now = Utc::now().to_rfc3339();
     let user = match db::find_user_by_identity(&state.pool, "google", &info.sub).await? {
         Some(existing) => {
+            // SPEC-CLOUD.md §7: disabling "blocks further login" — a
+            // brand-new user (the `None` branch below) can't be disabled
+            // yet, so this only ever applies to an existing account.
+            if existing.disabled {
+                return Err(AppError::Forbidden("account disabled".to_string()));
+            }
             db::update_user_profile_fields(
                 &state.pool,
                 &existing.id,

@@ -77,6 +77,29 @@ button {
   color: #999;
 }
 
+.admin-users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-users-table th {
+  text-align: left;
+  color: #888;
+  font-weight: normal;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a2c34;
+}
+
+.admin-users-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1e2028;
+}
+
+.admin-user-disabled {
+  opacity: 0.5;
+}
+
 .back-link {
   background: transparent;
   border: none;

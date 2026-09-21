@@ -132,6 +132,28 @@ pub async fn login_as(test_app: &TestApp, email: &str) -> String {
     create_session_cookie(&test_app.pool, email).await
 }
 
+/// Like `login_as`, but promotes the created user to `role = 'admin'`
+/// first (SPEC-CLOUD.md §7) via a direct SQL update — there's no API to
+/// become an admin (see the M6 plan's "admin bootstrapping" note), so this
+/// is the same test-only bypass spirit `login_as` already applies to real
+/// OAuth.
+#[allow(dead_code)]
+pub async fn login_as_admin(test_app: &TestApp, email: &str) -> String {
+    let cookie = create_session_cookie(&test_app.pool, email).await;
+    let session_id = cookie.strip_prefix(&format!("{SESSION_COOKIE_NAME}=")).unwrap();
+    let user_id: String = sqlx::query_scalar("SELECT user_id FROM sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET role = 'admin' WHERE id = $1")
+        .bind(&user_id)
+        .execute(&test_app.pool)
+        .await
+        .unwrap();
+    cookie
+}
+
 /// Attaches `test_app`'s default owner's session cookie to a request
 /// builder — SPEC-CLOUD.md §3 gates every video/gif/export route behind
 /// login now, so this is what almost every request in these suites needs.

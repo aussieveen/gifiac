@@ -117,7 +117,7 @@ pub async fn set_template_public(
 ) -> Result<Json<TemplateVisibilityResponse>, AppError> {
     let template = db::get_template_by_id(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
     if template.user_id != user.id {
-        return Err(AppError::Forbidden);
+        return Err(AppError::Forbidden("not the creator of this template".to_string()));
     }
     let updated = db::set_template_public(&state.pool, &id, &user.id, body.is_public)
         .await?

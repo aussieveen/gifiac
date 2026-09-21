@@ -129,3 +129,17 @@ export interface LibraryEntry extends Gif {
 // `GET /api/library?sort=` (SPEC-CLOUD.md §8) — matching the backend's
 // `LibrarySort`, kebab-case on the wire.
 export type LibrarySort = 'newest' | 'most-used'
+
+// GET /api/admin/users response row (SPEC-CLOUD.md §7) — snake_case,
+// matching the backend's `AdminUserView`.
+export interface AdminUserView {
+  id: string
+  handle: string | null
+  email: string | null
+  avatar_url: string | null
+  role: string
+  disabled: boolean
+  created_at: string
+  gif_count: number
+  latest_gif_at: string | null
+}

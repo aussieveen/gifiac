@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod exports;
 pub(crate) mod gifs;
@@ -8,7 +9,7 @@ mod videos;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 
 use crate::state::AppState;
 
@@ -58,4 +59,12 @@ pub fn api_router() -> Router<Arc<AppState>> {
         )
         .route("/templates/{id}/clip", get(templates::get_template_clip))
         .route("/templates/{id}/thumbnail", get(templates::get_template_thumbnail))
+        .route("/admin/users", get(admin::list_users))
+        .route("/admin/users/{id}", patch(admin::set_user_disabled))
+        .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))
+        .route("/admin/users/{id}/templates", get(admin::list_user_templates))
+        .route("/admin/gifs/{id}", delete(admin::delete_gif))
+        .route("/admin/gifs/{id}/unpublish", post(admin::unpublish_gif))
+        .route("/admin/templates/{id}", delete(admin::delete_template))
+        .route("/admin/templates/{id}/unpublish", post(admin::unpublish_template))
 }

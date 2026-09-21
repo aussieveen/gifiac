@@ -170,6 +170,32 @@ impl FromRequestParts<Arc<AppState>> for CurrentUser {
     }
 }
 
+/// The signed-in *admin* user for a request (SPEC-CLOUD.md §7) — built on
+/// `CurrentUser`, so a missing/invalid session still 401s exactly as it
+/// does there. A valid session belonging to a non-admin 403s instead of
+/// 404ing: unlike an ownership check on a private resource, there's
+/// nothing to hide about an admin route's existence.
+pub struct AdminUser(pub User);
+
+impl std::ops::Deref for AdminUser {
+    type Target = User;
+    fn deref(&self) -> &User {
+        &self.0
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for AdminUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+        let CurrentUser(user) = CurrentUser::from_request_parts(parts, state).await?;
+        if user.role != "admin" {
+            return Err(AppError::Forbidden("admin only".to_string()));
+        }
+        Ok(AdminUser(user))
+    }
+}
+
 /// Same lookup as `CurrentUser`, but never rejects — `None` when logged
 /// out. For endpoints like `/api/auth/me` that behave differently rather
 /// than requiring login.

@@ -1,4 +1,5 @@
 import type {
+  AdminUserView,
   Caption,
   CurrentUser,
   FilmstripMeta,
@@ -249,4 +250,19 @@ export function putTemplate(videoId: string, payload: TemplatePayload): Promise<
 export async function deleteTemplate(videoId: string): Promise<void> {
   const input = `/api/videos/${videoId}/template`
   await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+}
+
+// Admin area per SPEC-CLOUD.md §7 — every user plus per-user usage stats,
+// and the one urgent action (disable/re-enable) if a bad actor shows up.
+
+export function listAdminUsers(): Promise<AdminUserView[]> {
+  return request<AdminUserView[]>('/api/admin/users')
+}
+
+export function setUserDisabled(id: string, disabled: boolean): Promise<{ id: string; disabled: boolean }> {
+  return request<{ id: string; disabled: boolean }>(`/api/admin/users/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disabled }),
+  })
 }

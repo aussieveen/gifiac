@@ -3,8 +3,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
 use crate::models::{
-    Gif, LibrarySort, NewGif, NewVideo, PublicGif, PublicTemplate, Session, Template, TemplatePayload, User, Video,
-    VideoListItem, VideoTemplate,
+    AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PublicGif, PublicTemplate, Session, Template, TemplatePayload,
+    User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -385,7 +385,7 @@ pub async fn increment_template_use_count(pool: &PgPool, id: &str) -> Result<Opt
         .map_err(Into::into)
 }
 
-const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url, display_name";
+const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url, display_name, disabled";
 
 /// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a
 /// user — no merging by email, since Google is (for now) the only
@@ -469,6 +469,117 @@ pub async fn update_user_profile_fields(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Admin-only (SPEC-CLOUD.md §7): flips the disabled flag, blocking
+/// further login (checked in `routes::auth::callback`). No owner scoping —
+/// there's no "owner" of an account other than the admin acting on it;
+/// authorization is enforced by the `AdminUser` extractor at the route
+/// layer, not here.
+pub async fn set_user_disabled(pool: &PgPool, id: &str, disabled: bool) -> Result<Option<User>> {
+    let sql = format!("UPDATE users SET disabled = $1 WHERE id = $2 RETURNING {USER_COLUMNS}");
+    sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(disabled)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// The actual mechanism behind "disable revokes the user's sessions"
+/// (SPEC-CLOUD.md §7) — `CurrentUser`'s existing session-lookup-fails-401
+/// behavior does the rest, immediately, on the next request.
+pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// `GET /api/admin/users` (SPEC-CLOUD.md §7) — every user plus per-user
+/// usage stats, to spot the heaviest users ahead of ever needing quotas.
+pub async fn admin_list_users(pool: &PgPool) -> Result<Vec<AdminUserView>> {
+    let sql = "SELECT users.id, users.handle, users.email, users.avatar_url, users.role, users.disabled, \
+         users.created_at, COUNT(gifs.id) AS gif_count, MAX(gifs.created_at) AS latest_gif_at \
+         FROM users LEFT JOIN gifs ON gifs.user_id = users.id \
+         GROUP BY users.id ORDER BY users.created_at DESC";
+    sqlx::query_as::<_, AdminUserView>(sql)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Admin visibility into any user's gifs/templates (SPEC-CLOUD.md §7) —
+/// same shape as `list_public_gifs_by_user`/a plain per-video template
+/// list, but with no `is_public` filter: an admin sees private content
+/// too, which is the entire point.
+pub async fn admin_list_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Vec<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 ORDER BY created_at DESC");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn admin_list_templates_by_user(pool: &PgPool, user_id: &str) -> Result<Vec<Template>> {
+    let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE user_id = $1 ORDER BY saved_at DESC");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Like `get_gif`, but admin-scoped — no owner filter (SPEC-CLOUD.md §7:
+/// "delete/unpublish any gif").
+pub async fn admin_get_gif(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = $1");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Like `delete_gif`, but admin-scoped — no owner filter.
+pub async fn admin_delete_gif(pool: &PgPool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM gifs WHERE id = $1").bind(id).execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Like `set_gif_public`, but admin-scoped and one-directional — an admin
+/// only ever takes content *down* (SPEC-CLOUD.md §7's "unpublish"), never
+/// publishes someone else's private content on their behalf.
+pub async fn admin_unpublish_gif(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET is_public = false WHERE id = $1 RETURNING {GIF_COLUMNS}");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Deletes a template by its own id, admin-scoped, no owner filter —
+/// distinct from `delete_template`, which is video-id-scoped for the
+/// owner's own video-nested flow.
+pub async fn admin_delete_template(pool: &PgPool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM templates WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Like `admin_unpublish_gif`, for templates.
+pub async fn admin_unpublish_template(pool: &PgPool, id: &str) -> Result<Option<Template>> {
+    let sql = format!("UPDATE templates SET is_public = false WHERE id = $1 RETURNING {TEMPLATE_COLUMNS}");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
 }
 
 /// Sets a user's handle exactly once — `false` covers both "already set"
@@ -1366,6 +1477,122 @@ mod tests {
         let found = get_user_by_handle(&pool, "simon").await.unwrap().unwrap();
         assert_eq!(found.id, user);
         assert!(get_user_by_handle(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_disabled_flips_and_persists() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        assert!(!get_user(&pool, &user).await.unwrap().unwrap().disabled);
+
+        let disabled = set_user_disabled(&pool, &user, true).await.unwrap().unwrap();
+        assert!(disabled.disabled);
+        assert!(get_user(&pool, &user).await.unwrap().unwrap().disabled);
+
+        let enabled = set_user_disabled(&pool, &user, false).await.unwrap().unwrap();
+        assert!(!enabled.disabled);
+
+        assert!(set_user_disabled(&pool, "missing", true).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_sessions_for_user_only_removes_that_users_sessions() {
+        let pool = test_pool().await;
+        let target = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        create_session(&pool, "sess-target", &target, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        create_session(&pool, "sess-other", &other, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        delete_sessions_for_user(&pool, &target).await.unwrap();
+
+        assert!(get_session(&pool, "sess-target").await.unwrap().is_none());
+        assert!(get_session(&pool, "sess-other").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn admin_list_users_reports_gif_count_and_latest_gif_at() {
+        let pool = test_pool().await;
+        let active = seed_user(&pool).await;
+        let idle = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("g1", "a", "", &active), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("g2", "b", "", &active), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+
+        let users = admin_list_users(&pool).await.unwrap();
+        let active_row = users.iter().find(|u| u.id == active).unwrap();
+        assert_eq!(active_row.gif_count, 2);
+        assert_eq!(active_row.latest_gif_at.as_deref(), Some("2026-08-21T00:00:00Z"));
+
+        let idle_row = users.iter().find(|u| u.id == idle).unwrap();
+        assert_eq!(idle_row.gif_count, 0);
+        assert!(idle_row.latest_gif_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_list_gifs_by_user_includes_private_gifs() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("mine", "a", "", &owner), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("theirs", "b", "", &other), "2026-08-20T00:00:01Z")
+            .await
+            .unwrap();
+
+        let gifs = admin_list_gifs_by_user(&pool, &owner).await.unwrap();
+        let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
+        // Private (never made public) but still visible to the admin.
+        assert_eq!(ids, vec!["mine"]);
+    }
+
+    #[tokio::test]
+    async fn admin_gif_functions_ignore_ownership() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("g1", "a", "", &owner), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        assert!(admin_get_gif(&pool, "g1").await.unwrap().is_some());
+
+        let unpublished = admin_unpublish_gif(&pool, "g1").await.unwrap().unwrap();
+        assert!(!unpublished.is_public);
+
+        assert!(admin_delete_gif(&pool, "g1").await.unwrap());
+        assert!(admin_get_gif(&pool, "g1").await.unwrap().is_none());
+        assert!(!admin_delete_gif(&pool, "g1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn admin_template_functions_ignore_ownership() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &owner), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &owner, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        set_template_public(&pool, "t1", &owner, true).await.unwrap();
+
+        let by_user = admin_list_templates_by_user(&pool, &owner).await.unwrap();
+        assert_eq!(by_user.len(), 1);
+        assert_eq!(by_user[0].id, "t1");
+
+        let unpublished = admin_unpublish_template(&pool, "t1").await.unwrap().unwrap();
+        assert!(!unpublished.is_public);
+
+        assert!(admin_delete_template(&pool, "t1").await.unwrap());
+        assert!(get_template_by_id(&pool, "t1").await.unwrap().is_none());
+        assert!(!admin_delete_template(&pool, "t1").await.unwrap());
     }
 
     #[tokio::test]

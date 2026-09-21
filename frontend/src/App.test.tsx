@@ -25,6 +25,8 @@ vi.mock('./api', () => ({
   getTemplate: vi.fn(),
   putTemplate: vi.fn(),
   deleteTemplate: vi.fn(),
+  listAdminUsers: vi.fn(),
+  setUserDisabled: vi.fn(),
 }))
 
 import {
@@ -32,6 +34,7 @@ import {
   getCurrentUser,
   getFilmstripMeta,
   getTemplate,
+  listAdminUsers,
   listGifs,
   listVideos,
   setHandle,
@@ -81,6 +84,7 @@ beforeEach(() => {
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
   vi.mocked(setHandle).mockReset()
+  vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
 })
 
 describe('App', () => {
@@ -106,6 +110,26 @@ describe('App', () => {
     render(<App />)
     await screen.findByText(/no gifs yet/i)
     expect(screen.getByRole('button', { name: 'Archive' })).toHaveClass('active')
+  })
+
+  it('does not show an Admin tab for a plain user', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    render(<App />)
+    await screen.findByText(/no gifs yet/i)
+    expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument()
+  })
+
+  it('shows an Admin tab for an admin user and switches to the admin page', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, role: 'admin' })
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<App />)
+    await screen.findByText(/no gifs yet/i)
+
+    await user.click(screen.getByRole('button', { name: 'Admin' }))
+
+    await screen.findByText('Admin', { selector: 'h1' })
   })
 
   it('the New GIF nav tab switches to the video picker', async () => {

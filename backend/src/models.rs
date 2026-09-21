@@ -287,6 +287,47 @@ pub struct PublicTemplate {
     pub owner_handle: Option<String>,
 }
 
+/// `GET /api/admin/users` row (SPEC-CLOUD.md §7): a user plus the
+/// per-user usage stats admins need to spot the heaviest users ahead of
+/// ever needing quotas — `gif_count`/`latest_gif_at` come from a join,
+/// same "extend the base row" shape `VideoListItem`/`PublicGif` use.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct AdminUserView {
+    pub id: String,
+    pub handle: Option<String>,
+    pub email: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub disabled: bool,
+    pub created_at: String,
+    pub gif_count: i64,
+    pub latest_gif_at: Option<String>,
+}
+
+/// `GET/POST /api/admin/users/{id}/templates`(`/unpublish`) row
+/// (SPEC-CLOUD.md §7) — a lean, `payload_json`-free view for an admin
+/// browsing/moderating someone else's templates.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminTemplateView {
+    pub id: String,
+    pub video_id: Option<String>,
+    pub is_public: bool,
+    pub use_count: i64,
+    pub saved_at: String,
+}
+
+impl From<Template> for AdminTemplateView {
+    fn from(t: Template) -> Self {
+        Self {
+            id: t.id,
+            video_id: t.video_id,
+            is_public: t.is_public,
+            use_count: t.use_count,
+            saved_at: t.saved_at,
+        }
+    }
+}
+
 /// SPEC-CLOUD.md §2: a user's row is created on first login, independent
 /// of which provider identity created it (see `Identity`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -305,6 +346,11 @@ pub struct User {
     /// field to seed the handle picker's suggested slug — not itself
     /// shown anywhere.
     pub display_name: Option<String>,
+    /// SPEC-CLOUD.md §7: an admin-disabled account. Blocks further login
+    /// (checked in `routes::auth::callback`) — the actual session
+    /// revocation is a separate step (`db::delete_sessions_for_user`),
+    /// not derived from this flag on every request.
+    pub disabled: bool,
 }
 
 /// The shape of `GET /api/auth/me` — deliberately narrower than the full
