@@ -7,6 +7,11 @@ services:
     image: postgres:16-alpine
     container_name: gifiac-dev-postgres
     restart: unless-stopped
+    # Docker's 64MB default shm quickly fills up under this project's test
+    # suite (each test spins up its own ephemeral database, see
+    # `db::create_ephemeral_test_pool`) — parallel test runs need more
+    # dynamic shared memory than that for sorts/hashes than 64MB affords.
+    shm_size: "256mb"
     ports:
       - "5432:5432"
     environment:
