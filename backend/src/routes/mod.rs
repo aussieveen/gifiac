@@ -19,6 +19,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/auth/me", get(auth::me))
         .route("/users/me/handle", put(profiles::set_handle))
         .route("/profiles/{handle}", get(profiles::get_profile))
+        .route("/library", get(gifs::list_library))
         .route(
             "/videos",
             get(videos::list_videos).post(videos::upload_video),

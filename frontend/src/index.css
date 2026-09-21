@@ -696,6 +696,31 @@ button {
   background: #0d0e12;
 }
 
+.library-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.library-tile-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa4b8;
+}
+
+.library-tile-caption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-tile-caption a {
+  color: #5ac8fa;
+  white-space: nowrap;
+}
+
 .archive-grid {
   flex: 1;
   display: grid;

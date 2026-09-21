@@ -1,4 +1,4 @@
-import type { Caption, CurrentUser, FilmstripMeta, Gif, Profile, TemplatePayload, Video } from './types'
+import type { Caption, CurrentUser, FilmstripMeta, Gif, LibraryEntry, Profile, TemplatePayload, Video } from './types'
 
 async function throwIfNotOk(input: string, response: Response): Promise<void> {
   if (response.ok) return
@@ -165,6 +165,23 @@ export function setGifOneOff(id: string, isOneOff: boolean): Promise<Gif> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ is_one_off: isOneOff }),
   })
+}
+
+// SPEC-CLOUD.md §4/§8: opts a gif into (or out of) the global library and
+// the owner's public profile.
+export function setGifPublic(id: string, isPublic: boolean): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_public: isPublic }),
+  })
+}
+
+// SPEC-CLOUD.md §8: the global library — every user's public gifs, no
+// sign-in required.
+export function listLibrary(q?: string): Promise<LibraryEntry[]> {
+  const query = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+  return request<LibraryEntry[]>(`/api/library${query}`)
 }
 
 export async function deleteGif(id: string): Promise<void> {

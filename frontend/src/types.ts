@@ -106,9 +106,19 @@ export interface Gif {
   // `PATCH /api/gifs/{id}`) — sorts to the bottom of the archive, behind
   // a "One-offs" divider (SPEC.md §8).
   is_one_off: boolean
+  // Opted into the global library and the owner's public profile
+  // (SPEC-CLOUD.md §4/§8), toggled via the same `PATCH /api/gifs/{id}`.
+  is_public: boolean
   gif_url?: string
   // `null` (not just absent) for a linked GIF — see GifResponse in the
   // backend, which always includes these keys, `null` or not.
   mp4_url?: string | null
   webm_url?: string | null
+}
+
+// GET /api/library response shape (SPEC-CLOUD.md §8) — a Gif plus its
+// creator's handle for attribution. snake_case, matching the backend's
+// `LibraryEntry` (which flattens `GifResponse`, itself snake_case).
+export interface LibraryEntry extends Gif {
+  owner_handle: string | null
 }

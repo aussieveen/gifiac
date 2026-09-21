@@ -247,6 +247,7 @@ describe('CaptionEditor', () => {
         height: 270,
         external_url: null,
         is_one_off: false,
+        is_public: false,
         created_at: '2026-01-01T00:00:00Z',
       }),
     )
@@ -281,6 +282,7 @@ describe('CaptionEditor', () => {
       height: 270,
       external_url: null,
         is_one_off: false,
+        is_public: false,
       created_at: '2026-01-01T00:00:00Z',
     }
     act(() => handlers.onComplete?.(gif))
@@ -376,6 +378,7 @@ describe('CaptionEditor', () => {
         height: 270,
         external_url: null,
         is_one_off: false,
+        is_public: false,
         created_at: '2026-01-01T00:00:00Z',
       }),
     )
@@ -414,6 +417,7 @@ describe('CaptionEditor', () => {
         height: 270,
         external_url: null,
         is_one_off: false,
+        is_public: false,
         created_at: '2026-01-01T00:00:00Z',
       }),
     )

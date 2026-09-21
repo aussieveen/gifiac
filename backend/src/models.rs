@@ -174,6 +174,9 @@ pub struct Gif {
     /// A GIF unlikely to be reused, per the user — toggled via `PATCH
     /// /api/gifs/{id}`, sorts to the bottom of the archive (SPEC.md §8).
     pub is_one_off: bool,
+    /// Opted into the global library and the creator's public profile
+    /// (SPEC-CLOUD.md §4/§8) — toggled via the same `PATCH /api/gifs/{id}`.
+    pub is_public: bool,
 }
 
 impl Gif {
@@ -181,6 +184,49 @@ impl Gif {
     /// third-party URL, with no R2 objects of its own to derive/clean up.
     pub fn is_linked(&self) -> bool {
         self.external_url.is_some()
+    }
+}
+
+/// A public gif plus its creator's handle (SPEC-CLOUD.md §8) — the same
+/// "extend the base row with a joined column" shape `VideoListItem` uses
+/// for `has_template`, kept separate from `Gif` since attribution is only
+/// ever needed for the cross-user global-library query, not the far more
+/// common owner-scoped one.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PublicGif {
+    pub id: String,
+    pub video_id: Option<String>,
+    pub name: String,
+    pub caption_text: String,
+    pub captions_json: Option<String>,
+    pub gif_range_start: Option<f64>,
+    pub gif_range_end: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub external_url: Option<String>,
+    pub created_at: String,
+    pub is_one_off: bool,
+    pub is_public: bool,
+    pub owner_handle: Option<String>,
+}
+
+impl From<PublicGif> for Gif {
+    fn from(g: PublicGif) -> Self {
+        Self {
+            id: g.id,
+            video_id: g.video_id,
+            name: g.name,
+            caption_text: g.caption_text,
+            captions_json: g.captions_json,
+            gif_range_start: g.gif_range_start,
+            gif_range_end: g.gif_range_end,
+            width: g.width,
+            height: g.height,
+            external_url: g.external_url,
+            created_at: g.created_at,
+            is_one_off: g.is_one_off,
+            is_public: g.is_public,
+        }
     }
 }
 

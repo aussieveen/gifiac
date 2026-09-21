@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff, setGifPublic } from './api'
 import type { Gif } from './types'
 
 /** Auto-dismisses after a beat, matching the archive prototype's toast. */
@@ -145,6 +145,19 @@ export function Archive({ initialSelectedId }: Props) {
       const updated = await setGifOneOff(selected.id, !selected.is_one_off)
       setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
       toast.show(updated.is_one_off ? 'Marked as one-off' : 'Marked as reusable')
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // SPEC-CLOUD.md §4/§8: opts a gif into (or out of) the global library
+  // and the owner's public profile — same pattern as toggleOneOff.
+  async function togglePublic() {
+    if (!selected) return
+    try {
+      const updated = await setGifPublic(selected.id, !selected.is_public)
+      setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
+      toast.show(updated.is_public ? 'Made public' : 'Made private')
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err))
     }
@@ -332,6 +345,9 @@ export function Archive({ initialSelectedId }: Props) {
                 </button>
                 <button className="va-btn" onClick={toggleOneOff}>
                   {selected.is_one_off ? '↩ Mark as reusable' : '⤵ Mark as one-off'}
+                </button>
+                <button className="va-btn" onClick={togglePublic}>
+                  {selected.is_public ? '🔒 Make private' : '🌐 Make public'}
                 </button>
                 {selected.external_url ? (
                   <a className="va-btn" href={selected.external_url} target="_blank" rel="noopener noreferrer">

@@ -3,11 +3,11 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
 use crate::models::{
-    Gif, NewGif, NewVideo, Session, TemplatePayload, User, Video, VideoListItem, VideoTemplate,
+    Gif, NewGif, NewVideo, PublicGif, Session, TemplatePayload, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
 /// link) starts out reusable, relying on the schema's `DEFAULT false`
@@ -212,6 +212,20 @@ pub async fn set_gif_one_off(pool: &PgPool, id: &str, owner_id: &str, is_one_off
     let sql = format!("UPDATE gifs SET is_one_off = $1 WHERE id = $2 AND user_id = $3 RETURNING {GIF_COLUMNS}");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(is_one_off)
+        .bind(id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Opts a gif into (or out of) the global library and its creator's
+/// public profile (SPEC-CLOUD.md §4/§8) — same pattern as
+/// `set_gif_one_off`.
+pub async fn set_gif_public(pool: &PgPool, id: &str, owner_id: &str, is_public: bool) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET is_public = $1 WHERE id = $2 AND user_id = $3 RETURNING {GIF_COLUMNS}");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(is_public)
         .bind(id)
         .bind(owner_id)
         .fetch_optional(pool)
@@ -427,6 +441,42 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
         .fetch_all(pool)
         .await
         .map_err(Into::into)
+}
+
+/// The global library (SPEC-CLOUD.md §8) — every user's public gifs, with
+/// the same name/caption `ILIKE` search `list_gifs` does, plus the
+/// creator's handle for attribution. Newest-first only for now — sorting
+/// by `use_count` is meaningless before M5c makes it non-zero.
+pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>) -> Result<Vec<PublicGif>> {
+    let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
+         gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, users.handle AS owner_handle";
+    match q.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => {
+            let sql = format!(
+                "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
+                 WHERE gifs.is_public = true AND (gifs.name ILIKE $1 ESCAPE '\\' OR gifs.caption_text ILIKE $2 ESCAPE '\\') \
+                 ORDER BY gifs.created_at DESC"
+            );
+            let pattern = format!("%{}%", escape_like(q));
+            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+                .bind(&pattern)
+                .bind(&pattern)
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+        None => {
+            let sql = format!(
+                "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
+                 WHERE gifs.is_public = true ORDER BY gifs.created_at DESC"
+            );
+            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+    }
 }
 
 pub async fn create_session(pool: &PgPool, id: &str, user_id: &str, now: &str) -> Result<()> {
@@ -856,6 +906,65 @@ mod tests {
 
         let unmarked = set_gif_one_off(&pool, "g1", &user, false).await.unwrap().unwrap();
         assert!(!unmarked.is_one_off);
+    }
+
+    #[tokio::test]
+    async fn set_gif_public_flips_the_flag_and_back() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("g1", "a", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(!get_gif(&pool, "g1", &user).await.unwrap().unwrap().is_public);
+
+        let shared = set_gif_public(&pool, "g1", &user, true).await.unwrap().unwrap();
+        assert!(shared.is_public);
+        assert!(get_gif(&pool, "g1", &user).await.unwrap().unwrap().is_public);
+
+        let unshared = set_gif_public(&pool, "g1", &user, false).await.unwrap().unwrap();
+        assert!(!unshared.is_public);
+    }
+
+    #[tokio::test]
+    async fn set_gif_public_cannot_be_toggled_by_another_owner() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("g1", "a", "", &owner), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        assert!(set_gif_public(&pool, "g1", &other, true).await.unwrap().is_none());
+        assert!(!get_gif(&pool, "g1", &owner).await.unwrap().unwrap().is_public);
+    }
+
+    #[tokio::test]
+    async fn list_public_gifs_returns_public_gifs_across_users_with_attribution() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        set_handle(&pool, &owner, "owner-handle").await.unwrap();
+        insert_gif(&pool, &sample_gif("public", "cat jumping", "", &owner), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("private", "cat sleeping", "", &owner), "2026-08-20T00:00:01Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("someone-elses", "dog running", "", &other), "2026-08-20T00:00:02Z")
+            .await
+            .unwrap();
+        set_gif_public(&pool, "public", &owner, true).await.unwrap();
+        set_gif_public(&pool, "someone-elses", &other, true).await.unwrap();
+
+        let all = list_public_gifs(&pool, None).await.unwrap();
+        let ids: Vec<&str> = all.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, vec!["someone-elses", "public"]);
+        let public_entry = all.iter().find(|g| g.id == "public").unwrap();
+        assert_eq!(public_entry.owner_handle.as_deref(), Some("owner-handle"));
+
+        let filtered = list_public_gifs(&pool, Some("cat")).await.unwrap();
+        let filtered_ids: Vec<&str> = filtered.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(filtered_ids, vec!["public"]);
     }
 
     #[tokio::test]

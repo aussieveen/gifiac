@@ -86,21 +86,23 @@ pub async fn get_gif(
 pub struct PatchGifRequest {
     name: Option<String>,
     is_one_off: Option<bool>,
+    is_public: Option<bool>,
 }
 
-/// `PATCH /api/gifs/{id}` (SPEC.md §5/§8): both fields are independently
-/// optional — a request can rename, toggle the one-off flag, or both in
-/// one call. At least one must be present, otherwise there's nothing to
-/// update and the client likely made a mistake.
+/// `PATCH /api/gifs/{id}` (SPEC.md §5/§8, SPEC-CLOUD.md §4/§8): fields are
+/// independently optional — a request can rename, toggle the one-off
+/// flag, toggle public sharing, or any combination in one call. At least
+/// one must be present, otherwise there's nothing to update and the
+/// client likely made a mistake.
 pub async fn rename_gif(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
     Json(request): Json<PatchGifRequest>,
 ) -> Result<Json<GifResponse>, AppError> {
-    if request.name.is_none() && request.is_one_off.is_none() {
+    if request.name.is_none() && request.is_one_off.is_none() && request.is_public.is_none() {
         return Err(AppError::BadRequest(
-            "expected at least one of name or is_one_off".to_string(),
+            "expected at least one of name, is_one_off, or is_public".to_string(),
         ));
     }
 
@@ -122,7 +124,37 @@ pub async fn rename_gif(
             .ok_or(AppError::NotFound)?;
     }
 
+    if let Some(is_public) = request.is_public {
+        gif = db::set_gif_public(&state.pool, &id, &user.id, is_public)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    }
+
     Ok(Json(with_urls(gif, &state.storage)?))
+}
+
+/// `GET /api/library` (SPEC-CLOUD.md §8) — the global library, no auth
+/// required. Every user's public gifs, newest first, with attribution.
+#[derive(Debug, Serialize)]
+pub struct LibraryEntry {
+    #[serde(flatten)]
+    gif: GifResponse,
+    owner_handle: Option<String>,
+}
+
+pub async fn list_library(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<LibraryEntry>>, AppError> {
+    let gifs = db::list_public_gifs(&state.pool, query.q.as_deref()).await?;
+    let entries = gifs
+        .into_iter()
+        .map(|public_gif| {
+            let owner_handle = public_gif.owner_handle.clone();
+            with_urls(public_gif.into(), &state.storage).map(|gif| LibraryEntry { gif, owner_handle })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(entries))
 }
 
 /// Removes the SQLite row first, then best-effort deletes all three R2

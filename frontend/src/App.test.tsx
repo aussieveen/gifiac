@@ -213,6 +213,7 @@ describe('App', () => {
       height: 270,
       external_url: null,
       is_one_off: false,
+      is_public: false,
       created_at: '2026-01-01T00:00:00Z',
       gif_url: 'http://example.com/g1.gif',
     }

@@ -11,9 +11,10 @@ vi.mock('./api', () => ({
   importGifs: vi.fn(),
   linkGif: vi.fn(),
   setGifOneOff: vi.fn(),
+  setGifPublic: vi.fn(),
 }))
 
-import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff, setGifPublic } from './api'
 
 const gifA: Gif = {
   id: 'g1',
@@ -28,6 +29,7 @@ const gifA: Gif = {
   external_url: null,
   created_at: '2026-01-01T00:00:00Z',
   is_one_off: false,
+  is_public: false,
   gif_url: 'http://localhost:19000/gifiac-test/gifs/g1.gif',
   mp4_url: 'http://localhost:19000/gifiac-test/clips/g1.mp4',
   webm_url: 'http://localhost:19000/gifiac-test/clips/g1.webm',
@@ -56,6 +58,7 @@ const linkedGif: Gif = {
   external_url: 'https://example.com/meme.gif',
   created_at: '2026-01-01T00:00:00Z',
   is_one_off: false,
+  is_public: false,
   gif_url: 'https://example.com/meme.gif',
   mp4_url: null,
   webm_url: null,
@@ -68,6 +71,7 @@ beforeEach(() => {
   vi.mocked(importGifs).mockReset()
   vi.mocked(linkGif).mockReset()
   vi.mocked(setGifOneOff).mockReset()
+  vi.mocked(setGifPublic).mockReset()
 })
 
 afterEach(() => {
@@ -294,6 +298,35 @@ describe('Archive', () => {
     expect(setGifOneOff).toHaveBeenCalledWith('g1', false)
     await screen.findByRole('button', { name: /mark as one-off/i })
     await screen.findByText(/marked as reusable/i)
+  })
+
+  it('making a gif public calls the API and updates the button label', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: true })
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByRole('button', { name: /make public/i }))
+
+    expect(setGifPublic).toHaveBeenCalledWith('g1', true)
+    await screen.findByRole('button', { name: /make private/i })
+    await screen.findByText(/made public/i)
+  })
+
+  it('making a gif private calls the API with false', async () => {
+    const publicGif = { ...gifA, is_public: true }
+    vi.mocked(listGifs).mockResolvedValue([publicGif])
+    vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: false })
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByRole('button', { name: /make private/i }))
+
+    expect(setGifPublic).toHaveBeenCalledWith('g1', false)
+    await screen.findByRole('button', { name: /make public/i })
+    await screen.findByText(/made private/i)
   })
 
   it('shows a "One-offs" divider above one-off gifs in the grid, only when one exists', async () => {

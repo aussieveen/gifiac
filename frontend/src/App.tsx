@@ -3,11 +3,12 @@ import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, logout } from './api'
 import { CaptionEditor } from './CaptionEditor'
 import { HandlePicker } from './HandlePicker'
+import { Library } from './Library'
 import type { FilmstripMeta, Gif, Video } from './types'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
 
-type View = 'videos' | 'archive'
+type View = 'videos' | 'archive' | 'library'
 
 export default function App() {
   // SPEC-CLOUD.md §2: nothing else renders until we know whether there's
@@ -84,6 +85,9 @@ export default function App() {
       <button className={`app-nav-btn ${view === 'archive' ? 'active' : ''}`} onClick={() => setView('archive')}>
         Archive
       </button>
+      <button className={`app-nav-btn ${view === 'library' ? 'active' : ''}`} onClick={() => setView('library')}>
+        Global Library
+      </button>
       <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
         Sign out
       </button>
@@ -95,6 +99,15 @@ export default function App() {
       <>
         {nav}
         <Archive initialSelectedId={pendingGifId} />
+      </>
+    )
+  }
+
+  if (view === 'library') {
+    return (
+      <>
+        {nav}
+        <Library />
       </>
     )
   }

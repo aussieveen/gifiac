@@ -371,6 +371,7 @@ async fn list_gifs_with_no_session_cookie_is_rejected() {
 
     let response = test_app
         .app
+        .clone()
         .oneshot(Request::builder().uri("/api/gifs").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -440,6 +441,7 @@ async fn a_second_user_cannot_see_fetch_rename_or_delete_the_first_users_gif() {
 
     let delete_response = test_app
         .app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("DELETE")
@@ -471,4 +473,167 @@ async fn delete_unknown_gif_returns_404() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn patch_gif_toggles_is_public_and_back() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "a shareable gif", "").await;
+    let id = gif["id"].as_str().unwrap();
+    assert_eq!(gif["is_public"], false);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_public": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let shared: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shared["is_public"], true);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/gifs/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_public": false }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let unshared: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(unshared["is_public"], false);
+}
+
+/// SPEC-CLOUD.md §8: the global library is public — reachable with no
+/// session at all — and only ever shows what's actually been shared.
+#[tokio::test]
+async fn get_library_requires_no_auth_and_includes_only_public_gifs_with_attribution() {
+    let test_app = spawn_app().await;
+
+    let handle_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri("/api/users/me/handle")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "handle": "libtest" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_response.status(), StatusCode::OK);
+
+    let public_gif = create_gif(&test_app, "public one", "").await;
+    let public_id = public_gif["id"].as_str().unwrap();
+    let private_gif = create_gif(&test_app, "private one", "").await;
+    let private_id = private_gif["id"].as_str().unwrap();
+
+    let make_public = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/gifs/{public_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_public": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(make_public.status(), StatusCode::OK);
+
+    // No cookie at all — the library is public.
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/library")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let entries: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entries = entries.as_array().unwrap();
+    assert!(entries.iter().any(|e| e["id"] == public_id));
+    assert!(!entries.iter().any(|e| e["id"] == private_id));
+    let entry = entries.iter().find(|e| e["id"] == public_id).unwrap();
+    assert_eq!(entry["owner_handle"], "libtest");
+}
+
+#[tokio::test]
+async fn get_library_filters_by_q() {
+    let test_app = spawn_app().await;
+    let cat_gif = create_gif(&test_app, "cat jumping", "").await;
+    let dog_gif = create_gif(&test_app, "dog running", "").await;
+
+    for id in [cat_gif["id"].as_str().unwrap(), dog_gif["id"].as_str().unwrap()] {
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(
+                authed(&test_app, Request::builder())
+                    .method("PATCH")
+                    .uri(format!("/api/gifs/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "is_public": true }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/library?q=cat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let entries: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entries = entries.as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["id"], cat_gif["id"]);
 }
