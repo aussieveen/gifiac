@@ -1,4 +1,14 @@
-import type { Caption, CurrentUser, FilmstripMeta, Gif, LibraryEntry, Profile, TemplatePayload, Video } from './types'
+import type {
+  Caption,
+  CurrentUser,
+  FilmstripMeta,
+  Gif,
+  LibraryEntry,
+  LibrarySort,
+  Profile,
+  TemplatePayload,
+  Video,
+} from './types'
 
 async function throwIfNotOk(input: string, response: Response): Promise<void> {
   if (response.ok) return
@@ -178,10 +188,21 @@ export function setGifPublic(id: string, isPublic: boolean): Promise<Gif> {
 }
 
 // SPEC-CLOUD.md §8: the global library — every user's public gifs, no
-// sign-in required.
-export function listLibrary(q?: string): Promise<LibraryEntry[]> {
-  const query = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
-  return request<LibraryEntry[]>(`/api/library${query}`)
+// sign-in required. `sort` defaults to newest-first on the backend when
+// omitted.
+export function listLibrary(q?: string, sort?: LibrarySort): Promise<LibraryEntry[]> {
+  const params = new URLSearchParams()
+  if (q?.trim()) params.set('q', q.trim())
+  if (sort) params.set('sort', sort)
+  const query = params.toString()
+  return request<LibraryEntry[]>(`/api/library${query ? `?${query}` : ''}`)
+}
+
+// SPEC-CLOUD.md §8: bumps a gif's use counter — fired by copy-link,
+// copy-embed, and download, with no dedup. Returns the updated row so
+// callers can update their local count without a separate re-fetch.
+export function recordGifUse(id: string): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}/use`, { method: 'POST' })
 }
 
 export async function deleteGif(id: string): Promise<void> {

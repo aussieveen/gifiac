@@ -177,6 +177,9 @@ pub struct Gif {
     /// Opted into the global library and the creator's public profile
     /// (SPEC-CLOUD.md §4/§8) — toggled via the same `PATCH /api/gifs/{id}`.
     pub is_public: bool,
+    /// Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
+    /// copy-link/copy-embed/download action fires — no dedup, auth only.
+    pub use_count: i64,
 }
 
 impl Gif {
@@ -185,6 +188,16 @@ impl Gif {
     pub fn is_linked(&self) -> bool {
         self.external_url.is_some()
     }
+}
+
+/// `GET /api/library?sort=` (SPEC-CLOUD.md §8) — `Newest` was the only
+/// option before M5c made `use_count` non-trivial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LibrarySort {
+    #[default]
+    Newest,
+    MostUsed,
 }
 
 /// A public gif plus its creator's handle (SPEC-CLOUD.md §8) — the same
@@ -207,6 +220,7 @@ pub struct PublicGif {
     pub created_at: String,
     pub is_one_off: bool,
     pub is_public: bool,
+    pub use_count: i64,
     pub owner_handle: Option<String>,
 }
 
@@ -226,6 +240,7 @@ impl From<PublicGif> for Gif {
             created_at: g.created_at,
             is_one_off: g.is_one_off,
             is_public: g.is_public,
+            use_count: g.use_count,
         }
     }
 }

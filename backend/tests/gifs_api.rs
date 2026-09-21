@@ -594,6 +594,157 @@ async fn get_library_requires_no_auth_and_includes_only_public_gifs_with_attribu
 }
 
 #[tokio::test]
+async fn use_gif_requires_auth() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "a gif", "").await;
+    let id = gif["id"].as_str().unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/gifs/{id}/use"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn use_gif_increments_on_repeat_calls() {
+    let test_app = spawn_app().await;
+    let gif = create_gif(&test_app, "a gif", "").await;
+    let id = gif["id"].as_str().unwrap();
+    assert_eq!(gif["use_count"], 0);
+
+    for expected in [1, 2] {
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(
+                authed(&test_app, Request::builder())
+                    .method("POST")
+                    .uri(format!("/api/gifs/{id}/use"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(updated["use_count"], expected);
+    }
+}
+
+#[tokio::test]
+async fn use_unknown_gif_returns_404() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/00000000-0000-0000-0000-000000000000/use")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_library_sorted_most_used_orders_by_use_count_descending() {
+    let test_app = spawn_app().await;
+    let low = create_gif(&test_app, "low use", "").await;
+    let low_id = low["id"].as_str().unwrap();
+    let high = create_gif(&test_app, "high use", "").await;
+    let high_id = high["id"].as_str().unwrap();
+
+    for id in [low_id, high_id] {
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(
+                authed(&test_app, Request::builder())
+                    .method("PATCH")
+                    .uri(format!("/api/gifs/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "is_public": true }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri(format!("/api/gifs/{low_id}/use"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        test_app
+            .app
+            .clone()
+            .oneshot(
+                authed(&test_app, Request::builder())
+                    .method("POST")
+                    .uri(format!("/api/gifs/{high_id}/use"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/library?sort=most-used")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let entries: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let ids: Vec<&str> = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![high_id, low_id]);
+}
+
+#[tokio::test]
 async fn get_library_filters_by_q() {
     let test_app = spawn_app().await;
     let cat_gif = create_gif(&test_app, "cat jumping", "").await;

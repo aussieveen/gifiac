@@ -18,7 +18,7 @@ use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{ExportEvent, transcode_and_upload};
-use crate::models::{Gif, NewGif};
+use crate::models::{Gif, LibrarySort, NewGif};
 use crate::paths;
 use crate::state::AppState;
 use crate::storage::Storage;
@@ -58,6 +58,11 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppE
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     q: Option<String>,
+    /// Only meaningful for `list_library` (SPEC-CLOUD.md §8) — `list_gifs`
+    /// (owner-scoped) ignores it, since that endpoint was never speced to
+    /// sort by use, only `is_one_off` then recency.
+    #[serde(default)]
+    sort: LibrarySort,
 }
 
 pub async fn list_gifs(
@@ -133,6 +138,20 @@ pub async fn rename_gif(
     Ok(Json(with_urls(gif, &state.storage)?))
 }
 
+/// `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8): copy-link, copy-embed, and
+/// download all fire this — no dedup, auth required, no ownership/
+/// visibility check (see `db::increment_gif_use_count`). Returns the
+/// updated row so the frontend can update its local count without a
+/// separate re-fetch.
+pub async fn use_gif(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(_user): CurrentUser,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<GifResponse>, AppError> {
+    let gif = db::increment_gif_use_count(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(with_urls(gif, &state.storage)?))
+}
+
 /// `GET /api/library` (SPEC-CLOUD.md §8) — the global library, no auth
 /// required. Every user's public gifs, newest first, with attribution.
 #[derive(Debug, Serialize)]
@@ -146,7 +165,7 @@ pub async fn list_library(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<LibraryEntry>>, AppError> {
-    let gifs = db::list_public_gifs(&state.pool, query.q.as_deref()).await?;
+    let gifs = db::list_public_gifs(&state.pool, query.q.as_deref(), query.sort).await?;
     let entries = gifs
         .into_iter()
         .map(|public_gif| {

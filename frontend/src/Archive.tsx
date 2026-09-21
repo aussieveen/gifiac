@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff, setGifPublic } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, recordGifUse, renameGif, setGifOneOff, setGifPublic } from './api'
 import type { Gif } from './types'
 
 /** Auto-dismisses after a beat, matching the archive prototype's toast. */
@@ -112,10 +112,20 @@ export function Archive({ initialSelectedId }: Props) {
     }
   }
 
+  // SPEC-CLOUD.md §8: copy-link/copy-embed/download all bump the same
+  // use counter — fire-and-forget, since a failed increment shouldn't
+  // block the action it's attached to from succeeding.
+  function recordUse(id: string) {
+    recordGifUse(id)
+      .then((updated) => setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g))))
+      .catch(() => {})
+  }
+
   async function copyLink() {
     if (!selected?.gif_url) return
     try {
       await copyToClipboard(selected.gif_url)
+      recordUse(selected.id)
       toast.show('Link copied')
     } catch {
       toast.show('Copy failed')
@@ -130,6 +140,7 @@ export function Archive({ initialSelectedId }: Props) {
     const tag = `<img src="${selected.gif_url}" alt="${escapeHtml(selected.name)}">`
     try {
       await copyToClipboard(tag)
+      recordUse(selected.id)
       toast.show('Embed copied')
     } catch {
       toast.show('Copy failed')
@@ -336,6 +347,7 @@ export function Archive({ initialSelectedId }: Props) {
                 <p className="va-hint archive-panel-external-note">🔗 Linked — hosted externally, not by Gifiac</p>
               )}
               <p className="va-hint">{new Date(selected.created_at).toLocaleString()}</p>
+              <p className="va-hint">{selected.use_count === 1 ? '1 use' : `${selected.use_count} uses`}</p>
               <div className="archive-panel-actions">
                 <button className="va-btn" onClick={copyLink}>
                   🔗 Copy link
@@ -354,7 +366,12 @@ export function Archive({ initialSelectedId }: Props) {
                     ↗ Open original
                   </a>
                 ) : (
-                  <a className="va-btn" href={selected.gif_url} download={`${selected.name}.gif`}>
+                  <a
+                    className="va-btn"
+                    href={selected.gif_url}
+                    download={`${selected.name}.gif`}
+                    onClick={() => recordUse(selected.id)}
+                  >
                     ⬇ Download
                   </a>
                 )}

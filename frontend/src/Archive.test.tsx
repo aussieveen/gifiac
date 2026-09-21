@@ -12,9 +12,10 @@ vi.mock('./api', () => ({
   linkGif: vi.fn(),
   setGifOneOff: vi.fn(),
   setGifPublic: vi.fn(),
+  recordGifUse: vi.fn(),
 }))
 
-import { deleteGif, importGifs, linkGif, listGifs, renameGif, setGifOneOff, setGifPublic } from './api'
+import { deleteGif, importGifs, linkGif, listGifs, recordGifUse, renameGif, setGifOneOff, setGifPublic } from './api'
 
 const gifA: Gif = {
   id: 'g1',
@@ -30,6 +31,7 @@ const gifA: Gif = {
   created_at: '2026-01-01T00:00:00Z',
   is_one_off: false,
   is_public: false,
+  use_count: 0,
   gif_url: 'http://localhost:19000/gifiac-test/gifs/g1.gif',
   mp4_url: 'http://localhost:19000/gifiac-test/clips/g1.mp4',
   webm_url: 'http://localhost:19000/gifiac-test/clips/g1.webm',
@@ -59,6 +61,7 @@ const linkedGif: Gif = {
   created_at: '2026-01-01T00:00:00Z',
   is_one_off: false,
   is_public: false,
+  use_count: 0,
   gif_url: 'https://example.com/meme.gif',
   mp4_url: null,
   webm_url: null,
@@ -72,6 +75,11 @@ beforeEach(() => {
   vi.mocked(linkGif).mockReset()
   vi.mocked(setGifOneOff).mockReset()
   vi.mocked(setGifPublic).mockReset()
+  vi.mocked(recordGifUse).mockReset()
+  // Fire-and-forget by design (see recordUse in Archive.tsx) — most tests
+  // don't care about this call, so give it a harmless default that the
+  // component's own `.catch(() => {})` swallows.
+  vi.mocked(recordGifUse).mockRejectedValue(new Error('not mocked'))
 })
 
 afterEach(() => {
@@ -269,6 +277,61 @@ describe('Archive', () => {
 
     const downloadLink = screen.getByRole('link', { name: /download/i }) as HTMLAnchorElement
     expect(downloadLink.href).toBe(gifA.gif_url)
+  })
+
+  it('copying a link bumps the use count and shows the updated total', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    })
+    expect(screen.getByText('0 uses')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /copy link/i }))
+
+    expect(recordGifUse).toHaveBeenCalledWith('g1')
+    await screen.findByText('1 use')
+  })
+
+  it('copying an embed bumps the use count', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    })
+
+    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+
+    expect(recordGifUse).toHaveBeenCalledWith('g1')
+    await screen.findByText('1 use')
+  })
+
+  it('clicking download bumps the use count', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
+    const user = userEvent.setup()
+
+    render(<Archive />)
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    await user.click(screen.getByRole('link', { name: /download/i }))
+
+    expect(recordGifUse).toHaveBeenCalledWith('g1')
+    await screen.findByText('1 use')
   })
 
   it('marking a gif as one-off calls the API and updates the button label', async () => {

@@ -214,6 +214,7 @@ describe('App', () => {
       external_url: null,
       is_one_off: false,
       is_public: false,
+      use_count: 0,
       created_at: '2026-01-01T00:00:00Z',
       gif_url: 'http://example.com/g1.gif',
     }

@@ -109,6 +109,9 @@ export interface Gif {
   // Opted into the global library and the owner's public profile
   // (SPEC-CLOUD.md §4/§8), toggled via the same `PATCH /api/gifs/{id}`.
   is_public: boolean
+  // Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
+  // copy-link/copy-embed/download action fires — no dedup, auth only.
+  use_count: number
   gif_url?: string
   // `null` (not just absent) for a linked GIF — see GifResponse in the
   // backend, which always includes these keys, `null` or not.
@@ -122,3 +125,7 @@ export interface Gif {
 export interface LibraryEntry extends Gif {
   owner_handle: string | null
 }
+
+// `GET /api/library?sort=` (SPEC-CLOUD.md §8) — matching the backend's
+// `LibrarySort`, kebab-case on the wire.
+export type LibrarySort = 'newest' | 'most-used'

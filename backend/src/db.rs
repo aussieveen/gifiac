@@ -3,11 +3,12 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
 use crate::models::{
-    Gif, NewGif, NewVideo, PublicGif, Session, TemplatePayload, User, Video, VideoListItem, VideoTemplate,
+    Gif, LibrarySort, NewGif, NewVideo, PublicGif, Session, TemplatePayload, User, Video, VideoListItem,
+    VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
 /// link) starts out reusable, relying on the schema's `DEFAULT false`
@@ -233,6 +234,19 @@ pub async fn set_gif_public(pool: &PgPool, id: &str, owner_id: &str, is_public: 
         .map_err(Into::into)
 }
 
+/// Bumps a gif's use counter (SPEC-CLOUD.md §8: copy-link, copy-embed, and
+/// download all fire this) — no ownership/visibility check, since the spec
+/// only requires "auth required," not "must be public or yours," and a
+/// private gif's id is unguessable by anyone but its owner anyway.
+pub async fn increment_gif_use_count(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("UPDATE gifs SET use_count = use_count + 1 WHERE id = $1 RETURNING {GIF_COLUMNS}");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
 /// Returns `true` if a row was actually deleted, so the route can 404 on a
 /// nonexistent id rather than reporting a no-op delete as success.
 pub async fn delete_gif(pool: &PgPool, id: &str, owner_id: &str) -> Result<bool> {
@@ -445,18 +459,23 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 
 /// The global library (SPEC-CLOUD.md §8) — every user's public gifs, with
 /// the same name/caption `ILIKE` search `list_gifs` does, plus the
-/// creator's handle for attribution. Newest-first only for now — sorting
-/// by `use_count` is meaningless before M5c makes it non-zero.
-pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>) -> Result<Vec<PublicGif>> {
+/// creator's handle for attribution. `sort` picks `Newest` (creation-time,
+/// the only option before M5c) or `MostUsed` (`use_count` descending, with
+/// creation-time as a tiebreaker for equally-used gifs).
+pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, users.handle AS owner_handle";
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle";
+    let order_by = match sort {
+        LibrarySort::Newest => "gifs.created_at DESC",
+        LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
+    };
     match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
                  WHERE gifs.is_public = true AND (gifs.name ILIKE $1 ESCAPE '\\' OR gifs.caption_text ILIKE $2 ESCAPE '\\') \
-                 ORDER BY gifs.created_at DESC"
+                 ORDER BY {order_by}"
             );
             let pattern = format!("%{}%", escape_like(q));
             sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
@@ -469,7 +488,7 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>) -> Result<Vec<Publ
         None => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
-                 WHERE gifs.is_public = true ORDER BY gifs.created_at DESC"
+                 WHERE gifs.is_public = true ORDER BY {order_by}"
             );
             sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
                 .fetch_all(pool)
@@ -956,13 +975,13 @@ mod tests {
         set_gif_public(&pool, "public", &owner, true).await.unwrap();
         set_gif_public(&pool, "someone-elses", &other, true).await.unwrap();
 
-        let all = list_public_gifs(&pool, None).await.unwrap();
+        let all = list_public_gifs(&pool, None, LibrarySort::Newest).await.unwrap();
         let ids: Vec<&str> = all.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["someone-elses", "public"]);
         let public_entry = all.iter().find(|g| g.id == "public").unwrap();
         assert_eq!(public_entry.owner_handle.as_deref(), Some("owner-handle"));
 
-        let filtered = list_public_gifs(&pool, Some("cat")).await.unwrap();
+        let filtered = list_public_gifs(&pool, Some("cat"), LibrarySort::Newest).await.unwrap();
         let filtered_ids: Vec<&str> = filtered.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(filtered_ids, vec!["public"]);
     }
@@ -1203,6 +1222,63 @@ mod tests {
         let found = get_user_by_handle(&pool, "simon").await.unwrap().unwrap();
         assert_eq!(found.id, user);
         assert!(get_user_by_handle(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn increment_gif_use_count_increments_from_zero_repeatedly_with_no_dedup() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("g1", "a", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(get_gif(&pool, "g1", &user).await.unwrap().unwrap().use_count, 0);
+
+        let once = increment_gif_use_count(&pool, "g1").await.unwrap().unwrap();
+        assert_eq!(once.use_count, 1);
+
+        let twice = increment_gif_use_count(&pool, "g1").await.unwrap().unwrap();
+        assert_eq!(twice.use_count, 2);
+    }
+
+    #[tokio::test]
+    async fn increment_gif_use_count_returns_none_for_a_missing_id() {
+        let pool = test_pool().await;
+        assert!(increment_gif_use_count(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_public_gifs_sorted_most_used_orders_by_use_count_descending() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_gif(&pool, &sample_gif("low", "a", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("high", "b", "", &user), "2026-08-19T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("tied-newer", "c", "", &user), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+        insert_gif(&pool, &sample_gif("tied-older", "d", "", &user), "2026-08-18T00:00:00Z")
+            .await
+            .unwrap();
+        for id in ["low", "high", "tied-newer", "tied-older"] {
+            set_gif_public(&pool, id, &user, true).await.unwrap();
+        }
+        increment_gif_use_count(&pool, "low").await.unwrap();
+        for _ in 0..3 {
+            increment_gif_use_count(&pool, "high").await.unwrap();
+        }
+        for _ in 0..2 {
+            increment_gif_use_count(&pool, "tied-newer").await.unwrap();
+            increment_gif_use_count(&pool, "tied-older").await.unwrap();
+        }
+
+        let sorted = list_public_gifs(&pool, None, LibrarySort::MostUsed).await.unwrap();
+        let ids: Vec<&str> = sorted.iter().map(|g| g.id.as_str()).collect();
+        // "high" (3) first, then the tied-at-2 pair broken by recency
+        // (newer first), then "low" (1) last.
+        assert_eq!(ids, vec!["high", "tied-newer", "tied-older", "low"]);
     }
 
     #[tokio::test]

@@ -721,6 +721,24 @@ button {
   white-space: nowrap;
 }
 
+.library-tile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.library-sort-pills {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.va-btn.active {
+  background: #1e2028;
+  color: #f5c518;
+}
+
 .archive-grid {
   flex: 1;
   display: grid;
