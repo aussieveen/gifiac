@@ -143,10 +143,14 @@ pub enum CaptionAlign {
 }
 
 /// POST /api/exports body per SPEC.md §5 — snake_case top level (matching
-/// the `gifs` table columns), camelCase `captions` (matching §4).
+/// the `gifs` table columns), camelCase `captions` (matching §4). Exactly
+/// one of `video_id`/`template_id` must be present (SPEC-CLOUD.md §4): the
+/// former is today's export-from-your-own-video flow, the latter the new
+/// cross-user "use this template" flow, which has no video at all.
 #[derive(Debug, Deserialize)]
 pub struct ExportRequest {
-    pub video_id: String,
+    pub video_id: Option<String>,
+    pub template_id: Option<String>,
     pub name: String,
     pub captions: Vec<Caption>,
     pub gif_range_start: f64,
@@ -180,6 +184,10 @@ pub struct Gif {
     /// Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
     /// copy-link/copy-embed/download action fires — no dedup, auth only.
     pub use_count: i64,
+    /// Stamped at export time when the export form was pre-filled from a
+    /// public template (SPEC-CLOUD.md §4) — `video_id` is `None` whenever
+    /// this is `Some`, same treatment as a bulk import.
+    pub template_id: Option<String>,
 }
 
 impl Gif {
@@ -221,6 +229,7 @@ pub struct PublicGif {
     pub is_one_off: bool,
     pub is_public: bool,
     pub use_count: i64,
+    pub template_id: Option<String>,
     pub owner_handle: Option<String>,
 }
 
@@ -241,8 +250,41 @@ impl From<PublicGif> for Gif {
             is_one_off: g.is_one_off,
             is_public: g.is_public,
             use_count: g.use_count,
+            template_id: g.template_id,
         }
     }
+}
+
+/// A template's full row (SPEC-CLOUD.md §4) — deliberately not `Serialize`:
+/// `payload_json` is a raw serialized string, never meant to reach a client
+/// as-is (see `TemplatePayload`, which every route response actually
+/// returns). Used internally for the owner-only visibility-toggle route,
+/// where any-visibility lookup is needed before the ownership check runs.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Template {
+    pub id: String,
+    pub video_id: Option<String>,
+    pub user_id: String,
+    pub payload_json: String,
+    pub is_public: bool,
+    pub use_count: i64,
+    pub saved_at: String,
+}
+
+/// The same row, joined with its creator's handle, from a query that only
+/// ever matches a public template (SPEC-CLOUD.md §4's "usual public-sharing
+/// check") — the shape every cross-user read path (`GET /api/templates/{id}`,
+/// its clip/thumbnail, and exporting via `template_id`) uses.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PublicTemplate {
+    pub id: String,
+    pub video_id: Option<String>,
+    pub user_id: String,
+    pub payload_json: String,
+    pub is_public: bool,
+    pub use_count: i64,
+    pub saved_at: String,
+    pub owner_handle: Option<String>,
 }
 
 /// SPEC-CLOUD.md §2: a user's row is created on first login, independent
@@ -332,4 +374,5 @@ pub struct NewGif {
     pub height: Option<i64>,
     pub external_url: Option<String>,
     pub user_id: String,
+    pub template_id: Option<String>,
 }

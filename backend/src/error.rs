@@ -12,6 +12,12 @@ pub enum AppError {
     /// No valid session (SPEC-CLOUD.md §2) — missing, unknown, or expired
     /// session cookie.
     Unauthorized,
+    /// A signed-in caller who isn't the resource's creator — used only for
+    /// template overwrite/visibility endpoints (SPEC-CLOUD.md §4), where
+    /// existence isn't secret the way a private gif/video's is, so 404
+    /// would be the wrong signal. Every other ownership violation in this
+    /// app still 404s.
+    Forbidden,
     Internal(anyhow::Error),
 }
 
@@ -22,6 +28,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
+            AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             AppError::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (

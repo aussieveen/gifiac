@@ -240,6 +240,45 @@ pub fn parse_sse_events(body: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Uploads a synthetic test video and returns the created `videos` row —
+/// the shared first step of `create_gif` and any test that needs a video
+/// to `PUT` a template against without also running a full export.
+#[allow(dead_code)]
+pub async fn upload_test_video(test_app: &TestApp) -> serde_json::Value {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 3.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header("cookie", &test_app.owner_cookie)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), StatusCode::CREATED);
+    serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}
+
 /// Uploads a synthetic test video, then runs a real export job to
 /// completion (draining its SSE stream) and returns the resulting `gifs`
 /// row — a real GIF with real R2 objects, for tests that need a GIF to

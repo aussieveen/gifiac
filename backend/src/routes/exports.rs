@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
-use crate::exports::{self, ExportEvent};
-use crate::models::ExportRequest;
+use crate::exports::{self, ExportEvent, ExportSource};
+use crate::models::{ExportRequest, TemplatePayload};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -38,9 +38,43 @@ pub async fn create_export(
         ));
     }
 
-    let video = db::get_video(&state.pool, &request.video_id, &user.id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    // SPEC-CLOUD.md §4: exactly one of the two — a video-based export
+    // (today's flow, owner-scoped) or a template-based one (the new
+    // cross-user "use this template" flow, no video at all involved).
+    // Cloned out (rather than matched by reference) so the template
+    // branch below is free to mutate `request.captions` without fighting
+    // a live borrow from the match scrutinee.
+    let source = match (request.video_id.clone(), request.template_id.clone()) {
+        (Some(video_id), None) => {
+            let video = db::get_video(&state.pool, &video_id, &user.id)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            ExportSource::Video(video)
+        }
+        (None, Some(template_id)) => {
+            // "Loading a template to pre-fill an export has no ownership
+            // check, only the usual public-sharing check" (§4) — the same
+            // query `GET /api/templates/{id}` uses, so both enforce the
+            // exact same visibility rule.
+            let template = db::get_public_template(&state.pool, &template_id)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            let payload: TemplatePayload = serde_json::from_str(&template.payload_json)?;
+            request.captions = exports::normalize_locked_captions(request.captions, &payload.captions);
+            // "Use" is starting the export (§8), independent of whether
+            // the background pipeline below later succeeds.
+            db::increment_template_use_count(&state.pool, &template_id).await?;
+            ExportSource::Template {
+                id: template_id,
+                payload,
+            }
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "expected exactly one of video_id or template_id".to_string(),
+            ));
+        }
+    };
 
     let export_id = Uuid::new_v4();
     let (tx, _rx) = broadcast::channel(32);
@@ -56,7 +90,7 @@ pub async fn create_export(
     let owner_id = user.id.clone();
     let job_state = state.clone();
     tokio::spawn(async move {
-        exports::run_export_job(&job_state, export_id, video, request, &owner_id, tx).await;
+        exports::run_export_job(&job_state, export_id, source, request, &owner_id, tx).await;
         job_state.export_jobs.lock().unwrap().remove(&export_id);
     });
 

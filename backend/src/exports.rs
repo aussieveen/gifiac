@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::ass::generate_ass;
 use crate::ffmpeg::export as ffmpeg_export;
-use crate::models::{ExportRequest, Gif, NewGif, Video};
+use crate::models::{Caption, ExportRequest, Gif, NewGif, TemplatePayload, Video};
 use crate::state::AppState;
 use crate::{db, paths, source_video};
 
@@ -23,6 +23,35 @@ pub enum ExportEvent {
     Failed { message: String },
 }
 
+/// What an export renders from — resolved by the route handler before the
+/// background job starts, so `run_pipeline` doesn't need its own
+/// visibility/ownership logic (SPEC-CLOUD.md §4: a template-sourced export
+/// has no `Video` row at all — the video is never shared, only the
+/// template's own already-clipped media).
+pub enum ExportSource {
+    Video(Video),
+    Template { id: String, payload: TemplatePayload },
+}
+
+/// SPEC-CLOUD.md §4: "the server silently normalizes away any
+/// client-submitted change to a fixed caption's fields rather than
+/// rejecting the request — it just applies the template's saved values for
+/// those fields and proceeds." Matched by caption `id`; a submitted
+/// caption with no matching *locked* template caption (new captions the
+/// user added, or a changeable one) passes through unchanged.
+pub(crate) fn normalize_locked_captions(submitted: Vec<Caption>, template_captions: &[Caption]) -> Vec<Caption> {
+    submitted
+        .into_iter()
+        .map(|c| {
+            template_captions
+                .iter()
+                .find(|t| t.id == c.id && t.locked)
+                .cloned()
+                .unwrap_or(c)
+        })
+        .collect()
+}
+
 /// Runs the full pipeline and broadcasts its outcome. Never returns an
 /// `Err` itself — failures are reported as an `ExportEvent::Failed` so the
 /// only way a caller learns the outcome is via the event stream (matching
@@ -30,7 +59,7 @@ pub enum ExportEvent {
 pub async fn run_export_job(
     state: &AppState,
     export_id: Uuid,
-    video: Video,
+    source: ExportSource,
     request: ExportRequest,
     owner_id: &str,
     events: broadcast::Sender<ExportEvent>,
@@ -39,7 +68,7 @@ pub async fn run_export_job(
         let _ = events.send(event);
     };
 
-    match run_pipeline(state, export_id, &video, &request, owner_id, &send).await {
+    match run_pipeline(state, export_id, &source, &request, owner_id, &send).await {
         Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
         Err(err) => {
             tracing::error!(export_id = %export_id, error = ?err, "export job failed");
@@ -53,25 +82,45 @@ pub async fn run_export_job(
 async fn run_pipeline(
     state: &AppState,
     export_id: Uuid,
-    video: &Video,
+    source: &ExportSource,
     request: &ExportRequest,
     owner_id: &str,
     send: &impl Fn(ExportEvent),
 ) -> anyhow::Result<Gif> {
     let clip_duration = request.gif_range_end - request.gif_range_start;
-    let video_uuid = Uuid::parse_str(&video.id)?;
-    // SPEC-CLOUD.md §6: the source video's persistent home is a private
-    // S3 bucket, not local disk — re-fetches it if this instance doesn't
-    // already have a local copy cached.
-    let video_path = source_video::ensure_on_disk(state, &video_uuid, &video.extension).await?;
 
     // The captions are burned in *after* the video is scaled down (see
     // captioned_scale_filter's doc comment), so the ASS file's
     // PlayResX/PlayResY — and thus caption font size and \pos() placement
     // — must be the scaled output size, not the source's native
     // resolution, to match what the frontend's live preview (built from
-    // the same scaled_dimensions) shows.
-    let (output_width, output_height) = crate::scale::scaled_dimensions(video.width, video.height);
+    // the same scaled_dimensions) shows. A template's clip is already
+    // trimmed *and* scaled at save time (see `videos::put_template`), so
+    // `payload.width`/`payload.height` already are that scaled target —
+    // no re-derivation needed the way a fresh video source requires.
+    let (media_path, output_width, output_height, video_id, template_id) = match source {
+        ExportSource::Video(video) => {
+            let video_uuid = Uuid::parse_str(&video.id)?;
+            // SPEC-CLOUD.md §6: the source video's persistent home is a
+            // private S3 bucket, not local disk — re-fetches it if this
+            // instance doesn't already have a local copy cached.
+            let video_path = source_video::ensure_on_disk(state, &video_uuid, &video.extension).await?;
+            let (w, h) = crate::scale::scaled_dimensions(video.width, video.height);
+            (video_path, w, h, Some(video.id.clone()), None)
+        }
+        ExportSource::Template { id, payload } => {
+            let template_uuid = Uuid::parse_str(id)?;
+            let clip_path = paths::template_clip_path(&state.config.video_dir, &template_uuid);
+            (clip_path, payload.width, payload.height, None, Some(id.clone()))
+        }
+    };
+
+    // A template clip's own internal timeline already starts at 0 (it was
+    // trimmed to exactly [gif_range_start, gif_range_end] at save time), so
+    // a "use this template" caller supplies caption/range times relative
+    // to that clip, not the original video's absolute timeline — the same
+    // coordinate space a fresh video-based export already uses. Both
+    // branches can therefore share this one call.
     let ass = generate_ass(
         &request.captions,
         request.gif_range_start,
@@ -83,7 +132,7 @@ async fn run_pipeline(
     let result = transcode_and_upload(
         state,
         export_id,
-        &video_path,
+        &media_path,
         &ass,
         request.gif_range_start,
         clip_duration,
@@ -99,7 +148,7 @@ async fn run_pipeline(
         .join(" ");
     let new_gif = NewGif {
         id: export_id.to_string(),
-        video_id: Some(video.id.clone()),
+        video_id,
         name: request.name.clone(),
         caption_text,
         captions_json: Some(serde_json::to_string(&request.captions)?),
@@ -109,6 +158,7 @@ async fn run_pipeline(
         height: Some(result.height),
         external_url: None,
         user_id: owner_id.to_string(),
+        template_id,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 

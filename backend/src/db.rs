@@ -3,12 +3,12 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
 use crate::models::{
-    Gif, LibrarySort, NewGif, NewVideo, PublicGif, Session, TemplatePayload, User, Video, VideoListItem,
-    VideoTemplate,
+    Gif, LibrarySort, NewGif, NewVideo, PublicGif, PublicTemplate, Session, Template, TemplatePayload, User, Video,
+    VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count, template_id";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
 /// link) starts out reusable, relying on the schema's `DEFAULT false`
@@ -17,7 +17,8 @@ const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_
 /// here, never part of what's `SELECT`ed back out to a response (SPEC-
 /// CLOUD.md §3's ownership model is enforced in the query, not surfaced
 /// to the frontend).
-const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
+const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, template_id";
+const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, payload_json, is_public, use_count, saved_at";
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool> {
     let pool = PgPoolOptions::new().connect(database_url).await?;
@@ -112,7 +113,7 @@ pub async fn list_videos(pool: &PgPool, owner_id: &str) -> Result<Vec<VideoListI
 
 pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result<Gif> {
     let sql = format!(
-        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -126,6 +127,7 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
         .bind(gif.height)
         .bind(&gif.external_url)
         .bind(created_at)
+        .bind(&gif.template_id)
         .bind(&gif.user_id)
         .fetch_one(pool)
         .await
@@ -329,6 +331,60 @@ pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// A template's full row, any visibility — used only by the owner-only
+/// `PATCH /api/templates/{id}` route, which needs to find the row (to
+/// distinguish "doesn't exist" from "not yours") before its ownership
+/// check can run.
+pub async fn get_template_by_id(pool: &PgPool, id: &str) -> Result<Option<Template>> {
+    let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// A template plus its creator's handle, from a query that only ever
+/// matches a public template (SPEC-CLOUD.md §4's "usual public-sharing
+/// check") — shared by `GET /api/templates/{id}` and exporting via
+/// `template_id`, so both enforce the exact same visibility rule.
+pub async fn get_public_template(pool: &PgPool, id: &str) -> Result<Option<PublicTemplate>> {
+    let sql = "SELECT templates.id, templates.video_id, templates.user_id, templates.payload_json, \
+         templates.is_public, templates.use_count, templates.saved_at, users.handle AS owner_handle \
+         FROM templates JOIN users ON users.id = templates.user_id \
+         WHERE templates.id = $1 AND templates.is_public = true";
+    sqlx::query_as::<_, PublicTemplate>(sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Opts a template into (or out of) the global library (SPEC-CLOUD.md
+/// §4/§8) — owner-scoped, same pattern as `set_gif_public`.
+pub async fn set_template_public(pool: &PgPool, id: &str, owner_id: &str, is_public: bool) -> Result<Option<Template>> {
+    let sql = format!("UPDATE templates SET is_public = $1 WHERE id = $2 AND user_id = $3 RETURNING {TEMPLATE_COLUMNS}");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(is_public)
+        .bind(id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Bumps a template's use counter — SPEC-CLOUD.md §8: "applying it to
+/// start a new GIF." No ownership/visibility check, mirroring
+/// `increment_gif_use_count`.
+pub async fn increment_template_use_count(pool: &PgPool, id: &str) -> Result<Option<Template>> {
+    let sql = format!("UPDATE templates SET use_count = use_count + 1 WHERE id = $1 RETURNING {TEMPLATE_COLUMNS}");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
 const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url, display_name";
 
 /// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a
@@ -465,7 +521,7 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle";
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.template_id, users.handle AS owner_handle";
     let order_by = match sort {
         LibrarySort::Newest => "gifs.created_at DESC",
         LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
@@ -683,6 +739,7 @@ mod tests {
                 height: Some(270),
                 external_url: None,
                 user_id: user.clone(),
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -714,6 +771,7 @@ mod tests {
                 height: Some(200),
                 external_url: None,
                 user_id: user,
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -743,6 +801,7 @@ mod tests {
                 height: None,
                 external_url: Some("https://example.com/a.gif".to_string()),
                 user_id: user,
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -767,6 +826,7 @@ mod tests {
             height: Some(270),
             external_url: None,
             user_id: user_id.to_string(),
+            template_id: None,
         }
     }
 
@@ -1127,6 +1187,90 @@ mod tests {
     async fn delete_template_reports_false_for_a_missing_video() {
         let pool = test_pool().await;
         assert!(!delete_template(&pool, "missing").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn get_template_by_id_returns_the_full_row() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        let template = get_template_by_id(&pool, "t1").await.unwrap().unwrap();
+        assert_eq!(template.user_id, user);
+        assert!(!template.is_public);
+        assert_eq!(template.use_count, 0);
+
+        assert!(get_template_by_id(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_template_public_flips_the_flag_and_is_owner_scoped() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &owner), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &owner, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        assert!(set_template_public(&pool, "t1", &other, true).await.unwrap().is_none());
+        assert!(!get_template_by_id(&pool, "t1").await.unwrap().unwrap().is_public);
+
+        let shared = set_template_public(&pool, "t1", &owner, true).await.unwrap().unwrap();
+        assert!(shared.is_public);
+        assert!(get_template_by_id(&pool, "t1").await.unwrap().unwrap().is_public);
+    }
+
+    #[tokio::test]
+    async fn increment_template_use_count_increments_repeatedly_and_returns_none_for_missing() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        let once = increment_template_use_count(&pool, "t1").await.unwrap().unwrap();
+        assert_eq!(once.use_count, 1);
+        let twice = increment_template_use_count(&pool, "t1").await.unwrap().unwrap();
+        assert_eq!(twice.use_count, 2);
+
+        assert!(increment_template_use_count(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_public_template_only_returns_a_public_template_with_attribution() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        set_handle(&pool, &owner, "template-owner").await.unwrap();
+        insert_video(&pool, &sample_video("v1", &owner), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_video(&pool, &sample_video("v2", &owner), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "public", "v1", &owner, &sample_template(), "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "private", "v2", &owner, &sample_template(), "2026-08-22T00:00:03Z")
+            .await
+            .unwrap();
+        set_template_public(&pool, "public", &owner, true).await.unwrap();
+
+        let found = get_public_template(&pool, "public").await.unwrap().unwrap();
+        assert_eq!(found.owner_handle.as_deref(), Some("template-owner"));
+
+        assert!(get_public_template(&pool, "private").await.unwrap().is_none());
+        assert!(get_public_template(&pool, "missing").await.unwrap().is_none());
     }
 
     #[tokio::test]

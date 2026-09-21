@@ -2,6 +2,7 @@ mod auth;
 mod exports;
 pub(crate) mod gifs;
 mod profiles;
+mod templates;
 mod videos;
 
 use std::sync::Arc;
@@ -51,4 +52,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),
         )
         .route("/gifs/{id}/use", post(gifs::use_gif))
+        .route(
+            "/templates/{id}",
+            get(templates::get_template).patch(templates::set_template_public),
+        )
+        .route("/templates/{id}/clip", get(templates::get_template_clip))
+        .route("/templates/{id}/thumbnail", get(templates::get_template_thumbnail))
 }
