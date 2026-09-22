@@ -14,6 +14,14 @@ Docker image as the server (`./migrate_archive`, alongside
 
 - `videos`/`gifs` rows copy across as-is — same ids, same timestamps —
   tagged with Simon's new-system `user_id`.
+- Each video's already-generated thumbnail and filmstrip sprite (from the
+  original upload pipeline) are copied over from the old archive's video
+  directory too — they're local-disk-only assets in both systems (never in
+  S3, see `paths.rs`), so there's nothing to regenerate, just to place at
+  the new `video_dir`. Without this, `GET /api/videos/{id}/thumbnail` 500s
+  for every migrated video: it has no local copy and no S3 fallback either
+  (see the next bullet), so the app's usual "regenerate on demand" path has
+  nothing to regenerate *from*.
 - R2 GIF/MP4/WebM outputs **aren't touched**. Both the old single-user app
   and the new one derive the same object keys from a gif's own id
   (`gifs/{id}.gif`, `clips/{id}.mp4`, `clips/{id}.webm`) — as long as the
@@ -26,14 +34,23 @@ Docker image as the server (`./migrate_archive`, alongside
   self-contained clip/thumbnail asset. This is why the migration needs the
   old video files on disk, not just the old database.
 - Raw source video files themselves are **not** migrated into the new S3
-  bucket. They're ephemeral processing scratch space in the new system
-  (7-day lifecycle rule, SPEC-CLOUD.md §6) — old videos are only needed
-  here as scratch input for the one ffmpeg re-clip above; there's nothing
-  that needs them to persist afterward.
+  bucket, or placed on the new system's local disk. They're ephemeral
+  processing scratch space in the new system (7-day lifecycle rule,
+  SPEC-CLOUD.md §6) — old videos are only needed here as scratch input for
+  the one ffmpeg re-clip above. **Known limitation**: this means re-opening
+  a migrated video's original source (e.g. the caption editor's live
+  preview, or making an additional gif from it) will 500 the same way
+  thumbnails did before this fix — there's no raw video bytes anywhere for
+  the app to serve or re-clip from. Only the video's already-existing
+  thumbnail/filmstrip and any already-templated clips survive migration;
+  everything else about the raw video is gone once it's off the old
+  Unraid box, matching how any video's raw file already behaves once its
+  normal 7-day S3 TTL passes.
 
 Safe to re-run: every row is skipped if it's already present (by id for
-videos/gifs, by video_id for templates), so an interrupted run can just be
-invoked again.
+videos/gifs, by video_id for templates) — except the thumbnail/filmstrip
+copy above, which always runs regardless, so a re-run also backfills
+those for videos an earlier run already migrated the row for.
 
 ## Prerequisites
 

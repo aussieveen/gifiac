@@ -177,6 +177,39 @@ async fn row_exists(pool: &PgPool, table: &'static str, id: &str) -> Result<bool
     Ok(exists.is_some())
 }
 
+/// Copies a video's already-generated thumbnail/filmstrip sprite over from
+/// the old archive, if present. These are self-contained, local-disk-only
+/// assets in both the old and new systems (never in S3 — see paths.rs and
+/// the upload pipeline, which only ever pushes the raw video itself to S3),
+/// so there's nothing to regenerate here, just to place at the new
+/// video_dir. Tolerant of either file being missing (not every old video
+/// necessarily has a filmstrip) and safe to re-run (skips a file that's
+/// already been copied). Returns whether anything was actually copied.
+async fn restore_video_assets(args: &Args, config: &Config, video: &OldVideo) -> Result<bool> {
+    let id = Uuid::parse_str(&video.id)?;
+    let mut copied_any = false;
+
+    let old_thumb = paths::thumbnail_path(&args.old_video_dir, &id);
+    let new_thumb = paths::thumbnail_path(&config.video_dir, &id);
+    if tokio::fs::try_exists(&old_thumb).await.unwrap_or(false) && !tokio::fs::try_exists(&new_thumb).await.unwrap_or(false) {
+        tokio::fs::copy(&old_thumb, &new_thumb)
+            .await
+            .with_context(|| format!("copying thumbnail for video {}", video.id))?;
+        copied_any = true;
+    }
+
+    let old_filmstrip = paths::filmstrip_sprite_path(&args.old_video_dir, &id);
+    let new_filmstrip = paths::filmstrip_sprite_path(&config.video_dir, &id);
+    if tokio::fs::try_exists(&old_filmstrip).await.unwrap_or(false) && !tokio::fs::try_exists(&new_filmstrip).await.unwrap_or(false) {
+        tokio::fs::copy(&old_filmstrip, &new_filmstrip)
+            .await
+            .with_context(|| format!("copying filmstrip for video {}", video.id))?;
+        copied_any = true;
+    }
+
+    Ok(copied_any)
+}
+
 async fn migrate_template(
     pool: &PgPool,
     config: &Config,
@@ -258,32 +291,43 @@ async fn run() -> Result<bool> {
     }
 
     let mut videos_migrated = 0;
+    let mut assets_restored = 0;
     for video in &old_videos {
         if row_exists(&pool, "videos", &video.id).await? {
-            continue;
+            // Row already migrated (e.g. a prior run) — still fall through
+            // to the asset restore below, so re-running this script can
+            // backfill thumbnails/filmstrips for videos it already copied
+            // the row for, without needing --user-id logic to special-case
+            // that.
+        } else {
+            db::insert_video(
+                &pool,
+                &NewVideo {
+                    id: video.id.clone(),
+                    original_filename: video.original_filename.clone(),
+                    extension: video.extension.clone(),
+                    file_size_bytes: video.file_size_bytes,
+                    duration_seconds: video.duration_seconds,
+                    width: video.width,
+                    height: video.height,
+                    user_id: args.user_id.clone(),
+                },
+                &video.uploaded_at,
+            )
+            .await
+            .with_context(|| format!("inserting video {}", video.id))?;
+            videos_migrated += 1;
         }
-        db::insert_video(
-            &pool,
-            &NewVideo {
-                id: video.id.clone(),
-                original_filename: video.original_filename.clone(),
-                extension: video.extension.clone(),
-                file_size_bytes: video.file_size_bytes,
-                duration_seconds: video.duration_seconds,
-                width: video.width,
-                height: video.height,
-                user_id: args.user_id.clone(),
-            },
-            &video.uploaded_at,
-        )
-        .await
-        .with_context(|| format!("inserting video {}", video.id))?;
-        videos_migrated += 1;
+
+        if restore_video_assets(&args, &config, video).await? {
+            assets_restored += 1;
+        }
     }
     println!(
         "videos: {videos_migrated} inserted, {} already present",
         old_videos.len() - videos_migrated
     );
+    println!("video assets (thumbnail/filmstrip): restored for {assets_restored} of {} videos", old_videos.len());
 
     let mut gifs_migrated = 0;
     for gif in &old_gifs {

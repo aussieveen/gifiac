@@ -22,6 +22,17 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
 
+  # user_data only ever matters at first boot (it writes deploy.sh,
+  # docker-compose.yml, and config.env, then runs deploy.sh once) — every
+  # later deploy.sh/docker-compose.yml edit reaches the running instance
+  # through the GitHub Actions deploy job (SSM send-command), not through
+  # user_data again. Without this, the AWS provider's default behavior
+  # forces a full instance replacement on any user_data diff — silently
+  # destroying the instance's root volume, and with it every locally-
+  # stored template clip/thumbnail (SPEC-CLOUD.md §4 assets, which only
+  # ever live on local disk, never S3 — see M8's scope-cut notes).
+  user_data_replace_on_change = false
+
   root_block_device {
     volume_size = var.ec2_root_volume_size
     volume_type = "gp3"
