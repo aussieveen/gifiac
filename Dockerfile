@@ -63,6 +63,10 @@ RUN fc-cache -f
 
 WORKDIR /app
 COPY --from=builder /app/backend/target/release/gifiac-backend ./gifiac-backend
+# One-time archive migration (SPEC-CLOUD.md §12, see MIGRATION.md) — same
+# image as the server so it shares its ffmpeg/fontconfig setup and its
+# DATABASE_URL/GIFIAC_VIDEO_DIR env, run via `docker compose exec`.
+COPY --from=builder /app/backend/target/release/migrate_archive ./migrate_archive
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 EXPOSE 8080
