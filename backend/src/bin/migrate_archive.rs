@@ -177,14 +177,28 @@ async fn row_exists(pool: &PgPool, table: &'static str, id: &str) -> Result<bool
     Ok(exists.is_some())
 }
 
-/// Copies a video's already-generated thumbnail/filmstrip sprite over from
-/// the old archive, if present. These are self-contained, local-disk-only
-/// assets in both the old and new systems (never in S3 — see paths.rs and
-/// the upload pipeline, which only ever pushes the raw video itself to S3),
-/// so there's nothing to regenerate here, just to place at the new
-/// video_dir. Tolerant of either file being missing (not every old video
-/// necessarily has a filmstrip) and safe to re-run (skips a file that's
-/// already been copied). Returns whether anything was actually copied.
+/// Copies a video's already-generated thumbnail/filmstrip sprite, and its
+/// raw file itself, over from the old archive, if present.
+///
+/// The thumbnail/filmstrip are self-contained, local-disk-only assets in
+/// both the old and new systems (never in S3 — see paths.rs), so there's
+/// nothing to regenerate, just to place at the new video_dir.
+///
+/// The raw video is different: normally it's meant to be ephemeral (S3,
+/// 7-day TTL, SPEC-CLOUD.md §6) — but re-opening an *existing* template to
+/// overwrite it, or the caption editor's live preview, both need the
+/// original source video to actually be available, not just its already-
+/// produced outputs. Placing it directly at the new system's local
+/// video_dir (rather than uploading to S3, which would still only buy the
+/// same 7-day window) is what makes `ensure_on_disk` find it without any
+/// S3 round-trip — behaviorally identical to a normal cache hit, just
+/// without ever having gone through S3 first. Same durability caveat as
+/// the thumbnail/filmstrip above: local-disk-only, gone if the instance's
+/// root volume ever is.
+///
+/// Tolerant of any of the three files being missing and safe to re-run
+/// (skips a file that's already been copied). Returns whether anything was
+/// actually copied.
 async fn restore_video_assets(args: &Args, config: &Config, video: &OldVideo) -> Result<bool> {
     let id = Uuid::parse_str(&video.id)?;
     let mut copied_any = false;
@@ -204,6 +218,15 @@ async fn restore_video_assets(args: &Args, config: &Config, video: &OldVideo) ->
         tokio::fs::copy(&old_filmstrip, &new_filmstrip)
             .await
             .with_context(|| format!("copying filmstrip for video {}", video.id))?;
+        copied_any = true;
+    }
+
+    let old_video = paths::video_path(&args.old_video_dir, &id, &video.extension);
+    let new_video = paths::video_path(&config.video_dir, &id, &video.extension);
+    if tokio::fs::try_exists(&old_video).await.unwrap_or(false) && !tokio::fs::try_exists(&new_video).await.unwrap_or(false) {
+        tokio::fs::copy(&old_video, &new_video)
+            .await
+            .with_context(|| format!("copying raw video file for video {}", video.id))?;
         copied_any = true;
     }
 
@@ -327,7 +350,10 @@ async fn run() -> Result<bool> {
         "videos: {videos_migrated} inserted, {} already present",
         old_videos.len() - videos_migrated
     );
-    println!("video assets (thumbnail/filmstrip): restored for {assets_restored} of {} videos", old_videos.len());
+    println!(
+        "video assets (raw file, thumbnail, filmstrip): restored for {assets_restored} of {} videos",
+        old_videos.len()
+    );
 
     let mut gifs_migrated = 0;
     for gif in &old_gifs {
