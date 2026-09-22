@@ -4,6 +4,18 @@ variable "aws_region" {
   default     = "eu-west-1"
 }
 
+variable "aws_profile" {
+  description = "Named AWS CLI profile to authenticate with (e.g. \"personal\"). Leave unset to fall back to the default credential chain (AWS_PROFILE env var, env credentials, IMDS, etc.) — GitHub Actions' OIDC-assumed role never sets this, it always uses the default chain."
+  type        = string
+  default     = null
+}
+
+variable "expected_aws_account_id" {
+  description = "The AWS account id this deployment must run against — set this to your personal account's id and every plan/apply hard-fails (see account_guard.tf) if the resolved profile/credentials point somewhere else, e.g. a work account. Leave unset to skip the check."
+  type        = string
+  default     = null
+}
+
 variable "domain_name" {
   description = "Domain the app is served on. DNS is not hosted in Route53 (see terraform/README.md) — this only names the ACM certificate; the user points DNS at the ALB manually."
   type        = string

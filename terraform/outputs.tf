@@ -14,6 +14,11 @@ output "acm_validation_records" {
   ]
 }
 
+output "acm_certificate_arn" {
+  description = "The ACM certificate's ARN — check its status with `aws acm describe-certificate` while waiting for it to become ISSUED (see terraform/README.md)."
+  value       = aws_acm_certificate.app.arn
+}
+
 output "rds_endpoint" {
   description = "RDS connection endpoint (host:port)."
   value       = aws_db_instance.main.endpoint

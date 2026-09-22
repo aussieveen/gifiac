@@ -1,6 +1,6 @@
 resource "aws_security_group" "alb" {
   name        = "gifiac-alb"
-  description = "Internet-facing ALB — HTTP/HTTPS from anywhere."
+  description = "Internet-facing ALB - HTTP/HTTPS from anywhere."
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -35,7 +35,7 @@ resource "aws_security_group" "alb" {
 # Manager / send-command (SPEC-CLOUD.md §10), not SSH.
 resource "aws_security_group" "ec2" {
   name        = "gifiac-ec2"
-  description = "gifiac app instance — app port from the ALB only, no SSH."
+  description = "gifiac app instance - app port from the ALB only, no SSH."
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -60,7 +60,7 @@ resource "aws_security_group" "ec2" {
 
 resource "aws_security_group" "rds" {
   name        = "gifiac-rds"
-  description = "gifiac RDS Postgres — from the app instance only."
+  description = "gifiac RDS Postgres - from the app instance only."
   vpc_id      = aws_vpc.main.id
 
   ingress {
