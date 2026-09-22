@@ -7,7 +7,7 @@ use gifiac_backend::auth::{GoogleAuthConfig, SESSION_COOKIE_NAME};
 use gifiac_backend::config::Config;
 use gifiac_backend::db;
 use gifiac_backend::state::AppState;
-use gifiac_backend::storage::Storage;
+use gifiac_backend::storage::{SourceStorageConfig, Storage};
 use sqlx::PgPool;
 use tempfile::TempDir;
 
@@ -41,15 +41,21 @@ pub fn test_storage() -> Storage {
 /// Same MinIO instance, standing in for the private source-video S3
 /// bucket (SPEC-CLOUD.md §6) — a separate, non-public bucket so tests
 /// exercise the real "no public URL" shape too (`public_base_url: None`).
+/// Goes through `new_for_source_bucket` (not `Storage::new`) with explicit
+/// credentials set — the same "creds present" branch local dev/test always
+/// takes; production (no creds set) falls back to the EC2 instance role
+/// instead (SPEC-CLOUD.md §10), a path this test fixture can't exercise
+/// without a real instance.
 #[allow(dead_code)]
-pub fn test_source_storage() -> Storage {
-    Storage::new(
-        "http://localhost:19000",
-        "gifiac-source-videos-test",
-        None,
-        "gifiac",
-        "gifiac-test-secret",
-    )
+pub async fn test_source_storage() -> Storage {
+    Storage::new_for_source_bucket(&SourceStorageConfig {
+        access_key_id: Some("gifiac".to_string()),
+        secret_access_key: Some("gifiac-test-secret".to_string()),
+        bucket_name: "gifiac-source-videos-test".to_string(),
+        region: "us-east-1".to_string(),
+        endpoint_url_override: Some("http://localhost:19000".to_string()),
+    })
+    .await
 }
 
 /// Spins up the real router against a scratch video dir + throwaway sqlite
@@ -98,7 +104,7 @@ pub async fn spawn_app() -> TestApp {
     };
 
     let storage = test_storage();
-    let source_storage = test_source_storage();
+    let source_storage = test_source_storage().await;
     let http_client = gifiac_backend::link_check::build_client().unwrap();
     let state = Arc::new(AppState {
         pool: pool.clone(),

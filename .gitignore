@@ -11,3 +11,12 @@ dist/
 backend/.env
 .env.*
 !.env.example
+
+# Terraform (terraform/)
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+crash.*.log

@@ -1,15 +1,14 @@
 services:
   gifiac:
     # Built and published by .github/workflows/docker-publish.yml on every push to main.
-    # Replace YOUR_GITHUB_USERNAME with the GitHub user/org the repo lives under.
     # Pin to a specific build instead of :latest by swapping in a yyyy.mm.dd.hh.mm tag.
-    image: ghcr.io/YOUR_GITHUB_USERNAME/gifiac:latest
+    image: ghcr.io/aussieveen/gifiac:latest
     container_name: gifiac
     restart: unless-stopped
     ports:
-      - "8123:8080"
+      - "8080:8080"
     volumes:
-      - /mnt/user/appdata/gifiac:/data
+      - /opt/gifiac/data:/data
     environment:
       GIFIAC_VIDEO_DIR: /data/videos
       DATABASE_URL: "${DATABASE_URL}"

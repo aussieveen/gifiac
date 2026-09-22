@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# First-boot bootstrap for the gifiac EC2 instance (SPEC-CLOUD.md §10).
+# Amazon Linux 2023's own repos don't ship the Docker Compose plugin, so
+# it's installed directly from the released binary (the standard
+# cross-distro method) rather than via a package.
+set -euxo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+usermod -aG docker ec2-user
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+mkdir -p /opt/gifiac/data
+cd /opt/gifiac
+
+cat > docker-compose.yml <<'GIFIAC_COMPOSE_EOF'
+${docker_compose_yml}
+GIFIAC_COMPOSE_EOF
+
+# Non-secret config, baked in at instance creation — genuine secrets
+# (SPEC-CLOUD.md §10) are fetched from SSM by deploy.sh instead, on every
+# deploy, not just this first boot.
+cat > config.env <<EOF
+RDS_ENDPOINT=${rds_endpoint}
+R2_ACCOUNT_ID=${r2_account_id}
+R2_BUCKET_NAME=${r2_bucket_name}
+R2_PUBLIC_BASE_URL=${r2_public_base_url}
+GOOGLE_CLIENT_ID=${google_client_id}
+APP_BASE_URL=${app_base_url}
+SOURCE_VIDEOS_S3_BUCKET=${source_videos_s3_bucket}
+SOURCE_VIDEOS_S3_REGION=${source_videos_s3_region}
+EOF
+chmod 600 config.env
+
+cat > deploy.sh <<'GIFIAC_DEPLOY_EOF'
+${deploy_sh}
+GIFIAC_DEPLOY_EOF
+chmod +x deploy.sh
+
+./deploy.sh

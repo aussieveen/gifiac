@@ -34,18 +34,18 @@ impl R2Config {
 }
 
 /// Credentials/settings for the private source-video S3 bucket
-/// (SPEC-CLOUD.md §6) — required, no defaults, same as `R2Config`.
-/// `endpoint_url_override` is only ever set in local dev, pointing at
-/// MinIO; unset in production, where the endpoint is derived from
-/// `region` instead. No IAM-role auth yet — that's M8's secrets-
-/// management job (same boundary already drawn for the Google/RDS
-/// credentials this app also still takes as plain env vars); explicit
-/// access-key/secret works against real S3 today and can be swapped for
-/// an instance role later without changing `Storage`'s shape.
+/// (SPEC-CLOUD.md §6). `access_key_id`/`secret_access_key` are optional —
+/// set for local dev/test against MinIO (`Storage::new_for_source_bucket`
+/// uses them directly when both are present); unset in production, where
+/// SPEC-CLOUD.md §10 has the backend authenticate via the EC2 instance's
+/// IAM role instead (the AWS SDK's own default credential provider chain,
+/// which resolves that automatically). `endpoint_url_override` is
+/// similarly MinIO-only; unset in production, where the endpoint is
+/// derived from `region` instead.
 #[derive(Debug, Clone)]
 pub struct SourceStorageConfig {
-    pub access_key_id: String,
-    pub secret_access_key: String,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
     pub bucket_name: String,
     pub region: String,
     pub endpoint_url_override: Option<String>,
@@ -54,19 +54,22 @@ pub struct SourceStorageConfig {
 impl SourceStorageConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            access_key_id: require_env("SOURCE_VIDEOS_S3_ACCESS_KEY_ID")?,
-            secret_access_key: require_env("SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY")?,
+            access_key_id: non_empty_env("SOURCE_VIDEOS_S3_ACCESS_KEY_ID"),
+            secret_access_key: non_empty_env("SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY"),
             bucket_name: require_env("SOURCE_VIDEOS_S3_BUCKET")?,
             region: require_env("SOURCE_VIDEOS_S3_REGION")?,
-            endpoint_url_override: std::env::var("SOURCE_VIDEOS_S3_ENDPOINT_URL").ok(),
+            endpoint_url_override: non_empty_env("SOURCE_VIDEOS_S3_ENDPOINT_URL"),
         })
     }
+}
 
-    pub fn endpoint_url(&self) -> String {
-        self.endpoint_url_override
-            .clone()
-            .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", self.region))
-    }
+/// Like `std::env::var(key).ok()`, but treats an empty string as absent
+/// too — production's docker-compose `"${VAR}"` substitution sets the
+/// container env var to `""` (not unset) when `.env` omits it, which is
+/// exactly the deliberate case for these vars (falling back to the EC2
+/// instance's IAM role, see `Storage::new_for_source_bucket`).
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 fn require_env(key: &str) -> Result<String> {
@@ -110,6 +113,44 @@ impl Storage {
             client: Client::from_conf(config),
             bucket: bucket.to_string(),
             public_base_url: public_base_url.map(|url| url.trim_end_matches('/').to_string()),
+        }
+    }
+
+    /// Builds a `Storage` for the private source-video bucket
+    /// (SPEC-CLOUD.md §6) — always no `public_base_url` (nothing derives a
+    /// public URL for a private bucket). Async, unlike `new`: resolving
+    /// the AWS SDK's default credential provider chain can mean a network
+    /// round-trip to the EC2 instance metadata service (IMDS) to fetch the
+    /// instance role's temporary credentials.
+    ///
+    /// When `config` carries an explicit access key/secret (local dev/test
+    /// against MinIO), those are used directly, exactly like `new` — the
+    /// SDK's default chain is never consulted at all in that case. When
+    /// they're absent (production), the default chain resolves credentials
+    /// itself: environment variables, a shared credentials file, then the
+    /// EC2 instance profile via IMDS — which is exactly the "backend
+    /// authenticates via the same instance IAM role directly" SPEC-
+    /// CLOUD.md §10 asks for, with no code path split needed between the
+    /// two — only the *env vars set at deploy time* differ.
+    pub async fn new_for_source_bucket(config: &SourceStorageConfig) -> Self {
+        let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
+        if let (Some(access_key_id), Some(secret_access_key)) = (&config.access_key_id, &config.secret_access_key) {
+            loader = loader.credentials_provider(Credentials::new(access_key_id, secret_access_key, None, None, "gifiac"));
+        }
+        let sdk_config = loader.load().await;
+
+        let mut builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if let Some(endpoint_url) = &config.endpoint_url_override {
+            // MinIO (local dev/test) — real S3 uses its normal
+            // DNS-virtual-hosted addressing (the SDK's own default), so
+            // this branch never applies in production.
+            builder = builder.endpoint_url(endpoint_url).force_path_style(true);
+        }
+
+        Self {
+            client: Client::from_conf(builder.build()),
+            bucket: config.bucket_name.clone(),
+            public_base_url: None,
         }
     }
 
@@ -191,14 +232,15 @@ mod tests {
         )
     }
 
-    fn minio_source_videos() -> Storage {
-        Storage::new(
-            "http://localhost:19000",
-            "gifiac-source-videos-test",
-            None,
-            "gifiac",
-            "gifiac-test-secret",
-        )
+    async fn minio_source_videos() -> Storage {
+        Storage::new_for_source_bucket(&SourceStorageConfig {
+            access_key_id: Some("gifiac".to_string()),
+            secret_access_key: Some("gifiac-test-secret".to_string()),
+            bucket_name: "gifiac-source-videos-test".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint_url_override: Some("http://localhost:19000".to_string()),
+        })
+        .await
     }
 
     #[test]
@@ -225,10 +267,10 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[should_panic(expected = "no public_base_url configured")]
-    fn public_url_panics_when_the_bucket_has_no_public_base_url() {
-        minio_source_videos().public_url("raw/abc.mp4");
+    async fn public_url_panics_when_the_bucket_has_no_public_base_url() {
+        minio_source_videos().await.public_url("raw/abc.mp4");
     }
 
     /// Exercises upload/delete against a real S3-compatible server (the
@@ -263,7 +305,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a local MinIO instance on :19000"]
     async fn upload_then_download_round_trips_against_minio() {
-        let storage = minio_source_videos();
+        let storage = minio_source_videos().await;
         let dir = tempfile::tempdir().unwrap();
         let source_path = dir.path().join("source.txt");
         std::fs::write(&source_path, b"hello from a private bucket").unwrap();
