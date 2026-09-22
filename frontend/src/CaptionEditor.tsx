@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, PublicTemplate, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 /**
@@ -79,9 +79,15 @@ const SWATCH_COLORS = ['#fff35c', '#00ff99', '#00ccff', '#ff6666', '#9933ff', '#
 // CSS-scaled to fit the box) rather than a cropped film-strip frame.
 const PREVIEW_SCALE = 1
 
+// SPEC-CLOUD.md §8: "Use this template" (M7b) opens this same editor
+// against a public template's own clip instead of a video — every
+// `video`/`filmstrip` reference below generalizes to branch on `source.kind`.
+export type EditorSource =
+  | { kind: 'video'; video: Video; filmstrip: FilmstripMeta }
+  | { kind: 'template'; template: PublicTemplate }
+
 interface Props {
-  video: Video
-  filmstrip: FilmstripMeta
+  source: EditorSource
   onBack: () => void
   /** Called once an export finishes — lets the caller jump straight to
    * the new GIF (e.g. in the archive) instead of leaving the user to find
@@ -170,10 +176,39 @@ interface WidthDrag {
   origWidth: number
 }
 
-export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props) {
-  const duration = video.duration_seconds
-
-  const [captions, setCaptions] = useState<Caption[]>([])
+export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
+  // The clip's own full length — for a template source there's nothing
+  // "outside" it to scrub into, since a template clip is already trimmed
+  // to exactly the range it was saved with.
+  const duration =
+    source.kind === 'video' ? source.video.duration_seconds : source.template.gif_range_end - source.template.gif_range_start
+  // Matches the backend's scale.rs output size: for a video this comes
+  // from the film-strip (computed server-side, see the PREVIEW_SCALE
+  // comment below); a template's clip was already scaled to this exact
+  // size at save time, so `template.width`/`height` are it directly.
+  const outputWidth = source.kind === 'video' ? source.filmstrip.frameWidth : source.template.width
+  const outputHeight = source.kind === 'video' ? source.filmstrip.frameHeight : source.template.height
+  const clipUrl = source.kind === 'video' ? videoFileUrl(source.video.id) : source.template.clip_url
+  // Only a video source has a real film-strip sprite — see the M7b plan
+  // notes on why a template-clip sprite endpoint isn't built (a visual
+  // nice-to-have, not a functional gap: the timeline below works purely
+  // in time coordinates either way).
+  const filmstrip = source.kind === 'video' ? source.filmstrip : null
+  // A video source starts with no captions until the pre-fill effect
+  // below resolves; a template source already has everything the caller
+  // fetched, so its captions are ready synchronously — shifted from the
+  // template's own absolute (original-video-timeline) times into the
+  // clip's 0-based space, since that's the coordinate system this whole
+  // session (and the export request it eventually sends) works in.
+  const [captions, setCaptions] = useState<Caption[]>(() =>
+    source.kind === 'template'
+      ? source.template.captions.map((c) => ({
+          ...c,
+          startTime: c.startTime - source.template.gif_range_start,
+          endTime: c.endTime - source.template.gif_range_start,
+        }))
+      : [],
+  )
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [gifRange, setGifRange] = useState({ start: 0, end: duration })
@@ -189,8 +224,9 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   // `video.has_template` (from the video list) gives an immediate answer
   // for which export-form control to show (checkbox vs. button) without
   // waiting on the fetch below, which then corrects it if stale and
-  // supplies the actual caption/range payload to pre-fill with.
-  const [hasTemplate, setHasTemplate] = useState(video.has_template ?? false)
+  // supplies the actual caption/range payload to pre-fill with. Template
+  // sources never have this UI at all (see the gated block further down).
+  const [hasTemplate, setHasTemplate] = useState(source.kind === 'video' ? (source.video.has_template ?? false) : false)
   const [createTemplate, setCreateTemplate] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaved, setTemplateSaved] = useState(false)
@@ -220,10 +256,16 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
 
   // SPEC.md §12: "Opening a video that has a template loads the caption
   // editor with all template data pre-filled." The user can freely change
-  // anything afterwards — this only sets the initial state.
+  // anything afterwards — this only sets the initial state. Video-mode
+  // only (a template source's captions are already set above, from props,
+  // with no fetch needed) — keyed on the video's own id rather than
+  // `source` itself, which is a fresh object every render and would
+  // re-fire this on every render if used directly as the dependency.
+  const sourceVideoId = source.kind === 'video' ? source.video.id : null
   useEffect(() => {
+    if (source.kind !== 'video') return
     let cancelled = false
-    getTemplate(video.id)
+    getTemplate(source.video.id)
       .then((template) => {
         if (cancelled) return
         setHasTemplate(template !== null)
@@ -238,7 +280,7 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     return () => {
       cancelled = true
     }
-  }, [video.id])
+  }, [sourceVideoId])
 
   // SPEC.md §14: hovering the timeline and scrolling vertically zooms
   // instead of scrolling the page — up zooms in, down zooms out — while a
@@ -555,8 +597,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   }
 
   const activeCaptions = captions.filter((c) => currentTime >= c.startTime && currentTime <= c.endTime)
-  const previewWidth = filmstrip.frameWidth * PREVIEW_SCALE
-  const previewHeight = filmstrip.frameHeight * PREVIEW_SCALE
+  const previewWidth = outputWidth * PREVIEW_SCALE
+  const previewHeight = outputHeight * PREVIEW_SCALE
 
   // A fixed strip height, independent of zoom/frame count, so frames stay
   // clearly visible rather than shrinking (and letterboxing inside a
@@ -583,41 +625,51 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   // on the timeline. 40x48 keeps each frame closer to landscape than a
   // taller/narrower box would, so the crop isn't as severe.
   const MIN_FRAME_WIDTH = 40
-  const visibleFrameCount = clamp(Math.floor(timelineWidth / MIN_FRAME_WIDTH), 1, filmstrip.frameCount)
-  const frameIndices =
-    visibleFrameCount === 1
+  // `filmstrip` is only non-null for a video source — a template clip has
+  // no sprite endpoint (see the top-of-component comment), so these are
+  // all empty/zero in template mode, and the frame-thumbnail `.map()`
+  // below naturally renders nothing rather than needing its own guard.
+  const visibleFrameCount = filmstrip ? clamp(Math.floor(timelineWidth / MIN_FRAME_WIDTH), 1, filmstrip.frameCount) : 0
+  const frameIndices = !filmstrip
+    ? []
+    : visibleFrameCount === 1
       ? [0]
       : Array.from({ length: visibleFrameCount }, (_, i) =>
           Math.round((i * (filmstrip.frameCount - 1)) / (visibleFrameCount - 1)),
         )
-  const filmstripFrameWidth = timelineWidth / visibleFrameCount
-  const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
+  const filmstripFrameWidth = filmstrip ? timelineWidth / visibleFrameCount : 0
+  const filmstripScale = filmstrip ? FILMSTRIP_HEIGHT / filmstrip.frameHeight : 0
 
   // SPEC.md §12: output dimensions are derived from the video the same
   // deterministic way the export pipeline does (backend/src/scale.rs) —
-  // filmstrip.frameWidth/frameHeight are already computed from that exact
-  // function server-side (see the PREVIEW_SCALE comment above), so this
-  // needs no export to run first to know what they'd be. Shared by both
-  // the standalone "Overwrite template" action and "Create template" on
-  // export completion, which otherwise build the identical payload.
+  // `outputWidth`/`outputHeight` are already computed from that exact
+  // function server-side for a video source (see the PREVIEW_SCALE
+  // comment above) or from the template's own save-time scaling for a
+  // template source, so this needs no export to run first to know what
+  // they'd be. Shared by both the standalone "Overwrite template" action
+  // and "Create template" on export completion, which otherwise build the
+  // identical payload. Video-mode only — see the callers.
   function buildTemplatePayload(captionsForTemplate: Caption[]): TemplatePayload {
     return {
       captions: captionsForTemplate,
       gif_range_start: Number(gifRange.start.toFixed(2)),
       gif_range_end: Number(gifRange.end.toFixed(2)),
-      width: filmstrip.frameWidth,
-      height: filmstrip.frameHeight,
+      width: outputWidth,
+      height: outputHeight,
     }
   }
 
   // SPEC.md §12: "Overwriting is independent of exporting — the user can
-  // update the template without triggering a new GIF export."
+  // update the template without triggering a new GIF export." Only
+  // reachable from video-mode UI (see the gated JSX below), but guarded
+  // here too since there's no video to attach a template to otherwise.
   async function overwriteTemplate() {
+    if (source.kind !== 'video') return
     setTemplateSaving(true)
     setTemplateError(null)
     setTemplateSaved(false)
     try {
-      await putTemplate(video.id, buildTemplatePayload(captions))
+      await putTemplate(source.video.id, buildTemplatePayload(captions))
       setHasTemplate(true)
       setTemplateSaved(true)
     } catch (err) {
@@ -646,7 +698,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
         return el ? { ...c, text: measureWrappedLines(el) } : c
       })
       const result = await createExport({
-        video_id: video.id,
+        video_id: source.kind === 'video' ? source.video.id : undefined,
+        template_id: source.kind === 'template' ? source.template.id : undefined,
         name: trimmedName,
         captions: captionsWithWrapping,
         gif_range_start: Number(gifRange.start.toFixed(2)),
@@ -659,9 +712,10 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
           setExportProgress(null)
           setSubmitting(false)
           // SPEC.md §12: "Checking it saves the current export parameters
-          // as the video's template when the GIF is exported."
-          if (createTemplate) {
-            putTemplate(video.id, buildTemplatePayload(captionsWithWrapping))
+          // as the video's template when the GIF is exported." Video-mode
+          // only — `createTemplate`'s checkbox is never shown otherwise.
+          if (source.kind === 'video' && createTemplate) {
+            putTemplate(source.video.id, buildTemplatePayload(captionsWithWrapping))
               .then(() => setHasTemplate(true))
               .catch((err) => setTemplateError(err instanceof Error ? err.message : String(err)))
           }
@@ -684,9 +738,9 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
       <button className="back-link" onClick={onBack}>
         ← back to library
       </button>
-      <h1>{video.original_filename}</h1>
+      <h1>{source.kind === 'video' ? source.video.original_filename : `@${source.template.owner_handle ?? 'unknown'}'s template`}</h1>
       <p className="subtitle">
-        {video.width}×{video.height} · {duration.toFixed(1)}s
+        {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
       </p>
 
       <div className="va-top">
@@ -694,7 +748,7 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
         <div className="preview-frame" ref={previewRef} style={{ width: previewWidth, height: previewHeight }}>
           <video
             ref={videoRef}
-            src={videoFileUrl(video.id)}
+            src={clipUrl}
             className="preview-video"
             preload="auto"
             onTimeUpdate={handleVideoTimeUpdate}
@@ -912,17 +966,18 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
               style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }}
               onClick={scrubTo}
             >
-              {frameIndices.map((frameIndex) => (
-                <div
-                  key={frameIndex}
-                  className="va-frame"
-                  style={{
-                    width: filmstripFrameWidth,
-                    height: FILMSTRIP_HEIGHT,
-                    ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, filmstripScale),
-                  }}
-                />
-              ))}
+              {filmstrip &&
+                frameIndices.map((frameIndex) => (
+                  <div
+                    key={frameIndex}
+                    className="va-frame"
+                    style={{
+                      width: filmstripFrameWidth,
+                      height: FILMSTRIP_HEIGHT,
+                      ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, filmstripScale),
+                    }}
+                  />
+                ))}
               <div
                 className="va-range-highlight"
                 style={{
@@ -986,21 +1041,24 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
             {/* SPEC.md §12: a video with no template gets a "Create
                 template" checkbox on the Make GIF form; a video already
                 working from one gets a standalone "Overwrite template"
-                button instead, independent of exporting. */}
-            {!hasTemplate ? (
-              <label className="va-hint">
-                <input
-                  type="checkbox"
-                  checked={createTemplate}
-                  onChange={(e) => setCreateTemplate(e.target.checked)}
-                />{' '}
-                Create template
-              </label>
-            ) : (
-              <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
-                {templateSaving ? 'Saving…' : 'Overwrite template'}
-              </button>
-            )}
+                button instead, independent of exporting. Video-mode only —
+                a "use this template" session has no video to attach a
+                (possibly derivative) template to. */}
+            {source.kind === 'video' &&
+              (!hasTemplate ? (
+                <label className="va-hint">
+                  <input
+                    type="checkbox"
+                    checked={createTemplate}
+                    onChange={(e) => setCreateTemplate(e.target.checked)}
+                  />{' '}
+                  Create template
+                </label>
+              ) : (
+                <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
+                  {templateSaving ? 'Saving…' : 'Overwrite template'}
+                </button>
+              ))}
             <input
               className="va-name-input"
               placeholder="Name this GIF…"

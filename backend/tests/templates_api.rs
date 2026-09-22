@@ -13,13 +13,20 @@ use common::{authed, login_as, spawn_app, upload_test_video};
 /// since `PUT /api/videos/{id}/template` doesn't return one — that
 /// endpoint stays the video-owner's private flow, unrelated to the
 /// template-id-scoped routes under test here).
+///
+/// `gif_range_start` is deliberately non-zero (2.0, not 0.0): a "use this
+/// template" export submits captions/range in the *clip's own* 0-based
+/// coordinate space, while this payload's own caption times are absolute
+/// (the original creator's video timeline) — a zero start would make the
+/// shift `normalize_locked_captions` applies a no-op, silently hiding a
+/// real coordinate-space bug (see the M7b plan notes).
 async fn put_test_template(test_app: &common::TestApp, video_id: &str) -> String {
     let payload = json!({
         "captions": [
             {
                 "id": "c1",
-                "startTime": 0.0,
-                "endTime": 1.0,
+                "startTime": 2.2,
+                "endTime": 2.8,
                 "text": "locked caption",
                 "fontFamily": "Impact, sans-serif",
                 "fontSize": 28,
@@ -31,8 +38,8 @@ async fn put_test_template(test_app: &common::TestApp, video_id: &str) -> String
             },
             {
                 "id": "c2",
-                "startTime": 0.0,
-                "endTime": 1.0,
+                "startTime": 2.1,
+                "endTime": 2.9,
                 "text": "changeable caption",
                 "fontFamily": "Impact, sans-serif",
                 "fontSize": 28,
@@ -43,8 +50,8 @@ async fn put_test_template(test_app: &common::TestApp, video_id: &str) -> String
                 "locked": false
             }
         ],
-        "gif_range_start": 0.0,
-        "gif_range_end": 1.0,
+        "gif_range_start": 2.0,
+        "gif_range_end": 3.0,
         "width": 320,
         "height": 240
     });
@@ -129,6 +136,7 @@ async fn get_template_requires_public_and_returns_the_full_shape_once_public() {
     assert_eq!(body["id"], template_id);
     assert_eq!(body["is_public"], true);
     assert_eq!(body["use_count"], 0);
+    assert!(body["saved_at"].as_str().is_some());
     assert_eq!(body["clip_url"], format!("/api/templates/{template_id}/clip"));
     assert_eq!(
         body["thumbnail_url"],
@@ -136,6 +144,123 @@ async fn get_template_requires_public_and_returns_the_full_shape_once_public() {
     );
     assert_eq!(body["captions"].as_array().unwrap().len(), 2);
     assert_eq!(body["width"], 320);
+}
+
+#[tokio::test]
+async fn list_templates_returns_only_public_templates_with_attribution() {
+    let test_app = spawn_app().await;
+    let handle_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri("/api/users/me/handle")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "handle": "templatemaker" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_response.status(), StatusCode::OK);
+
+    let video_a = upload_test_video(&test_app).await;
+    let public_id = put_test_template(&test_app, video_a["id"].as_str().unwrap()).await;
+    let video_b = upload_test_video(&test_app).await;
+    let private_id = put_test_template(&test_app, video_b["id"].as_str().unwrap()).await;
+    make_template_public(&test_app, &public_id).await;
+    // private_id deliberately left private.
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/templates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let templates: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let templates = templates.as_array().unwrap();
+    assert!(templates.iter().any(|t| t["id"] == public_id));
+    assert!(!templates.iter().any(|t| t["id"] == private_id));
+    let entry = templates.iter().find(|t| t["id"] == public_id).unwrap();
+    assert_eq!(entry["owner_handle"], "templatemaker");
+    assert!(entry["saved_at"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn list_templates_sorted_most_used_orders_by_use_count_descending() {
+    let test_app = spawn_app().await;
+    let video_low = upload_test_video(&test_app).await;
+    let low_id = put_test_template(&test_app, video_low["id"].as_str().unwrap()).await;
+    let video_high = upload_test_video(&test_app).await;
+    let high_id = put_test_template(&test_app, video_high["id"].as_str().unwrap()).await;
+    make_template_public(&test_app, &low_id).await;
+    make_template_public(&test_app, &high_id).await;
+
+    let other_cookie = login_as(&test_app, "template-browser@example.com").await;
+    let export_body = |template_id: &str| {
+        json!({
+            "template_id": template_id,
+            "name": "bump use count",
+            "captions": [],
+            "gif_range_start": 0.0,
+            "gif_range_end": 1.0
+        })
+    };
+    for _ in 0..2 {
+        test_app
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/exports")
+                    .header("content-type", "application/json")
+                    .header("cookie", &other_cookie)
+                    .body(Body::from(export_body(&high_id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/templates?sort=most-used")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let templates: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let ids: Vec<&str> = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    let high_pos = ids.iter().position(|&id| id == high_id).unwrap();
+    let low_pos = ids.iter().position(|&id| id == low_id).unwrap();
+    assert!(high_pos < low_pos);
 }
 
 #[tokio::test]
@@ -380,6 +505,13 @@ async fn exporting_from_a_public_template_stamps_lineage_normalizes_locked_capti
     assert_eq!(c1["text"], "locked caption");
     assert_eq!(c1["fontSize"], 28.0);
     assert_eq!(c1["locked"], true);
+    // The template's own saved times (2.2s/2.8s) are absolute — shifted by
+    // the template's gif_range_start (2.0) to land in the clip's own
+    // 0-based space, matching the rest of this clip-relative request.
+    // (Float subtraction, not exact equality — 2.2 - 2.0 != 0.2 to the
+    // last bit.)
+    assert!((c1["startTime"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+    assert!((c1["endTime"].as_f64().unwrap() - 0.8).abs() < 1e-9);
     let c2 = captions.iter().find(|c| c["id"] == "c2").unwrap();
     // The changeable caption's edit passes through untouched.
     assert_eq!(c2["text"], "a real edit");

@@ -39,14 +39,31 @@ pub enum ExportSource {
 /// those fields and proceeds." Matched by caption `id`; a submitted
 /// caption with no matching *locked* template caption (new captions the
 /// user added, or a changeable one) passes through unchanged.
-pub(crate) fn normalize_locked_captions(submitted: Vec<Caption>, template_captions: &[Caption]) -> Vec<Caption> {
+///
+/// A "use this template" export request works entirely in the template
+/// clip's own 0-based coordinate space (`gif_range_start: 0`, every
+/// caption's `start_time`/`end_time` pre-shifted by the frontend at load
+/// time — see `CaptionEditor`'s template-mode initial state) — but
+/// `template.captions`' own saved times are absolute, in the *original*
+/// source video's timeline (the space they were authored in). The
+/// replacement caption is shifted by the same `-template.gif_range_start`
+/// so it lands in that same clip-relative space as everything else in the
+/// request, instead of pointing at the wrong end of the clip (or entirely
+/// outside it).
+pub(crate) fn normalize_locked_captions(submitted: Vec<Caption>, template: &TemplatePayload) -> Vec<Caption> {
+    let shift = template.gif_range_start;
     submitted
         .into_iter()
         .map(|c| {
-            template_captions
+            template
+                .captions
                 .iter()
                 .find(|t| t.id == c.id && t.locked)
-                .cloned()
+                .map(|t| Caption {
+                    start_time: t.start_time - shift,
+                    end_time: t.end_time - shift,
+                    ..t.clone()
+                })
                 .unwrap_or(c)
         })
         .collect()

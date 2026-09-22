@@ -60,7 +60,7 @@ pub async fn create_export(
                 .await?
                 .ok_or(AppError::NotFound)?;
             let payload: TemplatePayload = serde_json::from_str(&template.payload_json)?;
-            request.captions = exports::normalize_locked_captions(request.captions, &payload.captions);
+            request.captions = exports::normalize_locked_captions(request.captions, &payload);
             // "Use" is starting the export (§8), independent of whether
             // the background pipeline below later succeeds.
             db::increment_template_use_count(&state.pool, &template_id).await?;

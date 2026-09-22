@@ -7,6 +7,7 @@ import type {
   LibraryEntry,
   LibrarySort,
   Profile,
+  PublicTemplate,
   TemplatePayload,
   Video,
 } from './types'
@@ -85,9 +86,13 @@ export function videoFileUrl(id: string): string {
 
 // Body shape per SPEC.md §5 "Exports": snake_case fields at the top level
 // (matching the `gifs` table columns), a camelCase `captions` array
-// (matching the caption data structure in §4).
+// (matching the caption data structure in §4). SPEC-CLOUD.md §4: exactly
+// one of `video_id`/`template_id` — the latter is the "use this template"
+// flow (M7b), sourcing the export from a public template's own clip
+// instead of a video you own.
 export interface ExportRequest {
-  video_id: string
+  video_id?: string
+  template_id?: string
   name: string
   captions: Caption[]
   gif_range_start: number
@@ -204,6 +209,18 @@ export function listLibrary(q?: string, sort?: LibrarySort): Promise<LibraryEntr
 // callers can update their local count without a separate re-fetch.
 export function recordGifUse(id: string): Promise<Gif> {
   return request<Gif>(`/api/gifs/${id}/use`, { method: 'POST' })
+}
+
+// SPEC-CLOUD.md §8: the global library's template half — every public
+// template, no sign-in required. `q` is accepted for symmetry with
+// listLibrary but doesn't narrow results — see the M7b plan notes
+// (templates have no name/searchable caption column).
+export function listPublicTemplates(q?: string, sort?: LibrarySort): Promise<PublicTemplate[]> {
+  const params = new URLSearchParams()
+  if (q?.trim()) params.set('q', q.trim())
+  if (sort) params.set('sort', sort)
+  const query = params.toString()
+  return request<PublicTemplate[]>(`/api/templates${query ? `?${query}` : ''}`)
 }
 
 export async function deleteGif(id: string): Promise<void> {

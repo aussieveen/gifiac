@@ -360,6 +360,28 @@ pub async fn get_public_template(pool: &PgPool, id: &str) -> Result<Option<Publi
         .map_err(Into::into)
 }
 
+/// The global library's template half (SPEC-CLOUD.md §8) — every public
+/// template, with attribution, mirroring `list_public_gifs`. `q` is
+/// accepted for signature symmetry but not filtered on: templates have no
+/// `name` column and their captions live inside `payload_json`, not a
+/// searchable column (a deliberate M7b scope cut, not an oversight).
+pub async fn list_public_templates(pool: &PgPool, _q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicTemplate>> {
+    let columns = "templates.id, templates.video_id, templates.user_id, templates.payload_json, \
+         templates.is_public, templates.use_count, templates.saved_at, users.handle AS owner_handle";
+    let order_by = match sort {
+        LibrarySort::Newest => "templates.saved_at DESC",
+        LibrarySort::MostUsed => "templates.use_count DESC, templates.saved_at DESC",
+    };
+    let sql = format!(
+        "SELECT {columns} FROM templates JOIN users ON users.id = templates.user_id \
+         WHERE templates.is_public = true ORDER BY {order_by}"
+    );
+    sqlx::query_as::<_, PublicTemplate>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
 /// Opts a template into (or out of) the global library (SPEC-CLOUD.md
 /// §4/§8) — owner-scoped, same pattern as `set_gif_public`.
 pub async fn set_template_public(pool: &PgPool, id: &str, owner_id: &str, is_public: bool) -> Result<Option<Template>> {
@@ -1382,6 +1404,47 @@ mod tests {
 
         assert!(get_public_template(&pool, "private").await.unwrap().is_none());
         assert!(get_public_template(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_public_templates_returns_only_public_templates_sorted() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        set_handle(&pool, &owner, "template-owner").await.unwrap();
+        insert_video(&pool, &sample_video("v1", &owner), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_video(&pool, &sample_video("v2", &owner), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        insert_video(&pool, &sample_video("v3", &owner), "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "older", "v1", &owner, &sample_template(), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "newer", "v2", &owner, &sample_template(), "2026-08-21T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "private", "v3", &owner, &sample_template(), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        set_template_public(&pool, "older", &owner, true).await.unwrap();
+        set_template_public(&pool, "newer", &owner, true).await.unwrap();
+        // "private" deliberately left private.
+
+        let newest = list_public_templates(&pool, None, LibrarySort::Newest).await.unwrap();
+        let ids: Vec<&str> = newest.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["newer", "older"]);
+        assert_eq!(newest[0].owner_handle.as_deref(), Some("template-owner"));
+
+        increment_template_use_count(&pool, "older").await.unwrap();
+        increment_template_use_count(&pool, "older").await.unwrap();
+        let most_used = list_public_templates(&pool, None, LibrarySort::MostUsed)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = most_used.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["older", "newer"]);
     }
 
     #[tokio::test]

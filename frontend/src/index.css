@@ -746,9 +746,24 @@ button {
 }
 
 .library-tile {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.library-tile-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #16171d;
+  background: #f5c518;
+  border-radius: 3px;
 }
 
 .library-tile-caption {

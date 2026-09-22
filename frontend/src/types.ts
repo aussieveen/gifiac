@@ -130,6 +130,21 @@ export interface LibraryEntry extends Gif {
 // `LibrarySort`, kebab-case on the wire.
 export type LibrarySort = 'newest' | 'most-used'
 
+// GET /api/templates (and /api/templates/{id}) response shape
+// (SPEC-CLOUD.md §4/§8) — snake_case, matching the backend's
+// `TemplateResponse`, which flattens `TemplatePayload`. Always visible
+// only when `is_public` — these are the two cross-user template read
+// endpoints, never a private one.
+export interface PublicTemplate extends TemplatePayload {
+  id: string
+  is_public: boolean
+  use_count: number
+  owner_handle: string | null
+  saved_at: string
+  clip_url: string
+  thumbnail_url: string
+}
+
 // GET /api/admin/users response row (SPEC-CLOUD.md §7) — snake_case,
 // matching the backend's `AdminUserView`.
 export interface AdminUserView {

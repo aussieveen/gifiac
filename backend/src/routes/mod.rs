@@ -53,6 +53,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),
         )
         .route("/gifs/{id}/use", post(gifs::use_gif))
+        .route("/templates", get(templates::list_templates))
         .route(
             "/templates/{id}",
             get(templates::get_template).patch(templates::set_template_public),

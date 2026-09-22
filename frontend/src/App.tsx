@@ -6,7 +6,7 @@ import { LOGIN_URL, getFilmstripMeta, logout } from './api'
 import { CaptionEditor } from './CaptionEditor'
 import { HandlePicker } from './HandlePicker'
 import { Library } from './Library'
-import type { FilmstripMeta, Gif, Video } from './types'
+import type { FilmstripMeta, Gif, PublicTemplate, Video } from './types'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
 
@@ -22,6 +22,10 @@ export default function App() {
   const [view, setView] = useState<View>('archive')
   const [video, setVideo] = useState<Video | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
+  // SPEC-CLOUD.md §8: "Use this template" (Global Library, M7b) sets this
+  // and switches to the 'videos' view instead of picking a video — see
+  // useTemplate below.
+  const [templateSource, setTemplateSource] = useState<PublicTemplate | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Set right before switching to the archive view so it can arrive with
   // the just-created GIF already selected — see handleGifCreated.
@@ -48,12 +52,18 @@ export default function App() {
 
   function backToLibrary() {
     setVideo(null)
+    setTemplateSource(null)
     setLoadError(null)
   }
 
   function handleGifCreated(gif: Gif) {
     setPendingGifId(gif.id)
     setView('archive')
+  }
+
+  function useTemplate(template: PublicTemplate) {
+    setTemplateSource(template)
+    setView('videos')
   }
 
   if (authLoading) {
@@ -129,7 +139,7 @@ export default function App() {
     return (
       <>
         {nav}
-        <Library />
+        <Library onUseTemplate={useTemplate} />
       </>
     )
   }
@@ -139,6 +149,19 @@ export default function App() {
       <>
         {nav}
         <AdminPage />
+      </>
+    )
+  }
+
+  if (templateSource) {
+    return (
+      <>
+        {nav}
+        <CaptionEditor
+          source={{ kind: 'template', template: templateSource }}
+          onBack={backToLibrary}
+          onGifCreated={handleGifCreated}
+        />
       </>
     )
   }
@@ -180,7 +203,11 @@ export default function App() {
   return (
     <>
       {nav}
-      <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToLibrary} onGifCreated={handleGifCreated} />
+      <CaptionEditor
+        source={{ kind: 'video', video, filmstrip }}
+        onBack={backToLibrary}
+        onGifCreated={handleGifCreated}
+      />
     </>
   )
 }
