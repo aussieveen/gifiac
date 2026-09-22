@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { AdminPage } from './AdminPage'
 import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, logout } from './api'
@@ -13,8 +14,7 @@ type View = 'videos' | 'archive' | 'library' | 'admin'
 
 export default function App() {
   // SPEC-CLOUD.md §2: nothing else renders until we know whether there's
-  // a valid session — this is intentionally minimal (no routing, no tab
-  // bar yet) since the full nav redesign is a later milestone.
+  // a valid session.
   const { user, loading: authLoading, setUser } = useCurrentUser()
 
   // SPEC.md §8: the archive is the app's landing page — browsing/finding
@@ -78,27 +78,41 @@ export default function App() {
     return <HandlePicker suggestedHandle={user.suggestedHandle} onHandleSet={setUser} />
   }
 
+  // SPEC-CLOUD.md §9: one fixed header — a wordmark, exactly three flat
+  // tabs (Admin only for an admin account), and an avatar/handle button on
+  // the right that opens the current user's own public profile. "New GIF"
+  // isn't one of the three tabs; it's now a toolbar action inside My
+  // Library (see Archive's onNewGif prop) — the video-picker/editor
+  // sub-flow it starts stays conceptually nested under that tab, so it's
+  // still highlighted while `view` is 'videos'.
   const nav = (
     <nav className="app-nav">
-      <button className={`app-nav-btn ${view === 'videos' ? 'active' : ''}`} onClick={() => setView('videos')}>
-        New GIF
-      </button>
-      <button className={`app-nav-btn ${view === 'archive' ? 'active' : ''}`} onClick={() => setView('archive')}>
-        Archive
-      </button>
-      <button className={`app-nav-btn ${view === 'library' ? 'active' : ''}`} onClick={() => setView('library')}>
-        Global Library
-      </button>
-      {/* SPEC-CLOUD.md §7/§9: only rendered for an admin — the full nav
-          redesign's tab bar will do this same role check permanently. */}
-      {user.role === 'admin' && (
-        <button className={`app-nav-btn ${view === 'admin' ? 'active' : ''}`} onClick={() => setView('admin')}>
-          Admin
+      <div className="app-nav-group">
+        <span className="app-logo">Gifiac</span>
+        <button
+          className={`app-nav-btn ${view === 'archive' || view === 'videos' ? 'active' : ''}`}
+          onClick={() => setView('archive')}
+        >
+          My Library
         </button>
-      )}
-      <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
-        Sign out
-      </button>
+        <button className={`app-nav-btn ${view === 'library' ? 'active' : ''}`} onClick={() => setView('library')}>
+          Global Library
+        </button>
+        {user.role === 'admin' && (
+          <button className={`app-nav-btn ${view === 'admin' ? 'active' : ''}`} onClick={() => setView('admin')}>
+            Admin
+          </button>
+        )}
+      </div>
+      <div className="app-nav-group">
+        <Link className="app-nav-btn app-avatar-btn" to={`/u/${user.handle}`}>
+          {user.avatarUrl && <img src={user.avatarUrl} alt="" className="app-avatar" />}
+          {user.handle}
+        </Link>
+        <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
+          Sign out
+        </button>
+      </div>
     </nav>
   )
 
@@ -106,7 +120,7 @@ export default function App() {
     return (
       <>
         {nav}
-        <Archive initialSelectedId={pendingGifId} />
+        <Archive initialSelectedId={pendingGifId} onNewGif={() => setView('videos')} />
       </>
     )
   }

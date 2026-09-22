@@ -36,19 +36,38 @@ button {
 
 .app-nav {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 4px;
   padding: 12px 24px 0;
   max-width: 1100px;
   margin: 0 auto;
 }
 
+.app-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-logo {
+  font-weight: 700;
+  color: #f5c518;
+  padding: 6px 10px 6px 0;
+  font-size: 14px;
+}
+
 .app-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: none;
   color: #888;
   font-size: 13px;
   padding: 6px 10px;
   border-radius: 4px;
+  text-decoration: none;
 }
 
 .app-nav-btn:hover {
@@ -58,6 +77,13 @@ button {
 .app-nav-btn.active {
   background: #1e2028;
   color: #f5c518;
+}
+
+.app-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .page h1 {

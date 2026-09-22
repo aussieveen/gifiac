@@ -66,7 +66,7 @@ export function VideoPicker({ onSelect }: Props) {
 
   return (
     <div className="page">
-      <h1>Gifiac</h1>
+      <h1>New GIF</h1>
       <p className="subtitle">Pick a video to caption, or upload a new one.</p>
 
       <div

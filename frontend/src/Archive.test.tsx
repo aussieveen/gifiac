@@ -67,6 +67,11 @@ const linkedGif: Gif = {
   webm_url: null,
 }
 
+// Passed to every render below — most tests don't care about it, only the
+// dedicated "+ New GIF" test asserts on it, so this is reset there, not
+// globally, to keep the other ~30 call sites untouched.
+const onNewGif = vi.fn()
+
 beforeEach(() => {
   vi.mocked(listGifs).mockReset()
   vi.mocked(renameGif).mockReset()
@@ -91,7 +96,7 @@ describe('Archive', () => {
   it('lists gifs returned by the backend as grid thumbnails', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
 
     await screen.findByRole('button', { name: 'cat jumping' })
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
@@ -100,7 +105,7 @@ describe('Archive', () => {
   it('shows a load error if the list request fails', async () => {
     vi.mocked(listGifs).mockRejectedValue(new Error('/api/gifs failed (500): boom'))
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
 
     await screen.findByText(/boom/)
   })
@@ -108,7 +113,7 @@ describe('Archive', () => {
   it('shows an empty state when there are no gifs', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
 
     await screen.findByText(/no gifs yet/i)
   })
@@ -117,7 +122,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
     expect(listGifs).toHaveBeenCalledWith('')
 
@@ -130,7 +135,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByLabelText('GIF name')).toHaveValue('cat jumping')
@@ -143,7 +148,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     const firstPreview = screen.getByAltText('cat jumping preview')
 
@@ -158,7 +163,7 @@ describe('Archive', () => {
     vi.mocked(renameGif).mockResolvedValue({ ...gifA, name: 'cat leaping' })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const nameInput = screen.getByLabelText('GIF name')
@@ -175,7 +180,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     // Defined after `userEvent.setup()`/`render` — user-event's own setup
     // touches `navigator.clipboard`, clobbering a stub installed earlier.
@@ -194,7 +199,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: undefined,
@@ -215,7 +220,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -232,7 +237,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: undefined,
@@ -254,7 +259,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: gifWithSpecialName.name }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -272,7 +277,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const downloadLink = screen.getByRole('link', { name: /download/i }) as HTMLAnchorElement
@@ -285,7 +290,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -306,7 +311,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -325,7 +330,7 @@ describe('Archive', () => {
     vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     await user.click(screen.getByRole('link', { name: /download/i }))
@@ -339,7 +344,7 @@ describe('Archive', () => {
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: true })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /mark as one-off/i }))
 
@@ -354,7 +359,7 @@ describe('Archive', () => {
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: false })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /mark as reusable/i }))
 
@@ -368,7 +373,7 @@ describe('Archive', () => {
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: true })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /make public/i }))
 
@@ -383,7 +388,7 @@ describe('Archive', () => {
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: false })
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /make private/i }))
 
@@ -394,12 +399,12 @@ describe('Archive', () => {
 
   it('shows a "One-offs" divider above one-off gifs in the grid, only when one exists', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
-    const { rerender } = render(<Archive />)
+    const { rerender } = render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
     expect(screen.queryByText('One-offs')).not.toBeInTheDocument()
 
     vi.mocked(listGifs).mockResolvedValue([gifA, { ...gifB, is_one_off: true }])
-    rerender(<Archive key="reload" />)
+    rerender(<Archive key="reload" onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'dog running' })
     expect(screen.getByText('One-offs')).toBeInTheDocument()
   })
@@ -410,7 +415,7 @@ describe('Archive', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /delete/i }))
 
@@ -424,7 +429,7 @@ describe('Archive', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /delete/i }))
 
@@ -432,12 +437,24 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
   })
 
+  it('the + New GIF toolbar button calls onNewGif', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    onNewGif.mockReset()
+    const user = userEvent.setup()
+
+    render(<Archive onNewGif={onNewGif} />)
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+
+    expect(onNewGif).toHaveBeenCalled()
+  })
+
   it('importing files calls the API and prepends the created gifs to the grid', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(importGifs).mockResolvedValue([gifB])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
 
     const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })
@@ -454,7 +471,7 @@ describe('Archive', () => {
     vi.mocked(importGifs).mockRejectedValue(new Error('/api/gifs/import failed (400): bad file'))
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
 
     const file = new File(['bytes'], 'bad.gif', { type: 'image/gif' })
@@ -468,7 +485,7 @@ describe('Archive', () => {
   it('shows an external badge only for a linked gif, not a native/imported one', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, linkedGif])
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
 
     const nativeThumb = screen.getByRole('button', { name: 'cat jumping' })
@@ -481,7 +498,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([linkedGif])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'linked meme' }))
 
     expect(screen.queryByRole('link', { name: /download/i })).not.toBeInTheDocument()
@@ -493,7 +510,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.queryByRole('link', { name: /open original/i })).not.toBeInTheDocument()
@@ -505,7 +522,7 @@ describe('Archive', () => {
     vi.mocked(linkGif).mockResolvedValue(linkedGif)
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
     await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
     await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/meme.gif')
@@ -522,7 +539,7 @@ describe('Archive', () => {
     vi.mocked(linkGif).mockRejectedValue(new Error('/api/gifs/link failed (400): not an image'))
     const user = userEvent.setup()
 
-    render(<Archive />)
+    render(<Archive onNewGif={onNewGif} />)
     await screen.findByRole('button', { name: 'cat jumping' })
     await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
     await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/not-an-image')

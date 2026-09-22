@@ -57,9 +57,13 @@ interface Props {
    * actions are immediately at hand instead of the user having to find it
    * in the grid themselves. */
   initialSelectedId?: string | null
+  /** SPEC-CLOUD.md §9: "New GIF" isn't a top-level nav tab — it's this
+   * toolbar action, starting the video-picker/caption-editor flow that
+   * stays conceptually nested under My Library. */
+  onNewGif: () => void
 }
 
-export function Archive({ initialSelectedId }: Props) {
+export function Archive({ initialSelectedId, onNewGif }: Props) {
   const [gifs, setGifs] = useState<Gif[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -230,7 +234,7 @@ export function Archive({ initialSelectedId }: Props) {
 
   return (
     <div className="page">
-      <h1>Archive</h1>
+      <h1>My Library</h1>
       <p className="subtitle">Search, re-download, or delete GIFs you've made.</p>
 
       <div className="archive-toolbar">
@@ -241,6 +245,9 @@ export function Archive({ initialSelectedId }: Props) {
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search archive"
         />
+        <button className="va-btn" onClick={onNewGif}>
+          + New GIF
+        </button>
         <label className="va-btn archive-import-btn">
           {importing ? 'Importing…' : '+ Import GIFs'}
           <input

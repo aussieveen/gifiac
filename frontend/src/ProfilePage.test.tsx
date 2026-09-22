@@ -52,4 +52,12 @@ describe('ProfilePage', () => {
 
     expect(await screen.findByText(/no such user/i)).toBeInTheDocument()
   })
+
+  it('has a back link to the app', async () => {
+    vi.mocked(getProfile).mockResolvedValue(profile)
+    renderAt('simon')
+
+    await screen.findByText('@simon')
+    expect(screen.getByRole('link', { name: /back/i })).toHaveAttribute('href', '/')
+  })
 })

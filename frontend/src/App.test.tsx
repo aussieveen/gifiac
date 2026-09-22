@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import type { FilmstripMeta, Video } from './types'
 
@@ -37,6 +38,7 @@ import {
   listAdminUsers,
   listGifs,
   listVideos,
+  logout,
   setHandle,
   subscribeExportProgress,
 } from './api'
@@ -75,6 +77,17 @@ const filmstrip: FilmstripMeta = {
 
 const otherVideo: Video = { ...video, id: 'v2', original_filename: 'other.mp4' }
 
+// SPEC-CLOUD.md §9: App's own header now uses <Link> (the avatar/handle
+// button to /u/:handle), which needs a Router context to render — in
+// production that's main.tsx's BrowserRouter, here a MemoryRouter.
+function renderApp() {
+  return render(
+    <MemoryRouter>
+      <App />
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   vi.mocked(listVideos).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
@@ -85,6 +98,11 @@ beforeEach(() => {
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
   vi.mocked(setHandle).mockReset()
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
+  vi.mocked(logout).mockReset().mockResolvedValue(undefined)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('App', () => {
@@ -94,7 +112,7 @@ describe('App', () => {
     vi.mocked(listGifs).mockResolvedValue([])
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
 
     const input = await screen.findByLabelText('Handle')
     expect(input).toHaveValue('sim-on')
@@ -105,16 +123,16 @@ describe('App', () => {
     await screen.findByText(/no gifs yet/i)
   })
 
-  it('starts on the archive', async () => {
+  it('starts on my library', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    expect(screen.getByRole('button', { name: 'Archive' })).toHaveClass('active')
+    expect(screen.getByRole('button', { name: 'My Library' })).toHaveClass('active')
   })
 
   it('does not show an Admin tab for a plain user', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
     expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument()
   })
@@ -124,7 +142,7 @@ describe('App', () => {
     vi.mocked(listGifs).mockResolvedValue([])
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
 
     await user.click(screen.getByRole('button', { name: 'Admin' }))
@@ -132,17 +150,17 @@ describe('App', () => {
     await screen.findByText('Admin', { selector: 'h1' })
   })
 
-  it('the New GIF nav tab switches to the video picker', async () => {
+  it('the + New GIF button switches to the video picker', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video])
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
 
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
 
-    await screen.findByText('Gifiac')
+    await screen.findByText('New GIF', { selector: 'h1' })
   })
 
   it('selecting a video loads its film-strip and opens the editor', async () => {
@@ -151,9 +169,9 @@ describe('App', () => {
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     expect(await screen.findByText('clip.mp4')).toBeInTheDocument()
@@ -166,14 +184,14 @@ describe('App', () => {
     vi.mocked(getFilmstripMeta).mockRejectedValue(new Error('/api/videos/v1/filmstrip failed (500): boom'))
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     await screen.findByText(/boom/)
     await user.click(screen.getByRole('button', { name: /back to library/i }))
-    await screen.findByText('Gifiac')
+    await screen.findByText('New GIF', { selector: 'h1' })
   })
 
   it('never renders one video against another video\'s stale film-strip when switching', async () => {
@@ -184,9 +202,9 @@ describe('App', () => {
     )
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
     await screen.findByText('clip.mp4')
 
@@ -199,20 +217,43 @@ describe('App', () => {
     expect(await screen.findByText(/loading film-strip/i)).toBeInTheDocument()
   })
 
-  it('the Archive nav tab returns from the video picker to the archive', async () => {
+  it('the My Library nav tab returns from the video picker to my library', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listVideos).mockResolvedValue([video])
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
-    await screen.findByText('Gifiac')
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await screen.findByText('New GIF', { selector: 'h1' })
 
-    await user.click(screen.getByRole('button', { name: 'Archive' }))
+    await user.click(screen.getByRole('button', { name: 'My Library' }))
 
     await screen.findByText(/no gifs yet/i)
     expect(listGifs).toHaveBeenCalled()
+  })
+
+  it('the avatar/handle button links to the current user\'s own profile', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    renderApp()
+    await screen.findByText(/no gifs yet/i)
+
+    const profileLink = screen.getByRole('link', { name: loggedInUser.handle! })
+    expect(profileLink).toHaveAttribute('href', `/u/${loggedInUser.handle}`)
+  })
+
+  it('sign out calls the logout API', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    // window.location.reload isn't implemented in jsdom — stub it so the
+    // post-logout reload the button triggers doesn't error the test.
+    vi.stubGlobal('location', { ...window.location, reload: vi.fn() })
+    const user = userEvent.setup()
+
+    renderApp()
+    await screen.findByText(/no gifs yet/i)
+    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    await waitFor(() => expect(logout).toHaveBeenCalled())
   })
 
   it('making a GIF switches to the archive with it already selected', async () => {
@@ -244,9 +285,9 @@ describe('App', () => {
     }
     const user = userEvent.setup()
 
-    render(<App />)
+    renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'New GIF' }))
+    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
     await screen.findByText('clip.mp4')
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
@@ -257,7 +298,7 @@ describe('App', () => {
     act(() => handlers.onComplete?.(createdGif))
 
     expect(await screen.findByLabelText('GIF name')).toHaveValue('my clip')
-    expect(screen.getByRole('button', { name: 'Archive' })).toHaveClass('active')
+    expect(screen.getByRole('button', { name: 'My Library' })).toHaveClass('active')
     expect(screen.getByRole('button', { name: 'my clip' })).toHaveClass('selected')
   })
 })
