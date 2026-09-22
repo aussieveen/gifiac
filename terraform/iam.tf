@@ -81,13 +81,22 @@ resource "aws_iam_role" "deploy" {
     Statement = [{
       Effect    = "Allow"
       Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
+      # aws-actions/configure-aws-credentials@v4 tags the assumed session
+      # (repo/branch/actor, for audit trails) by default unless
+      # role-skip-session-tagging is set — AWS requires sts:TagSession to
+      # be trusted alongside AssumeRoleWithWebIdentity for that, or STS
+      # rejects the whole call with a generic "not authorized" error that
+      # gives no hint it was the missing tagging permission.
+      Action = ["sts:AssumeRoleWithWebIdentity", "sts:TagSession"]
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:ref:refs/heads/main"
+          # Overridable — see github_oidc_subject's description for why
+          # the plain "owner/repo" form isn't always what's actually in
+          # the token's sub claim.
+          "token.actions.githubusercontent.com:sub" = coalesce(var.github_oidc_subject, "repo:${var.github_repository}:ref:refs/heads/main")
         }
       }
     }]

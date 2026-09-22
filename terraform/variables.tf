@@ -27,6 +27,12 @@ variable "github_repository" {
   default     = "aussieveen/gifiac"
 }
 
+variable "github_oidc_subject" {
+  description = "Full expected `sub` claim on the GitHub Actions OIDC token, scoping the deploy role's trust policy. Defaults to the plain \"repo:OWNER/REPO:ref:refs/heads/main\" format (built from github_repository) — override this if the account/org has GitHub's \"immutable\" OIDC subject claims enabled (Settings -> Actions -> General -> Workflow permissions), which embeds stable numeric owner/repo IDs instead: \"repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main\". Find the exact value from a failed AssumeRoleWithWebIdentity attempt's CloudTrail event (userIdentity.principalId / userName)."
+  type        = string
+  default     = null
+}
+
 variable "instance_type" {
   description = "EC2 instance type. ffmpeg transcoding is CPU/memory-hungry enough that the cheapest t3.micro risks OOM-killing an export."
   type        = string
