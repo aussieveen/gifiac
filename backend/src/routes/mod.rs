@@ -43,6 +43,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
                 .put(videos::put_template)
                 .delete(videos::delete_template),
         )
+        .route("/videos/{id}/template/meta", get(videos::get_template_meta))
         .route("/exports", post(exports::create_export))
         .route("/exports/{id}/progress", get(exports::export_progress))
         .route("/gifs", get(gifs::list_gifs))
@@ -60,6 +61,11 @@ pub fn api_router() -> Router<Arc<AppState>> {
         )
         .route("/templates/{id}/clip", get(templates::get_template_clip))
         .route("/templates/{id}/thumbnail", get(templates::get_template_thumbnail))
+        .route("/templates/{id}/filmstrip", get(templates::get_template_filmstrip_meta))
+        .route(
+            "/templates/{id}/filmstrip.jpg",
+            get(templates::get_template_filmstrip_image),
+        )
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))

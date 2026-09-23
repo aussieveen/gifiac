@@ -33,6 +33,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use gifiac_backend::config::Config;
+use gifiac_backend::filmstrip_layout::compute_filmstrip_layout;
 use gifiac_backend::models::{NewGif, NewVideo, TemplatePayload};
 use gifiac_backend::{db, ffmpeg, paths};
 use rusqlite::Connection;
@@ -260,6 +261,7 @@ async fn migrate_template(
     let template_id = Uuid::new_v4();
     let clip_path = paths::template_clip_path(&config.video_dir, &template_id);
     let thumb_path = paths::template_thumbnail_path(&config.video_dir, &template_id);
+    let filmstrip_path = paths::template_filmstrip_path(&config.video_dir, &template_id);
 
     ffmpeg::trim_video(
         &source_path,
@@ -274,6 +276,15 @@ async fn migrate_template(
         .await
         .context("generating template thumbnail")?;
 
+    let filmstrip_layout = compute_filmstrip_layout(
+        payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
+    );
+    ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &filmstrip_layout)
+        .await
+        .context("generating template filmstrip")?;
+
     db::upsert_template(
         pool,
         &template_id.to_string(),
@@ -285,6 +296,47 @@ async fn migrate_template(
     .await?;
 
     Ok(())
+}
+
+/// Backfills just the filmstrip for a template a previous run of this
+/// script already fully migrated (row + clip + thumbnail), for a template
+/// migrated before filmstrip generation existed at all. Reuses the
+/// already-migrated clip file rather than re-clipping from the source
+/// video, so it works even if the source video itself is long gone.
+/// Returns whether it actually generated one.
+async fn backfill_template_filmstrip(
+    pool: &PgPool,
+    config: &Config,
+    video_id: &str,
+    payload: &TemplatePayload,
+) -> Result<bool> {
+    let template_id_str = db::get_template_id(pool, video_id)
+        .await?
+        .with_context(|| format!("template row for video {video_id} vanished mid-migration"))?;
+    let template_id = Uuid::parse_str(&template_id_str)?;
+
+    let filmstrip_path = paths::template_filmstrip_path(&config.video_dir, &template_id);
+    if tokio::fs::try_exists(&filmstrip_path).await.unwrap_or(false) {
+        return Ok(false);
+    }
+
+    let clip_path = paths::template_clip_path(&config.video_dir, &template_id);
+    if !tokio::fs::try_exists(&clip_path).await.unwrap_or(false) {
+        bail!(
+            "template clip missing at {} — can't backfill a filmstrip without it",
+            clip_path.display()
+        );
+    }
+
+    let layout = compute_filmstrip_layout(
+        payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
+    );
+    ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &layout)
+        .await
+        .context("generating template filmstrip")?;
+    Ok(true)
 }
 
 /// Returns whether any row failed — callers use this to pick the process
@@ -392,8 +444,17 @@ async fn run() -> Result<bool> {
 
     let mut templates_migrated = 0;
     let mut templates_failed = 0;
+    let mut filmstrips_backfilled = 0;
     for template in &old_templates {
-        if db::get_template(&pool, &template.video_id).await?.is_some() {
+        if let Some(existing_payload) = db::get_template(&pool, &template.video_id).await? {
+            // Already migrated by an earlier run — that run may predate
+            // filmstrip generation entirely, so backfill just that rather
+            // than skipping outright.
+            match backfill_template_filmstrip(&pool, &config, &template.video_id, &existing_payload).await {
+                Ok(true) => filmstrips_backfilled += 1,
+                Ok(false) => {}
+                Err(err) => eprintln!("template filmstrip backfill for video {} failed: {err:#}", template.video_id),
+            }
             continue;
         }
         match migrate_template(&pool, &config, &args, template, &old_videos).await {
@@ -405,7 +466,7 @@ async fn run() -> Result<bool> {
         }
     }
     println!(
-        "templates: {templates_migrated} clipped, {templates_failed} failed, {} already present",
+        "templates: {templates_migrated} clipped, {templates_failed} failed, {} already present ({filmstrips_backfilled} filmstrips backfilled)",
         old_templates.len() - templates_migrated - templates_failed
     );
 

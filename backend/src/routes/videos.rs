@@ -16,7 +16,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
-use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListItem};
+use crate::models::{FilmstripMeta, NewVideo, TemplateMeta, TemplatePayload, Video, VideoListItem};
 use crate::paths;
 use crate::source_video;
 use crate::state::AppState;
@@ -334,6 +334,27 @@ pub async fn get_template(
     Ok(Json(template))
 }
 
+/// `GET /api/videos/{id}/template/meta` — the id/is_public the video's own
+/// editor needs for the "Make public"/"Make private" toggle next to
+/// "Overwrite template" (`TemplatePayload` above is the save/pre-fill
+/// value object and carries neither). Owner-scoped via the video, same as
+/// `get_template`.
+pub async fn get_template_meta(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<TemplateMeta>, AppError> {
+    load_video(&state, &id, &user.id).await?;
+    let template_id = db::get_template_id(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let template = db::get_template_by_id(&state.pool, &template_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(TemplateMeta {
+        id: template.id,
+        is_public: template.is_public,
+    }))
+}
+
 /// SPEC.md §12: `PUT /api/videos/{id}/template` — upserts (creates or
 /// overwrites) the template with the request body. SPEC-CLOUD.md §4: the
 /// video is trimmed to the template's range into its own independent
@@ -353,9 +374,10 @@ pub async fn put_template(
     let (video_uuid, video) = load_video(&state, &id, &user.id).await?;
 
     // Reusing an existing template's id (rather than always generating a
-    // fresh one) means an overwrite replaces its clip/thumbnail files in
-    // place — `paths::template_clip_path`/`template_thumbnail_path` are
-    // named after this id — instead of orphaning the previous save's.
+    // fresh one) means an overwrite replaces its clip/thumbnail/filmstrip
+    // files in place — `paths::template_clip_path`/`template_thumbnail_path`/
+    // `template_filmstrip_path` are named after this id — instead of
+    // orphaning the previous save's.
     let template_id = match db::get_template_id(&state.pool, &id).await? {
         Some(existing) => Uuid::parse_str(&existing)?,
         None => Uuid::new_v4(),
@@ -366,6 +388,7 @@ pub async fn put_template(
         .map_err(AppError::Internal)?;
     let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
     let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
+    let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_id);
 
     ffmpeg::trim_video(
         &source_path,
@@ -381,6 +404,19 @@ pub async fn put_template(
     ffmpeg::generate_thumbnail(&clip_path, &thumb_path, 0.0)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template thumbnail: {e}")))?;
+
+    // Generated from the already-trimmed clip (not the source video), so
+    // this only ever spans the template's own range — fixes the "still
+    // shows the full-length film strip" gap using a template never had
+    // its own sprite at all before this.
+    let filmstrip_layout = compute_filmstrip_layout(
+        payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
+    );
+    ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &filmstrip_layout)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template filmstrip: {e}")))?;
 
     db::upsert_template(
         &state.pool,
@@ -411,7 +447,8 @@ pub async fn delete_template(
     if let Some(template_id) = template_id.and_then(|t| Uuid::parse_str(&t).ok()) {
         let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
         let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
-        for path in [clip_path, thumb_path] {
+        let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_id);
+        for path in [clip_path, thumb_path, filmstrip_path] {
             if let Err(err) = tokio::fs::remove_file(&path).await
                 && err.kind() != std::io::ErrorKind::NotFound
             {

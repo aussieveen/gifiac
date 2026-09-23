@@ -51,6 +51,15 @@ export interface TemplatePayload {
   height: number
 }
 
+// GET /api/videos/{id}/template/meta response shape — matching the
+// backend's `TemplateMeta`. The id/is_public a video's own editor needs
+// for the "Make public"/"Make private" toggle next to "Overwrite
+// template", neither of which `TemplatePayload` carries.
+export interface TemplateMeta {
+  id: string
+  is_public: boolean
+}
+
 // GET /api/auth/me response shape (SPEC-CLOUD.md §2) — camelCase, matching
 // the backend's `CurrentUserView`. `null` overall means logged out.
 export interface CurrentUser {

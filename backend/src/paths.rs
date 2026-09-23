@@ -28,6 +28,13 @@ pub fn template_thumbnail_path(video_dir: &Path, template_id: &Uuid) -> PathBuf 
     video_dir.join(format!("{template_id}_template_thumb.jpg"))
 }
 
+/// A template's own filmstrip sprite, generated from its already-trimmed
+/// clip (not the source video) — so it only ever spans the template's own
+/// range, never the full original video.
+pub fn template_filmstrip_path(video_dir: &Path, template_id: &Uuid) -> PathBuf {
+    video_dir.join(format!("{template_id}_template_filmstrip.jpg"))
+}
+
 /// The private source-video S3 bucket's object key (SPEC-CLOUD.md §6) —
 /// the `raw/` prefix is what the 7-day lifecycle rule targets, kept
 /// separate from the (not-yet-migrated, see M4's plan notes) template-clip
@@ -109,6 +116,15 @@ mod tests {
         assert_eq!(
             template_thumbnail_path(dir, &id()),
             PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_template_thumb.jpg")
+        );
+    }
+
+    #[test]
+    fn template_filmstrip_path_appends_template_filmstrip_suffix() {
+        let dir = Path::new("/data/videos");
+        assert_eq!(
+            template_filmstrip_path(dir, &id()),
+            PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_template_filmstrip.jpg")
         );
     }
 

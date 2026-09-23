@@ -1,7 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
+import {
+  createExport,
+  getTemplate,
+  getTemplateFilmstripMeta,
+  getTemplateMeta,
+  putTemplate,
+  setTemplatePublic,
+  subscribeExportProgress,
+  videoFileUrl,
+} from './api'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Gif, PublicTemplate, TemplatePayload, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, PublicTemplate, TemplateMeta, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 /**
@@ -177,6 +186,10 @@ interface WidthDrag {
 }
 
 export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
+  // A template source's own filmstrip sprite — trimmed to just its saved
+  // range, unlike a video source's (the full source video). Fetched
+  // below, `null` until that resolves; used by `filmstrip` further down.
+  const [templateFilmstrip, setTemplateFilmstrip] = useState<FilmstripMeta | null>(null)
   // The clip's own full length — for a template source there's nothing
   // "outside" it to scrub into, since a template clip is already trimmed
   // to exactly the range it was saved with.
@@ -189,11 +202,10 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   const outputWidth = source.kind === 'video' ? source.filmstrip.frameWidth : source.template.width
   const outputHeight = source.kind === 'video' ? source.filmstrip.frameHeight : source.template.height
   const clipUrl = source.kind === 'video' ? videoFileUrl(source.video.id) : source.template.clip_url
-  // Only a video source has a real film-strip sprite — see the M7b plan
-  // notes on why a template-clip sprite endpoint isn't built (a visual
-  // nice-to-have, not a functional gap: the timeline below works purely
-  // in time coordinates either way).
-  const filmstrip = source.kind === 'video' ? source.filmstrip : null
+  // A template source's filmstrip is fetched below (its own sprite,
+  // trimmed to just the template's range) rather than passed in via
+  // props the way a video source's is — `null` until that resolves.
+  const filmstrip = source.kind === 'video' ? source.filmstrip : templateFilmstrip
   // A video source starts with no captions until the pre-fill effect
   // below resolves; a template source already has everything the caller
   // fetched, so its captions are ready synchronously — shifted from the
@@ -231,6 +243,12 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaved, setTemplateSaved] = useState(false)
   const [templateError, setTemplateError] = useState<string | null>(null)
+  // Drives the "Make public"/"Make private" toggle next to "Overwrite
+  // template" — `null` until fetched (or while there's no template yet),
+  // refetched after every template write below since a brand-new
+  // template's id isn't known any other way.
+  const [templateMeta, setTemplateMeta] = useState<TemplateMeta | null>(null)
+  const [templatePublicSaving, setTemplatePublicSaving] = useState(false)
   // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
   // null when nothing's snapped — drives the vertical guide line.
   const [snapGuideX, setSnapGuideX] = useState<number | null>(null)
@@ -277,10 +295,36 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
       .catch((err) => {
         if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
       })
+    getTemplateMeta(source.video.id)
+      .then((meta) => {
+        if (!cancelled) setTemplateMeta(meta)
+      })
+      .catch((err) => {
+        if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
+      })
     return () => {
       cancelled = true
     }
   }, [sourceVideoId])
+
+  // Template-mode counterpart of the effect above — its own filmstrip,
+  // trimmed to just the template's range. Keyed on the template's own id
+  // for the same re-render-stability reason `sourceVideoId` exists.
+  const sourceTemplateId = source.kind === 'template' ? source.template.id : null
+  useEffect(() => {
+    if (source.kind !== 'template') return
+    let cancelled = false
+    getTemplateFilmstripMeta(source.template.id)
+      .then((meta) => {
+        if (!cancelled) setTemplateFilmstrip(meta)
+      })
+      .catch((err) => {
+        if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sourceTemplateId])
 
   // SPEC.md §14: hovering the timeline and scrolling vertically zooms
   // instead of scrolling the page — up zooms in, down zooms out — while a
@@ -672,10 +716,29 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
       await putTemplate(source.video.id, buildTemplatePayload(captions))
       setHasTemplate(true)
       setTemplateSaved(true)
+      // A first-time save just created a template with a fresh id this
+      // component doesn't know yet — refetch rather than guess it.
+      setTemplateMeta(await getTemplateMeta(source.video.id))
     } catch (err) {
       setTemplateError(err instanceof Error ? err.message : String(err))
     } finally {
       setTemplateSaving(false)
+    }
+  }
+
+  // SPEC-CLOUD.md §4/§8: opts the video's saved template into (or out of)
+  // the global library, mirroring Archive.tsx's togglePublic for gifs.
+  async function toggleTemplatePublic() {
+    if (!templateMeta) return
+    setTemplatePublicSaving(true)
+    setTemplateError(null)
+    try {
+      const updated = await setTemplatePublic(templateMeta.id, !templateMeta.is_public)
+      setTemplateMeta(updated)
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTemplatePublicSaving(false)
     }
   }
 
@@ -715,8 +778,13 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
           // as the video's template when the GIF is exported." Video-mode
           // only — `createTemplate`'s checkbox is never shown otherwise.
           if (source.kind === 'video' && createTemplate) {
-            putTemplate(source.video.id, buildTemplatePayload(captionsWithWrapping))
-              .then(() => setHasTemplate(true))
+            const videoId = source.video.id
+            putTemplate(videoId, buildTemplatePayload(captionsWithWrapping))
+              .then(() => {
+                setHasTemplate(true)
+                return getTemplateMeta(videoId)
+              })
+              .then((meta) => setTemplateMeta(meta))
               .catch((err) => setTemplateError(err instanceof Error ? err.message : String(err)))
           }
           onGifCreated?.(gif)
@@ -1055,9 +1123,16 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   Create template
                 </label>
               ) : (
-                <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
-                  {templateSaving ? 'Saving…' : 'Overwrite template'}
-                </button>
+                <>
+                  <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
+                    {templateSaving ? 'Saving…' : 'Overwrite template'}
+                  </button>
+                  {templateMeta && (
+                    <button className="va-btn" onClick={toggleTemplatePublic} disabled={templatePublicSaving}>
+                      {templatePublicSaving ? 'Saving…' : templateMeta.is_public ? '🔒 Make private' : '🌐 Make public'}
+                    </button>
+                  )}
+                </>
               ))}
             <input
               className="va-name-input"

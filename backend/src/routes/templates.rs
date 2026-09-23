@@ -18,7 +18,8 @@ use uuid::Uuid;
 use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
-use crate::models::{LibrarySort, PublicTemplate, TemplatePayload};
+use crate::filmstrip_layout::compute_filmstrip_layout;
+use crate::models::{FilmstripMeta, LibrarySort, PublicTemplate, TemplatePayload};
 use crate::paths;
 use crate::state::AppState;
 
@@ -113,6 +114,46 @@ pub async fn get_template_thumbnail(
     let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_uuid);
 
     let bytes = tokio::fs::read(&thumb_path).await.map_err(|_| AppError::NotFound)?;
+    Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
+/// The clip's own filmstrip sprite, generated once at save time from the
+/// already-trimmed clip (not the source video) — same "never regenerated
+/// on the fly" philosophy as `get_template_thumbnail` above, and the same
+/// reason a template's scrubber previously showed the full source video
+/// instead of just its own range: nothing generated this at all before.
+pub async fn get_template_filmstrip_meta(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<FilmstripMeta>, AppError> {
+    let template = db::get_public_template(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let payload: TemplatePayload = serde_json::from_str(&template.payload_json)?;
+    let layout = compute_filmstrip_layout(
+        payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
+    );
+
+    Ok(Json(FilmstripMeta {
+        frame_count: layout.frame_count,
+        cols: layout.cols,
+        rows: layout.rows,
+        frame_width: layout.frame_width,
+        frame_height: layout.frame_height,
+        interval: layout.interval.seconds(),
+        image_url: format!("/api/templates/{id}/filmstrip.jpg"),
+    }))
+}
+
+pub async fn get_template_filmstrip_image(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> Result<Response, AppError> {
+    let template = db::get_public_template(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let template_uuid = Uuid::parse_str(&template.id)?;
+    let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_uuid);
+
+    let bytes = tokio::fs::read(&filmstrip_path).await.map_err(|_| AppError::NotFound)?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 

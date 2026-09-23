@@ -24,7 +24,10 @@ vi.mock('./api', () => ({
   importGifs: vi.fn(),
   linkGif: vi.fn(),
   getTemplate: vi.fn(),
+  getTemplateMeta: vi.fn(),
+  getTemplateFilmstripMeta: vi.fn(),
   putTemplate: vi.fn(),
+  setTemplatePublic: vi.fn(),
   deleteTemplate: vi.fn(),
   listAdminUsers: vi.fn(),
   setUserDisabled: vi.fn(),
@@ -38,6 +41,8 @@ import {
   getCurrentUser,
   getFilmstripMeta,
   getTemplate,
+  getTemplateFilmstripMeta,
+  getTemplateMeta,
   listAdminUsers,
   listGifs,
   listLibrary,
@@ -100,6 +105,16 @@ beforeEach(() => {
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
+  vi.mocked(getTemplateMeta).mockReset().mockResolvedValue(null)
+  vi.mocked(getTemplateFilmstripMeta).mockReset().mockResolvedValue({
+    frameCount: 5,
+    cols: 5,
+    rows: 1,
+    frameWidth: 160,
+    frameHeight: 90,
+    interval: 0.5,
+    imageUrl: '/api/templates/t1/filmstrip.jpg',
+  })
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
   vi.mocked(setHandle).mockReset()
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])

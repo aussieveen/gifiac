@@ -368,6 +368,30 @@ async fn template_clip_and_thumbnail_serve_only_once_public() {
         .await
         .unwrap();
     assert_eq!(thumb_before.status(), StatusCode::NOT_FOUND);
+    let filmstrip_meta_before = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/templates/{template_id}/filmstrip"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filmstrip_meta_before.status(), StatusCode::NOT_FOUND);
+    let filmstrip_image_before = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/templates/{template_id}/filmstrip.jpg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filmstrip_image_before.status(), StatusCode::NOT_FOUND);
 
     make_template_public(&test_app, &template_id).await;
 
@@ -397,6 +421,46 @@ async fn template_clip_and_thumbnail_serve_only_once_public() {
     assert_eq!(thumb_after.status(), StatusCode::OK);
     assert_eq!(
         thumb_after.headers().get("content-type").unwrap(),
+        "image/jpeg"
+    );
+
+    let filmstrip_meta_after = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/templates/{template_id}/filmstrip"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filmstrip_meta_after.status(), StatusCode::OK);
+    let filmstrip_meta: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(filmstrip_meta_after.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        filmstrip_meta["imageUrl"],
+        format!("/api/templates/{template_id}/filmstrip.jpg")
+    );
+
+    let filmstrip_image_after = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/templates/{template_id}/filmstrip.jpg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filmstrip_image_after.status(), StatusCode::OK);
+    assert_eq!(
+        filmstrip_image_after.headers().get("content-type").unwrap(),
         "image/jpeg"
     );
 }

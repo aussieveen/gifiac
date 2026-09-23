@@ -756,7 +756,7 @@ async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_s
         .await
         .unwrap();
     assert_eq!(put_response.status(), StatusCode::OK);
-    let (clip_path, thumb_path) = template_asset_paths(&test_app);
+    let (clip_path, thumb_path, filmstrip_path) = template_asset_paths(&test_app);
 
     let delete_response = test_app
         .app
@@ -785,11 +785,12 @@ async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_s
         .unwrap();
     assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
 
-    // The template's own clip/thumbnail files are untouched by the
-    // video's deletion — a self-contained asset, not derived at read time
-    // from the source video.
+    // The template's own clip/thumbnail/filmstrip files are untouched by
+    // the video's deletion — a self-contained asset, not derived at read
+    // time from the source video.
     assert!(clip_path.exists(), "template clip should survive the source video's deletion");
     assert!(thumb_path.exists(), "template thumbnail should survive the source video's deletion");
+    assert!(filmstrip_path.exists(), "template filmstrip should survive the source video's deletion");
 }
 
 #[tokio::test]
@@ -946,11 +947,14 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     assert_eq!(list_after[0]["has_template"], true);
 
     // SPEC-CLOUD.md §4: saving a template trims the source video into its
-    // own independent clip file + a first-frame thumbnail, on disk right
-    // alongside the source video/thumbnail files.
-    let (clip_path, thumb_path) = template_asset_paths(&test_app);
+    // own independent clip file + a first-frame thumbnail + its own
+    // filmstrip (trimmed to just the template's range, not the full
+    // source video's), on disk right alongside the source video/thumbnail
+    // files.
+    let (clip_path, thumb_path, filmstrip_path) = template_asset_paths(&test_app);
     assert!(clip_path.exists(), "expected a template clip file on disk");
     assert!(thumb_path.exists(), "expected a template thumbnail file on disk");
+    assert!(filmstrip_path.exists(), "expected a template filmstrip file on disk");
     let first_probe = gifiac_backend::ffmpeg::probe_video(&clip_path).unwrap();
     assert!(
         first_probe.duration_seconds < 2.0,
@@ -982,10 +986,14 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
         .await
         .unwrap();
     assert_eq!(overwrite_response.status(), StatusCode::OK);
-    let (clip_path_after_overwrite, _) = template_asset_paths(&test_app);
+    let (clip_path_after_overwrite, _, filmstrip_path_after_overwrite) = template_asset_paths(&test_app);
     assert_eq!(
         clip_path, clip_path_after_overwrite,
         "overwrite should reuse the same template id/file, not create a second one"
+    );
+    assert_eq!(
+        filmstrip_path, filmstrip_path_after_overwrite,
+        "overwrite should reuse the same filmstrip file too"
     );
     let second_probe = gifiac_backend::ffmpeg::probe_video(&clip_path).unwrap();
     assert!(
@@ -1008,13 +1016,155 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
     assert!(!clip_path.exists(), "expected the template clip file to be removed");
     assert!(!thumb_path.exists(), "expected the template thumbnail file to be removed");
+    assert!(!filmstrip_path.exists(), "expected the template filmstrip file to be removed");
 }
 
-/// Locates the template clip/thumbnail files written to `test_app`'s
-/// video dir by filename suffix — the API never exposes the template's
-/// internal id, so tests find the files the same way a human debugging
-/// this on a real box would.
-fn template_asset_paths(test_app: &common::TestApp) -> (std::path::PathBuf, std::path::PathBuf) {
+#[tokio::test]
+async fn get_template_meta_returns_id_and_is_public_owner_scoped() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 2.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = video["id"].as_str().unwrap();
+
+    let meta_before_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{id}/template/meta"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_before_response.status(), StatusCode::NOT_FOUND);
+
+    let template_body = serde_json::json!({
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.5,
+        "width": 480,
+        "height": 270
+    });
+    let put_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri(format!("/api/videos/{id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(template_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let meta_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{id}/template/meta"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(meta_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(meta["id"].as_str().is_some());
+    assert_eq!(meta["is_public"], false);
+
+    // Toggle it public via the templates route, then confirm the video's
+    // own meta view reflects it too — same row, two read paths.
+    let template_id = meta["id"].as_str().unwrap();
+    let patch_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/templates/{template_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "is_public": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_response.status(), StatusCode::OK);
+
+    let meta_after_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{id}/template/meta"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let meta_after: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(meta_after_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta_after["is_public"], true);
+
+    // Ownership boundary: a second user can't see this via the video route.
+    let other_cookie = login_as(&test_app, "other@example.com").await;
+    let other_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{id}/template/meta"))
+                .header("cookie", &other_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Locates the template clip/thumbnail/filmstrip files written to
+/// `test_app`'s video dir by filename suffix — the API never exposes the
+/// template's internal id, so tests find the files the same way a human
+/// debugging this on a real box would.
+fn template_asset_paths(test_app: &common::TestApp) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let entries: Vec<_> = std::fs::read_dir(&test_app.video_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -1029,7 +1179,12 @@ fn template_asset_paths(test_app: &common::TestApp) -> (std::path::PathBuf, std:
         .find(|e| e.file_name().to_string_lossy().ends_with("_template_thumb.jpg"))
         .expect("expected a template thumbnail file")
         .path();
-    (clip, thumb)
+    let filmstrip = entries
+        .iter()
+        .find(|e| e.file_name().to_string_lossy().ends_with("_template_filmstrip.jpg"))
+        .expect("expected a template filmstrip file")
+        .path();
+    (clip, thumb, filmstrip)
 }
 
 #[tokio::test]

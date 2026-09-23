@@ -62,6 +62,17 @@ pub struct TemplatePayload {
     pub height: i64,
 }
 
+/// `GET /api/videos/{id}/template/meta` — the id/is_public a video's own
+/// editor needs to drive the "Make public"/"Make private" toggle next to
+/// "Overwrite template", neither of which `TemplatePayload` carries (it's
+/// the save/pre-fill value object, not the row). Owner-scoped via the
+/// video, same as `GET /api/videos/{id}/template` itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateMeta {
+    pub id: String,
+    pub is_public: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilmstripMeta {

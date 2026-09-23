@@ -8,6 +8,7 @@ import type {
   LibrarySort,
   Profile,
   PublicTemplate,
+  TemplateMeta,
   TemplatePayload,
   Video,
 } from './types'
@@ -74,6 +75,13 @@ export async function deleteVideo(id: string): Promise<void> {
 
 export function getFilmstripMeta(id: string): Promise<FilmstripMeta> {
   return request<FilmstripMeta>(`/api/videos/${id}/filmstrip`)
+}
+
+// The template's own filmstrip — trimmed to just its saved range, unlike
+// the source video's (which spans the full video). Cross-user readable,
+// same public-visibility rule as the clip/thumbnail.
+export function getTemplateFilmstripMeta(templateId: string): Promise<FilmstripMeta> {
+  return request<FilmstripMeta>(`/api/templates/${templateId}/filmstrip`)
 }
 
 export function thumbnailUrl(id: string): string {
@@ -267,6 +275,24 @@ export function putTemplate(videoId: string, payload: TemplatePayload): Promise<
 export async function deleteTemplate(videoId: string): Promise<void> {
   const input = `/api/videos/${videoId}/template`
   await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+}
+
+export async function getTemplateMeta(videoId: string): Promise<TemplateMeta | null> {
+  const input = `/api/videos/${videoId}/template/meta`
+  const response = await fetch(input)
+  if (response.status === 404) return null
+  await throwIfNotOk(input, response)
+  return (await response.json()) as TemplateMeta
+}
+
+// SPEC-CLOUD.md §4/§8: opts a template into (or out of) the global
+// library — the template equivalent of setGifPublic above.
+export function setTemplatePublic(templateId: string, isPublic: boolean): Promise<TemplateMeta> {
+  return request<TemplateMeta>(`/api/templates/${templateId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_public: isPublic }),
+  })
 }
 
 // Admin area per SPEC-CLOUD.md §7 — every user plus per-user usage stats,

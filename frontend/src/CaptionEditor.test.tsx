@@ -9,10 +9,21 @@ vi.mock('./api', () => ({
   subscribeExportProgress: vi.fn(),
   videoFileUrl: (id: string) => `/api/videos/${id}/file`,
   getTemplate: vi.fn(),
+  getTemplateMeta: vi.fn(),
+  getTemplateFilmstripMeta: vi.fn(),
   putTemplate: vi.fn(),
+  setTemplatePublic: vi.fn(),
 }))
 
-import { createExport, getTemplate, putTemplate, subscribeExportProgress } from './api'
+import {
+  createExport,
+  getTemplate,
+  getTemplateFilmstripMeta,
+  getTemplateMeta,
+  putTemplate,
+  setTemplatePublic,
+  subscribeExportProgress,
+} from './api'
 import type { ExportProgressHandlers } from './api'
 
 const video: Video = {
@@ -76,6 +87,16 @@ beforeEach(() => {
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(subscribeExportProgress).mockReturnValue(() => {})
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
+  vi.mocked(getTemplateMeta).mockReset().mockResolvedValue(null)
+  vi.mocked(getTemplateFilmstripMeta).mockReset().mockResolvedValue({
+    frameCount: 5,
+    cols: 5,
+    rows: 1,
+    frameWidth: 160,
+    frameHeight: 90,
+    interval: 0.5,
+    imageUrl: '/api/templates/tmpl-1/filmstrip.jpg',
+  })
   vi.mocked(putTemplate).mockReset()
 })
 
@@ -385,6 +406,29 @@ describe('CaptionEditor', () => {
     )
     await screen.findByText('Template saved.')
     expect(createExport).not.toHaveBeenCalled()
+  })
+
+  it('shows a public/private toggle next to "Overwrite template" and flips it', async () => {
+    vi.mocked(getTemplate).mockResolvedValue({ captions: [], gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 })
+    vi.mocked(getTemplateMeta).mockResolvedValue({ id: 'tmpl-1', is_public: false })
+    vi.mocked(setTemplatePublic).mockResolvedValue({ id: 'tmpl-1', is_public: true })
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video: { ...video, has_template: true }, filmstrip }} onBack={() => {}} />)
+    await screen.findByRole('button', { name: 'Overwrite template' })
+
+    const toggle = await screen.findByRole('button', { name: '🌐 Make public' })
+    await user.click(toggle)
+
+    await waitFor(() => expect(setTemplatePublic).toHaveBeenCalledWith('tmpl-1', true))
+    await screen.findByRole('button', { name: '🔒 Make private' })
+  })
+
+  it('has no public/private toggle until a template actually exists', async () => {
+    vi.mocked(getTemplate).mockResolvedValue(null)
+    render(<CaptionEditor source={{ kind: 'video', video: { ...video, has_template: false }, filmstrip }} onBack={() => {}} />)
+    await screen.findByText('Create template')
+
+    expect(screen.queryByRole('button', { name: '🌐 Make public' })).not.toBeInTheDocument()
   })
 
   it('checking "Create template" and exporting saves the template alongside the GIF', async () => {
@@ -866,6 +910,24 @@ describe('CaptionEditor with a template source', () => {
     // Absolute 12s-13s, template gif_range_start 10 -> clip-relative 2s-3s.
     expect(screen.getByText(/2\.00s – 3\.00s/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /unlock caption/i })).toHaveTextContent('Locked')
+  })
+
+  it("fetches and renders the template's own filmstrip, trimmed to its own range", async () => {
+    vi.mocked(getTemplateFilmstripMeta).mockResolvedValue({
+      frameCount: 3,
+      cols: 3,
+      rows: 1,
+      frameWidth: 160,
+      frameHeight: 90,
+      interval: 1,
+      imageUrl: '/api/templates/t1/filmstrip.jpg',
+    })
+    render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+
+    await waitFor(() => expect(getTemplateFilmstripMeta).toHaveBeenCalledWith('t1'))
+    // Impossible before this fix — a template source's filmstrip was
+    // hardcoded to null, so `.va-frame` never rendered anything at all.
+    await waitFor(() => expect(document.querySelectorAll('.va-frame').length).toBeGreaterThan(0))
   })
 
   it('shows no template-save UI — there is no video to attach a template to', () => {
