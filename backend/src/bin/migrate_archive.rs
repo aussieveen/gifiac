@@ -268,6 +268,8 @@ async fn migrate_template(
         &clip_path,
         payload.gif_range_start,
         payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
     )
     .await
     .with_context(|| format!("clipping template video for {}", template.video_id))?;

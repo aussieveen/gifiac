@@ -405,6 +405,8 @@ pub(crate) async fn save_template(
         &clip_path,
         payload.gif_range_start,
         payload.gif_range_end - payload.gif_range_start,
+        payload.width,
+        payload.height,
     )
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to clip template video: {e}")))?;
