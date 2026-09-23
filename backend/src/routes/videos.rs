@@ -261,9 +261,18 @@ pub async fn delete_video(
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<StatusCode, AppError> {
-    let (uuid, video) = load_video(&state, &id, &user.id).await?;
+    delete_video_and_its_assets(&state, &id, &user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
-    db::delete_video(&state.pool, &id, &user.id).await?;
+/// Shared by the route above and `exports::run_pipeline`'s post-export
+/// cleanup (a video with no template isn't preserved past the gif it was
+/// used for — see that call site's comment) — same DB row + S3 object +
+/// local file removal either way, just triggered differently.
+pub(crate) async fn delete_video_and_its_assets(state: &AppState, id: &str, owner_id: &str) -> Result<(), AppError> {
+    let (uuid, video) = load_video(state, id, owner_id).await?;
+
+    db::delete_video(&state.pool, id, owner_id).await?;
 
     if let Err(err) = state
         .source_storage
@@ -284,7 +293,7 @@ pub async fn delete_video(
         }
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 pub async fn get_filmstrip_image(
@@ -366,24 +375,42 @@ pub async fn put_template(
     AxPath(id): AxPath<String>,
     Json(payload): Json<TemplatePayload>,
 ) -> Result<Json<TemplatePayload>, AppError> {
+    let (video_uuid, video) = load_video(&state, &id, &user.id).await?;
+    save_template(&state, &video_uuid, &id, &video.extension, &user.id, &payload).await?;
+    Ok(Json(payload))
+}
+
+/// The actual clip/thumbnail/filmstrip generation + upsert behind
+/// `put_template` above — pulled out so `exports::run_pipeline` can also
+/// call it directly for the "Create template" checkbox (SPEC.md §12),
+/// which must happen inside the same export request as the video's own
+/// post-export cleanup (see `ExportRequest::save_as_template`'s doc
+/// comment for why a separate follow-up call would race it).
+pub(crate) async fn save_template(
+    state: &AppState,
+    video_uuid: &Uuid,
+    video_id: &str,
+    video_extension: &str,
+    owner_id: &str,
+    payload: &TemplatePayload,
+) -> Result<(), AppError> {
     if payload.gif_range_end <= payload.gif_range_start {
         return Err(AppError::BadRequest(
             "gif_range_end must be after gif_range_start".to_string(),
         ));
     }
-    let (video_uuid, video) = load_video(&state, &id, &user.id).await?;
 
     // Reusing an existing template's id (rather than always generating a
     // fresh one) means an overwrite replaces its clip/thumbnail/filmstrip
     // files in place — `paths::template_clip_path`/`template_thumbnail_path`/
     // `template_filmstrip_path` are named after this id — instead of
     // orphaning the previous save's.
-    let template_id = match db::get_template_id(&state.pool, &id).await? {
+    let template_id = match db::get_template_id(&state.pool, video_id).await? {
         Some(existing) => Uuid::parse_str(&existing)?,
         None => Uuid::new_v4(),
     };
 
-    let source_path = source_video::ensure_on_disk(&state, &video_uuid, &video.extension)
+    let source_path = source_video::ensure_on_disk(state, video_uuid, video_extension)
         .await
         .map_err(AppError::Internal)?;
     let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
@@ -421,13 +448,13 @@ pub async fn put_template(
     db::upsert_template(
         &state.pool,
         &template_id.to_string(),
-        &id,
-        &user.id,
-        &payload,
+        video_id,
+        owner_id,
+        payload,
         &Utc::now().to_rfc3339(),
     )
     .await?;
-    Ok(Json(payload))
+    Ok(())
 }
 
 /// SPEC.md §12: `DELETE /api/videos/{id}/template` — allows the video to

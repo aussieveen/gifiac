@@ -102,6 +102,12 @@ export interface ExportRequest {
   video_id?: string
   template_id?: string
   name: string
+  // The "Create template" checkbox — must ride along with the export
+  // request itself rather than a separate follow-up PUT after it
+  // completes, since a video not saved as a template doesn't survive
+  // past its export (see CaptionEditor's makeGif, which relies on this
+  // instead of calling putTemplate after the fact).
+  save_as_template?: boolean
   captions: Caption[]
   gif_range_start: number
   gif_range_end: number

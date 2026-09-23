@@ -163,6 +163,16 @@ pub struct ExportRequest {
     pub video_id: Option<String>,
     pub template_id: Option<String>,
     pub name: String,
+    /// SPEC.md §12's "Create template" checkbox — must be handled inside
+    /// the same export request as the video's own automatic cleanup
+    /// below (SPEC-CLOUD.md §6: a video not used for a template doesn't
+    /// outlive the gif it was used for). A separate follow-up `PUT
+    /// .../template` call from the frontend, made only after this export
+    /// completes, would race that cleanup and 404 — the video could
+    /// already be gone by the time it arrived. `#[serde(default)]` so
+    /// older/other clients that omit it still deserialize as `false`.
+    #[serde(default)]
+    pub save_as_template: bool,
     pub captions: Vec<Caption>,
     pub gif_range_start: f64,
     pub gif_range_end: f64,

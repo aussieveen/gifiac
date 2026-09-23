@@ -764,6 +764,14 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
         video_id: source.kind === 'video' ? source.video.id : undefined,
         template_id: source.kind === 'template' ? source.template.id : undefined,
         name: trimmedName,
+        // SPEC.md §12: "Checking it saves the current export parameters
+        // as the video's template when the GIF is exported." Sent as
+        // part of the export request itself, not a separate follow-up
+        // PUT after it completes — a video not saved as a template
+        // doesn't survive past its own export (SPEC-CLOUD.md §6), so a
+        // later call here would race that cleanup and 404. Video-mode
+        // only — `createTemplate`'s checkbox is never shown otherwise.
+        save_as_template: source.kind === 'video' && createTemplate,
         captions: captionsWithWrapping,
         gif_range_start: Number(gifRange.start.toFixed(2)),
         gif_range_end: Number(gifRange.end.toFixed(2)),
@@ -774,16 +782,13 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
           setCompletedGif(gif)
           setExportProgress(null)
           setSubmitting(false)
-          // SPEC.md §12: "Checking it saves the current export parameters
-          // as the video's template when the GIF is exported." Video-mode
-          // only — `createTemplate`'s checkbox is never shown otherwise.
+          // The backend already saved the template as part of the export
+          // above (if requested) — this just reads back its id/is_public
+          // for the toggle, same as after a standalone `overwriteTemplate`.
           if (source.kind === 'video' && createTemplate) {
             const videoId = source.video.id
-            putTemplate(videoId, buildTemplatePayload(captionsWithWrapping))
-              .then(() => {
-                setHasTemplate(true)
-                return getTemplateMeta(videoId)
-              })
+            setHasTemplate(true)
+            getTemplateMeta(videoId)
               .then((meta) => setTemplateMeta(meta))
               .catch((err) => setTemplateError(err instanceof Error ? err.message : String(err)))
           }

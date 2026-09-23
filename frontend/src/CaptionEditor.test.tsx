@@ -431,9 +431,15 @@ describe('CaptionEditor', () => {
     expect(screen.queryByRole('button', { name: '🌐 Make public' })).not.toBeInTheDocument()
   })
 
-  it('checking "Create template" and exporting saves the template alongside the GIF', async () => {
+  it('checking "Create template" sends save_as_template on the export request itself, not a separate call', async () => {
+    // Regression test: this used to fire a separate putTemplate() call
+    // after the export completed, which raced the backend's own
+    // post-export cleanup of an untemplated video — the video could
+    // already be gone by the time that follow-up call arrived. The fix
+    // is the backend saving the template atomically as part of the same
+    // export request, signaled by this one flag.
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
-    vi.mocked(putTemplate).mockResolvedValue({ captions: [], gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 })
+    vi.mocked(getTemplateMeta).mockResolvedValue({ id: 'tmpl-1', is_public: false })
     let handlers: ExportProgressHandlers = {}
     vi.mocked(subscribeExportProgress).mockImplementation((_id, h) => {
       handlers = h
@@ -445,6 +451,9 @@ describe('CaptionEditor', () => {
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
+
+    expect(createExport).toHaveBeenCalledWith(expect.objectContaining({ save_as_template: true }))
+    expect(putTemplate).not.toHaveBeenCalled()
 
     act(() =>
       handlers.onComplete?.({
@@ -465,12 +474,20 @@ describe('CaptionEditor', () => {
       }),
     )
 
-    await waitFor(() =>
-      expect(putTemplate).toHaveBeenCalledWith(
-        'v1',
-        expect.objectContaining({ gif_range_start: 0, gif_range_end: 8, width: 160, height: 90 }),
-      ),
-    )
+    // Just reads back what the backend already saved — never writes.
+    await waitFor(() => expect(getTemplateMeta).toHaveBeenCalledWith('v1'))
+    expect(putTemplate).not.toHaveBeenCalled()
+  })
+
+  it('unchecking "Create template" sends save_as_template: false', async () => {
+    vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video, filmstrip }} onBack={() => {}} />)
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+
+    await waitFor(() => expect(createExport).toHaveBeenCalled())
+    expect(createExport).toHaveBeenCalledWith(expect.objectContaining({ save_as_template: false }))
   })
 
   it('does not save a template on export when "Create template" is left unchecked', async () => {

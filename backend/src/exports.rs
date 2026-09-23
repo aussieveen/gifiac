@@ -115,7 +115,7 @@ async fn run_pipeline(
     // trimmed *and* scaled at save time (see `videos::put_template`), so
     // `payload.width`/`payload.height` already are that scaled target —
     // no re-derivation needed the way a fresh video source requires.
-    let (media_path, output_width, output_height, video_id, template_id) = match source {
+    let (media_path, output_width, output_height, video_id, video_extension, template_id) = match source {
         ExportSource::Video(video) => {
             let video_uuid = Uuid::parse_str(&video.id)?;
             // SPEC-CLOUD.md §6: the source video's persistent home is a
@@ -123,12 +123,12 @@ async fn run_pipeline(
             // instance doesn't already have a local copy cached.
             let video_path = source_video::ensure_on_disk(state, &video_uuid, &video.extension).await?;
             let (w, h) = crate::scale::scaled_dimensions(video.width, video.height);
-            (video_path, w, h, Some(video.id.clone()), None)
+            (video_path, w, h, Some(video.id.clone()), Some(video.extension.clone()), None)
         }
         ExportSource::Template { id, payload } => {
             let template_uuid = Uuid::parse_str(id)?;
             let clip_path = paths::template_clip_path(&state.config.video_dir, &template_uuid);
-            (clip_path, payload.width, payload.height, None, Some(id.clone()))
+            (clip_path, payload.width, payload.height, None, None, Some(id.clone()))
         }
     };
 
@@ -165,7 +165,7 @@ async fn run_pipeline(
         .join(" ");
     let new_gif = NewGif {
         id: export_id.to_string(),
-        video_id,
+        video_id: video_id.clone(),
         name: request.name.clone(),
         caption_text,
         captions_json: Some(serde_json::to_string(&request.captions)?),
@@ -178,6 +178,47 @@ async fn run_pipeline(
         template_id,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
+
+    if let (Some(video_id), Some(video_extension)) = (&video_id, &video_extension) {
+        let video_uuid = Uuid::parse_str(video_id)?;
+
+        // SPEC.md §12's "Create template" checkbox — must happen inside
+        // this same request, before the cleanup below, or that cleanup
+        // would delete the video out from under a separate follow-up
+        // save (see `ExportRequest::save_as_template`'s doc comment).
+        if request.save_as_template {
+            let template_payload = TemplatePayload {
+                captions: request.captions.clone(),
+                gif_range_start: request.gif_range_start,
+                gif_range_end: request.gif_range_end,
+                width: output_width,
+                height: output_height,
+            };
+            if let Err(err) =
+                crate::routes::videos::save_template(state, &video_uuid, video_id, video_extension, owner_id, &template_payload)
+                    .await
+            {
+                tracing::warn!(video_id = %video_id, error = ?err, "failed to save template requested alongside export");
+            }
+        }
+
+        // A video that was never turned into a template is scratch space,
+        // not a persistent asset — once a gif's been made from it, keep
+        // it around no longer. This makes that immediate instead of
+        // waiting on the 7-day S3 lifecycle rule (SPEC-CLOUD.md §6), and
+        // stops `ensure_on_disk` from re-caching it locally forever the
+        // moment anything touches it. Deliberately loses the ability to
+        // make a second, different gif from the same upload later without
+        // re-uploading — templating first (including via the checkbox
+        // above) is the supported way to keep a video's footage around
+        // for that. Best-effort: a cleanup failure here doesn't undo the
+        // export that already succeeded.
+        if db::get_template_id(&state.pool, video_id).await?.is_none()
+            && let Err(err) = crate::routes::videos::delete_video_and_its_assets(state, video_id, owner_id).await
+        {
+            tracing::warn!(video_id = %video_id, error = ?err, "failed to clean up source video after export");
+        }
+    }
 
     Ok(gif)
 }

@@ -208,6 +208,111 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     assert_eq!(other_users_view.status(), StatusCode::NOT_FOUND);
 }
 
+/// Regression test for a real bug in the interaction between two other
+/// fixes: a video not turned into a template is cleaned up automatically
+/// right after a gif's made from it (see videos_api.rs's
+/// `making_a_gif_from_an_untemplated_video_cleans_it_up_automatically`),
+/// but the "Create template" checkbox used to save its template via a
+/// *separate* `PUT .../template` call made only after the export
+/// completed — racing that cleanup, and losing every time, since cleanup
+/// runs synchronously inside the same export request while the follow-up
+/// call couldn't even be sent yet. `save_as_template` on the export
+/// request itself is the fix: the template is saved *before* cleanup
+/// decides whether the video survives, in the same request.
+#[tokio::test]
+async fn save_as_template_during_export_preserves_the_video_and_creates_a_working_template() {
+    let test_app = spawn_app().await;
+    let video = upload_video(&test_app, 6.0).await;
+    let video_id = video["id"].as_str().unwrap().to_string();
+
+    let request_body = json!({
+        "video_id": video_id,
+        "name": "with a template",
+        "save_as_template": true,
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 3.0
+    });
+    let create_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let export_id = accepted["export_id"].as_str().unwrap().to_string();
+
+    let progress_response = tokio::time::timeout(
+        Duration::from_secs(60),
+        test_app.app.clone().oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/exports/{export_id}/progress"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("SSE stream did not close within the timeout")
+    .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        axum::body::to_bytes(progress_response.into_body(), usize::MAX),
+    )
+    .await
+    .expect("reading the SSE body did not finish within the timeout")
+    .unwrap();
+
+    // The video survived — save_as_template beat the auto-cleanup, not
+    // the other way around.
+    let video_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{video_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(video_response.status(), StatusCode::OK);
+
+    // And a real, usable template was actually created — not just a
+    // surviving video with nothing attached.
+    let meta_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{video_id}/template/meta"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(meta_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(meta["id"].as_str().is_some());
+}
+
 /// Regression test for a real bug: `encode_gif`'s ffmpeg invocation has a
 /// *second* input (the generated palette image) after the video one, and
 /// the shared `-t <duration>` arg was landing between the two `-i`s —

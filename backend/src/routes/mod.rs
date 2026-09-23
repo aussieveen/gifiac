@@ -4,7 +4,7 @@ mod exports;
 pub(crate) mod gifs;
 mod profiles;
 mod templates;
-mod videos;
+pub(crate) mod videos;
 
 use std::sync::Arc;
 

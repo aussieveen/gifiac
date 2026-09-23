@@ -651,32 +651,36 @@ async fn delete_video_removes_the_row_and_its_files() {
     );
 }
 
-/// SPEC.md §12 replaced the old "no GIFs were made from it" guard
-/// entirely — a video with GIFs made from it is now fine to delete. The
-/// dependent GIF's `video_id` becomes NULL (ON DELETE SET NULL), which is
-/// exactly the existing "no source video" case the archive UI already
-/// treats as un-re-editable.
+/// A video not turned into a template doesn't outlive the gif it was used
+/// for — `exports::run_pipeline` cleans it up automatically once the
+/// export completes, the same DB row + S3 object + local file removal an
+/// explicit `DELETE /api/videos/{id}` does. The dependent gif's
+/// `video_id` becomes NULL (`ON DELETE SET NULL`), exactly the existing
+/// "no source video" case the archive UI already treats as
+/// un-re-editable.
 #[tokio::test]
-async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
+async fn making_a_gif_from_an_untemplated_video_cleans_it_up_automatically() {
     let test_app = spawn_app().await;
     let gif = create_gif(&test_app, "depends on this video", "").await;
     let video_id = gif["video_id"].as_str().unwrap().to_string();
     let gif_id = gif["id"].as_str().unwrap().to_string();
 
-    let response = test_app
+    // A video never turned into a template is scratch space, not a
+    // persistent asset — once a gif's been made from it, it's cleaned up
+    // automatically rather than waiting on the 7-day S3 lifecycle rule,
+    // exactly as if it had been explicitly deleted.
+    let video_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .method("DELETE")
                 .uri(format!("/api/videos/{video_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(video_response.status(), StatusCode::NOT_FOUND);
 
     let gif_response = test_app
         .app
@@ -697,6 +701,126 @@ async fn delete_video_succeeds_even_when_a_gif_was_made_from_it() {
     )
     .unwrap();
     assert!(gif_after["video_id"].is_null());
+}
+
+/// The one exception to the automatic cleanup above — a video with a
+/// saved template is the whole "must be templated to be preserved" point,
+/// so it must survive making a gif from it too, not just an explicit
+/// delete attempt.
+#[tokio::test]
+async fn making_a_gif_from_a_templated_video_leaves_it_in_place() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let video_path = make_test_video(fixture_dir.path(), 3.0);
+    let video_bytes = std::fs::read(&video_path).unwrap();
+    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let upload_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/videos")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let video: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let video_id = video["id"].as_str().unwrap();
+
+    let template_body = serde_json::json!({
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.0,
+        "width": 480,
+        "height": 270
+    });
+    let put_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri(format!("/api/videos/{video_id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(template_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    let export_body = serde_json::json!({
+        "video_id": video_id,
+        "name": "from a templated video",
+        "captions": [],
+        "gif_range_start": 0.0,
+        "gif_range_end": 1.0
+    });
+    let create_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(export_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let export_id = accepted["export_id"].as_str().unwrap();
+
+    let progress_response = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        test_app.app.clone().oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/exports/{export_id}/progress"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("SSE stream did not close within the timeout")
+    .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        axum::body::to_bytes(progress_response.into_body(), usize::MAX),
+    )
+    .await
+    .expect("reading the SSE body did not finish within the timeout")
+    .unwrap();
+
+    let video_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri(format!("/api/videos/{video_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(video_response.status(), StatusCode::OK);
 }
 
 /// SPEC-CLOUD.md §6 supersedes SPEC.md §12's old guard entirely: a video
