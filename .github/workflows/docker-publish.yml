@@ -59,6 +59,12 @@ jobs:
       id-token: write
       contents: read
     steps:
+      # Needed now that this job also reads docker-compose.yml from the
+      # repo (see the SSM step below) — previously this job never touched
+      # any repo file, only triggered the on-instance script.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -67,13 +73,23 @@ jobs:
 
       # terraform/files/deploy.sh already lives on the instance (written by
       # user_data.sh.tftpl at first boot) — this just re-runs it, so the
-      # deploy logic lives in one place, not duplicated here.
+      # deploy logic lives in one place, not duplicated here. But
+      # docker-compose.yml is ALSO only written at first boot (same
+      # user_data.sh.tftpl) and deploy.sh never touches it — so without
+      # re-pushing it here on every deploy, edits to docker-compose.yml in
+      # this repo (e.g. env vars, ports, volumes) would silently never
+      # reach the running instance. Sent as base64 over SSM's shorthand
+      # `commands=[...]` param to dodge quoting the file's own YAML.
       - name: Trigger deploy via SSM
         run: |
+          compose_b64="$(base64 -w0 docker-compose.yml)"
+          params="$(jq -n --arg b64 "$compose_b64" \
+            '{commands: ["echo " + $b64 + " | base64 -d > /opt/gifiac/docker-compose.yml", "bash /opt/gifiac/deploy.sh"]}')"
+
           command_id=$(aws ssm send-command \
             --targets "Key=tag:Name,Values=gifiac" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["bash /opt/gifiac/deploy.sh"]' \
+            --parameters "$params" \
             --query "Command.CommandId" --output text)
 
           sleep 3
