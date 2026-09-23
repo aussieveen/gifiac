@@ -389,13 +389,17 @@ pub(crate) async fn save_template(
         None => Uuid::new_v4(),
     };
 
+    let stage_started = std::time::Instant::now();
     let source_path = source_video::ensure_on_disk(state, video_uuid, video_extension)
         .await
         .map_err(AppError::Internal)?;
+    let ensure_on_disk_ms = stage_started.elapsed().as_millis() as u64;
+
     let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
     let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
     let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_id);
 
+    let stage_started = std::time::Instant::now();
     ffmpeg::trim_video(
         &source_path,
         &clip_path,
@@ -404,12 +408,15 @@ pub(crate) async fn save_template(
     )
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to clip template video: {e}")))?;
+    let trim_ms = stage_started.elapsed().as_millis() as u64;
 
     // Seeking to 0.0 on the just-produced clip is the "first frame of the
     // trimmed clip" §4 asks for.
+    let stage_started = std::time::Instant::now();
     ffmpeg::generate_thumbnail(&clip_path, &thumb_path, 0.0)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template thumbnail: {e}")))?;
+    let thumbnail_ms = stage_started.elapsed().as_millis() as u64;
 
     // Generated from the already-trimmed clip (not the source video), so
     // this only ever spans the template's own range — fixes the "still
@@ -420,10 +427,13 @@ pub(crate) async fn save_template(
         payload.width,
         payload.height,
     );
+    let stage_started = std::time::Instant::now();
     ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &filmstrip_layout)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template filmstrip: {e}")))?;
+    let filmstrip_ms = stage_started.elapsed().as_millis() as u64;
 
+    let stage_started = std::time::Instant::now();
     db::upsert_template(
         &state.pool,
         &template_id.to_string(),
@@ -433,6 +443,20 @@ pub(crate) async fn save_template(
         &Utc::now().to_rfc3339(),
     )
     .await?;
+    let db_upsert_ms = stage_started.elapsed().as_millis() as u64;
+
+    tracing::info!(
+        video_id = %video_id,
+        template_id = %template_id,
+        ensure_on_disk_ms,
+        trim_ms,
+        thumbnail_ms,
+        filmstrip_ms,
+        db_upsert_ms,
+        total_ms = ensure_on_disk_ms + trim_ms + thumbnail_ms + filmstrip_ms + db_upsert_ms,
+        "save_template stage timings"
+    );
+
     Ok(())
 }
 

@@ -10,6 +10,12 @@ services:
     volumes:
       - /opt/gifiac/data:/data
     environment:
+      # Without this, tracing_subscriber's default filter is ERROR-only
+      # (EnvFilter::from_default_env()'s default directive) — every
+      # tracing::info! in the app, including per-request timing, is
+      # silently dropped. tower_http=debug surfaces TraceLayer's built-in
+      # per-request duration line alongside our own stage timings.
+      RUST_LOG: "info,gifiac_backend=info,tower_http=debug"
       GIFIAC_VIDEO_DIR: /data/videos
       DATABASE_URL: "${DATABASE_URL}"
       R2_ACCOUNT_ID: "${R2_ACCOUNT_ID}"

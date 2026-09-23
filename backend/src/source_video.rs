@@ -7,6 +7,7 @@
 //! never proactively evicts what it fetches.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::Result;
 use uuid::Uuid;
@@ -19,6 +20,13 @@ pub async fn ensure_on_disk(state: &AppState, id: &Uuid, extension: &str) -> Res
         return Ok(path);
     }
     let key = paths::video_object_key(id, extension);
+    let started = Instant::now();
     state.source_storage.download_file(&key, &path).await?;
+    tracing::info!(
+        video_id = %id,
+        key = %key,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "source_video cache miss: downloaded from object storage"
+    );
     Ok(path)
 }
