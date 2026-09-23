@@ -3,7 +3,6 @@ mod auth;
 mod exports;
 pub(crate) mod gifs;
 mod profiles;
-mod templates;
 pub(crate) mod videos;
 
 use std::sync::Arc;
@@ -43,7 +42,6 @@ pub fn api_router() -> Router<Arc<AppState>> {
                 .put(videos::put_template)
                 .delete(videos::delete_template),
         )
-        .route("/videos/{id}/template/meta", get(videos::get_template_meta))
         .route("/exports", post(exports::create_export))
         .route("/exports/{id}/progress", get(exports::export_progress))
         .route("/gifs", get(gifs::list_gifs))
@@ -54,18 +52,6 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),
         )
         .route("/gifs/{id}/use", post(gifs::use_gif))
-        .route("/templates", get(templates::list_templates))
-        .route(
-            "/templates/{id}",
-            get(templates::get_template).patch(templates::set_template_public),
-        )
-        .route("/templates/{id}/clip", get(templates::get_template_clip))
-        .route("/templates/{id}/thumbnail", get(templates::get_template_thumbnail))
-        .route("/templates/{id}/filmstrip", get(templates::get_template_filmstrip_meta))
-        .route(
-            "/templates/{id}/filmstrip.jpg",
-            get(templates::get_template_filmstrip_image),
-        )
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))
@@ -73,5 +59,4 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/admin/gifs/{id}", delete(admin::delete_gif))
         .route("/admin/gifs/{id}/unpublish", post(admin::unpublish_gif))
         .route("/admin/templates/{id}", delete(admin::delete_template))
-        .route("/admin/templates/{id}/unpublish", post(admin::unpublish_template))
 }

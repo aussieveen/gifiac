@@ -292,25 +292,18 @@ async fn save_as_template_during_export_preserves_the_video_and_creates_a_workin
 
     // And a real, usable template was actually created — not just a
     // surviving video with nothing attached.
-    let meta_response = test_app
+    let template_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .uri(format!("/api/videos/{video_id}/template/meta"))
+                .uri(format!("/api/videos/{video_id}/template"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(meta_response.status(), StatusCode::OK);
-    let meta: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(meta_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(meta["id"].as_str().is_some());
+    assert_eq!(template_response.status(), StatusCode::OK);
 }
 
 /// Regression test for a real bug: `encode_gif`'s ffmpeg invocation has a

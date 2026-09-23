@@ -1144,7 +1144,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
 }
 
 #[tokio::test]
-async fn get_template_meta_returns_id_and_is_public_owner_scoped() {
+async fn get_template_is_owner_scoped() {
     let test_app = spawn_app().await;
     let fixture_dir = TempDir::new().unwrap();
     let video_path = make_test_video(fixture_dir.path(), 2.0);
@@ -1174,18 +1174,18 @@ async fn get_template_meta_returns_id_and_is_public_owner_scoped() {
     .unwrap();
     let id = video["id"].as_str().unwrap();
 
-    let meta_before_response = test_app
+    let get_before_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .uri(format!("/api/videos/{id}/template/meta"))
+                .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(meta_before_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(get_before_response.status(), StatusCode::NOT_FOUND);
 
     let template_body = serde_json::json!({
         "captions": [],
@@ -1209,63 +1209,25 @@ async fn get_template_meta_returns_id_and_is_public_owner_scoped() {
         .unwrap();
     assert_eq!(put_response.status(), StatusCode::OK);
 
-    let meta_response = test_app
+    let get_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .uri(format!("/api/videos/{id}/template/meta"))
+                .uri(format!("/api/videos/{id}/template"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(meta_response.status(), StatusCode::OK);
-    let meta: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(meta_response.into_body(), usize::MAX)
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let template: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(get_response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    assert!(meta["id"].as_str().is_some());
-    assert_eq!(meta["is_public"], false);
-
-    // Toggle it public via the templates route, then confirm the video's
-    // own meta view reflects it too — same row, two read paths.
-    let template_id = meta["id"].as_str().unwrap();
-    let patch_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("PATCH")
-                .uri(format!("/api/templates/{template_id}"))
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({ "is_public": true }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(patch_response.status(), StatusCode::OK);
-
-    let meta_after_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .uri(format!("/api/videos/{id}/template/meta"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let meta_after: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(meta_after_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(meta_after["is_public"], true);
+    assert_eq!(template["gif_range_end"], 1.5);
 
     // Ownership boundary: a second user can't see this via the video route.
     let other_cookie = login_as(&test_app, "other@example.com").await;
@@ -1274,7 +1236,7 @@ async fn get_template_meta_returns_id_and_is_public_owner_scoped() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/videos/{id}/template/meta"))
+                .uri(format!("/api/videos/{id}/template"))
                 .header("cookie", &other_cookie)
                 .body(Body::empty())
                 .unwrap(),

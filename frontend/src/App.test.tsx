@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import type { FilmstripMeta, PublicTemplate, Video } from './types'
+import type { FilmstripMeta, Video } from './types'
 
 vi.mock('./api', () => ({
   LOGIN_URL: '/api/auth/login',
@@ -24,15 +24,11 @@ vi.mock('./api', () => ({
   importGifs: vi.fn(),
   linkGif: vi.fn(),
   getTemplate: vi.fn(),
-  getTemplateMeta: vi.fn(),
-  getTemplateFilmstripMeta: vi.fn(),
   putTemplate: vi.fn(),
-  setTemplatePublic: vi.fn(),
   deleteTemplate: vi.fn(),
   listAdminUsers: vi.fn(),
   setUserDisabled: vi.fn(),
   listLibrary: vi.fn(),
-  listPublicTemplates: vi.fn(),
   recordGifUse: vi.fn(),
 }))
 
@@ -41,12 +37,9 @@ import {
   getCurrentUser,
   getFilmstripMeta,
   getTemplate,
-  getTemplateFilmstripMeta,
-  getTemplateMeta,
   listAdminUsers,
   listGifs,
   listLibrary,
-  listPublicTemplates,
   listVideos,
   logout,
   setHandle,
@@ -105,22 +98,11 @@ beforeEach(() => {
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
-  vi.mocked(getTemplateMeta).mockReset().mockResolvedValue(null)
-  vi.mocked(getTemplateFilmstripMeta).mockReset().mockResolvedValue({
-    frameCount: 5,
-    cols: 5,
-    rows: 1,
-    frameWidth: 160,
-    frameHeight: 90,
-    interval: 0.5,
-    imageUrl: '/api/templates/t1/filmstrip.jpg',
-  })
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
   vi.mocked(setHandle).mockReset()
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
   vi.mocked(logout).mockReset().mockResolvedValue(undefined)
   vi.mocked(listLibrary).mockReset().mockResolvedValue([])
-  vi.mocked(listPublicTemplates).mockReset().mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -322,38 +304,5 @@ describe('App', () => {
     expect(await screen.findByLabelText('GIF name')).toHaveValue('my clip')
     expect(screen.getByRole('button', { name: 'My Library' })).toHaveClass('active')
     expect(screen.getByRole('button', { name: 'my clip' })).toHaveClass('selected')
-  })
-
-  it('using a template from Global Library opens the editor against its clip', async () => {
-    const template: PublicTemplate = {
-      id: 't1',
-      is_public: true,
-      use_count: 0,
-      owner_handle: 'alice',
-      saved_at: '2026-01-01T00:00:00Z',
-      clip_url: '/api/templates/t1/clip',
-      thumbnail_url: '/api/templates/t1/thumbnail',
-      captions: [],
-      gif_range_start: 0,
-      gif_range_end: 3,
-      width: 320,
-      height: 240,
-    }
-    vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listPublicTemplates).mockResolvedValue([template])
-    const user = userEvent.setup()
-
-    renderApp()
-    await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'Global Library' }))
-    await user.click(await screen.findByRole('button', { name: /use this template/i }))
-
-    const videoEl = document.querySelector('video') as HTMLVideoElement
-    expect(videoEl.src).toContain(template.clip_url)
-    // SPEC-CLOUD.md §9: the sub-flow it started stays nested under My
-    // Library, even though it was entered from Global Library.
-    expect(screen.getByRole('button', { name: 'My Library' })).toHaveClass('active')
-    // No video-mode-only template-save UI for a template-sourced session.
-    expect(screen.queryByText(/create template/i)).not.toBeInTheDocument()
   })
 })

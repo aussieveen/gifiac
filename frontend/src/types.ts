@@ -17,11 +17,6 @@ export interface Caption {
   width: number // 0-1 fractional box width, centered on x — controls text wrap
   outlineColor: string | null // hex, or null for no outline
   lineHeight: number // multiplier of fontSize -> gap between wrapped lines
-  // SPEC-CLOUD.md §4/§23: fully immutable to anyone but the template's
-  // creator once templates can be shared. Not yet enforced anywhere in
-  // the UI (no way to load a template you didn't create exists yet) —
-  // just persisted so a creator can mark intent ahead of that.
-  locked: boolean
 }
 
 // `videos` row shape returned by the backend (SPEC.md §2) — snake_case,
@@ -49,15 +44,6 @@ export interface TemplatePayload {
   gif_range_end: number
   width: number
   height: number
-}
-
-// GET /api/videos/{id}/template/meta response shape — matching the
-// backend's `TemplateMeta`. The id/is_public a video's own editor needs
-// for the "Make public"/"Make private" toggle next to "Overwrite
-// template", neither of which `TemplatePayload` carries.
-export interface TemplateMeta {
-  id: string
-  is_public: boolean
 }
 
 // GET /api/auth/me response shape (SPEC-CLOUD.md §2) — camelCase, matching
@@ -138,21 +124,6 @@ export interface LibraryEntry extends Gif {
 // `GET /api/library?sort=` (SPEC-CLOUD.md §8) — matching the backend's
 // `LibrarySort`, kebab-case on the wire.
 export type LibrarySort = 'newest' | 'most-used'
-
-// GET /api/templates (and /api/templates/{id}) response shape
-// (SPEC-CLOUD.md §4/§8) — snake_case, matching the backend's
-// `TemplateResponse`, which flattens `TemplatePayload`. Always visible
-// only when `is_public` — these are the two cross-user template read
-// endpoints, never a private one.
-export interface PublicTemplate extends TemplatePayload {
-  id: string
-  is_public: boolean
-  use_count: number
-  owner_handle: string | null
-  saved_at: string
-  clip_url: string
-  thumbnail_url: string
-}
 
 // GET /api/admin/users response row (SPEC-CLOUD.md §7) — snake_case,
 // matching the backend's `AdminUserView`.

@@ -7,8 +7,6 @@ import type {
   LibraryEntry,
   LibrarySort,
   Profile,
-  PublicTemplate,
-  TemplateMeta,
   TemplatePayload,
   Video,
 } from './types'
@@ -77,13 +75,6 @@ export function getFilmstripMeta(id: string): Promise<FilmstripMeta> {
   return request<FilmstripMeta>(`/api/videos/${id}/filmstrip`)
 }
 
-// The template's own filmstrip — trimmed to just its saved range, unlike
-// the source video's (which spans the full video). Cross-user readable,
-// same public-visibility rule as the clip/thumbnail.
-export function getTemplateFilmstripMeta(templateId: string): Promise<FilmstripMeta> {
-  return request<FilmstripMeta>(`/api/templates/${templateId}/filmstrip`)
-}
-
 export function thumbnailUrl(id: string): string {
   return `/api/videos/${id}/thumbnail`
 }
@@ -94,13 +85,9 @@ export function videoFileUrl(id: string): string {
 
 // Body shape per SPEC.md §5 "Exports": snake_case fields at the top level
 // (matching the `gifs` table columns), a camelCase `captions` array
-// (matching the caption data structure in §4). SPEC-CLOUD.md §4: exactly
-// one of `video_id`/`template_id` — the latter is the "use this template"
-// flow (M7b), sourcing the export from a public template's own clip
-// instead of a video you own.
+// (matching the caption data structure in §4).
 export interface ExportRequest {
-  video_id?: string
-  template_id?: string
+  video_id: string
   name: string
   // The "Create template" checkbox — must ride along with the export
   // request itself rather than a separate follow-up PUT after it
@@ -225,18 +212,6 @@ export function recordGifUse(id: string): Promise<Gif> {
   return request<Gif>(`/api/gifs/${id}/use`, { method: 'POST' })
 }
 
-// SPEC-CLOUD.md §8: the global library's template half — every public
-// template, no sign-in required. `q` is accepted for symmetry with
-// listLibrary but doesn't narrow results — see the M7b plan notes
-// (templates have no name/searchable caption column).
-export function listPublicTemplates(q?: string, sort?: LibrarySort): Promise<PublicTemplate[]> {
-  const params = new URLSearchParams()
-  if (q?.trim()) params.set('q', q.trim())
-  if (sort) params.set('sort', sort)
-  const query = params.toString()
-  return request<PublicTemplate[]>(`/api/templates${query ? `?${query}` : ''}`)
-}
-
 export async function deleteGif(id: string): Promise<void> {
   const input = `/api/gifs/${id}`
   await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
@@ -281,24 +256,6 @@ export function putTemplate(videoId: string, payload: TemplatePayload): Promise<
 export async function deleteTemplate(videoId: string): Promise<void> {
   const input = `/api/videos/${videoId}/template`
   await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
-}
-
-export async function getTemplateMeta(videoId: string): Promise<TemplateMeta | null> {
-  const input = `/api/videos/${videoId}/template/meta`
-  const response = await fetch(input)
-  if (response.status === 404) return null
-  await throwIfNotOk(input, response)
-  return (await response.json()) as TemplateMeta
-}
-
-// SPEC-CLOUD.md §4/§8: opts a template into (or out of) the global
-// library — the template equivalent of setGifPublic above.
-export function setTemplatePublic(templateId: string, isPublic: boolean): Promise<TemplateMeta> {
-  return request<TemplateMeta>(`/api/templates/${templateId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_public: isPublic }),
-  })
 }
 
 // Admin area per SPEC-CLOUD.md §7 — every user plus per-user usage stats,

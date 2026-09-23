@@ -147,14 +147,3 @@ pub async fn delete_template(
 
     Ok(StatusCode::NO_CONTENT)
 }
-
-pub async fn unpublish_template(
-    State(state): State<Arc<AppState>>,
-    AdminUser(_admin): AdminUser,
-    AxPath(id): AxPath<String>,
-) -> Result<Json<AdminTemplateView>, AppError> {
-    let template = db::admin_unpublish_template(&state.pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(template.into()))
-}

@@ -426,7 +426,6 @@ async fn run() -> Result<bool> {
                 height: gif.height,
                 external_url: gif.external_url.clone(),
                 user_id: args.user_id.clone(),
-                template_id: None,
             },
             &gif.created_at,
         )

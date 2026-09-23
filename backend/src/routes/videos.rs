@@ -16,7 +16,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
-use crate::models::{FilmstripMeta, NewVideo, TemplateMeta, TemplatePayload, Video, VideoListItem};
+use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListItem};
 use crate::paths;
 use crate::source_video;
 use crate::state::AppState;
@@ -341,27 +341,6 @@ pub async fn get_template(
     load_video(&state, &id, &user.id).await?;
     let template = db::get_template(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
     Ok(Json(template))
-}
-
-/// `GET /api/videos/{id}/template/meta` — the id/is_public the video's own
-/// editor needs for the "Make public"/"Make private" toggle next to
-/// "Overwrite template" (`TemplatePayload` above is the save/pre-fill
-/// value object and carries neither). Owner-scoped via the video, same as
-/// `get_template`.
-pub async fn get_template_meta(
-    State(state): State<Arc<AppState>>,
-    CurrentUser(user): CurrentUser,
-    AxPath(id): AxPath<String>,
-) -> Result<Json<TemplateMeta>, AppError> {
-    load_video(&state, &id, &user.id).await?;
-    let template_id = db::get_template_id(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
-    let template = db::get_template_by_id(&state.pool, &template_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(TemplateMeta {
-        id: template.id,
-        is_public: template.is_public,
-    }))
 }
 
 /// SPEC.md §12: `PUT /api/videos/{id}/template` — upserts (creates or

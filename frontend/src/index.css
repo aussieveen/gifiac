@@ -185,16 +185,6 @@ button {
   outline: 1px dashed #f5c518;
 }
 
-/* A locked caption in "use this template" mode — read-only, per
-   SPEC-CLOUD.md §4/§23, so it shouldn't even look draggable. */
-.preview-caption.locked-readonly {
-  cursor: not-allowed;
-}
-
-.va-locked-hint {
-  color: #f5c518;
-}
-
 /* Off-screen twin of a caption used only to measure its real wrapped
    lines (see CaptionEditor's measureRefs) — a separate class (rather than
    reusing .preview-caption) so tests/selectors that count rendered
@@ -377,27 +367,6 @@ button {
   border: none;
   color: #d9534f;
   font-size: 14px;
-}
-
-/* SPEC-CLOUD.md §4/§23: marks a caption as immutable to anyone but the
-   template's creator once templates can be shared (not yet enforced —
-   see CaptionEditor.tsx). */
-.va-track-lock {
-  position: absolute;
-  right: -84px;
-  top: 2px;
-  background: transparent;
-  border: 1px solid #444c5e;
-  border-radius: 3px;
-  padding: 1px 6px;
-  font-size: 11px;
-  color: #9aa4b8;
-  cursor: pointer;
-}
-
-.va-track-lock.locked {
-  border-color: #f5c518;
-  color: #f5c518;
 }
 
 .va-timeline-tracks {
@@ -760,20 +729,6 @@ button {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.library-tile-badge {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  padding: 2px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #16171d;
-  background: #f5c518;
-  border-radius: 3px;
 }
 
 .library-tile-caption {

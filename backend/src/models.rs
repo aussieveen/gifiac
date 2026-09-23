@@ -62,17 +62,6 @@ pub struct TemplatePayload {
     pub height: i64,
 }
 
-/// `GET /api/videos/{id}/template/meta` — the id/is_public a video's own
-/// editor needs to drive the "Make public"/"Make private" toggle next to
-/// "Overwrite template", neither of which `TemplatePayload` carries (it's
-/// the save/pre-fill value object, not the row). Owner-scoped via the
-/// video, same as `GET /api/videos/{id}/template` itself.
-#[derive(Debug, Clone, Serialize)]
-pub struct TemplateMeta {
-    pub id: String,
-    pub is_public: bool,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilmstripMeta {
@@ -127,14 +116,6 @@ pub struct Caption {
     /// value that reproduces the old (complained-about) spacing.
     #[serde(default = "default_line_height")]
     pub line_height: f64,
-    /// SPEC-CLOUD.md §4/§23: a locked caption is fully immutable to anyone
-    /// but the template's creator once templates can be shared — not yet
-    /// enforced (nothing but a template's own creator can reach it today,
-    /// see M3's plan notes), just persisted so a creator can mark intent
-    /// ahead of that. `#[serde(default)]` so existing/omitted payloads
-    /// deserialize as unlocked.
-    #[serde(default)]
-    pub locked: bool,
 }
 
 fn default_caption_width() -> f64 {
@@ -154,14 +135,10 @@ pub enum CaptionAlign {
 }
 
 /// POST /api/exports body per SPEC.md §5 — snake_case top level (matching
-/// the `gifs` table columns), camelCase `captions` (matching §4). Exactly
-/// one of `video_id`/`template_id` must be present (SPEC-CLOUD.md §4): the
-/// former is today's export-from-your-own-video flow, the latter the new
-/// cross-user "use this template" flow, which has no video at all.
+/// the `gifs` table columns), camelCase `captions` (matching §4).
 #[derive(Debug, Deserialize)]
 pub struct ExportRequest {
-    pub video_id: Option<String>,
-    pub template_id: Option<String>,
+    pub video_id: String,
     pub name: String,
     /// SPEC.md §12's "Create template" checkbox — must be handled inside
     /// the same export request as the video's own automatic cleanup
@@ -205,10 +182,6 @@ pub struct Gif {
     /// Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
     /// copy-link/copy-embed/download action fires — no dedup, auth only.
     pub use_count: i64,
-    /// Stamped at export time when the export form was pre-filled from a
-    /// public template (SPEC-CLOUD.md §4) — `video_id` is `None` whenever
-    /// this is `Some`, same treatment as a bulk import.
-    pub template_id: Option<String>,
 }
 
 impl Gif {
@@ -250,7 +223,6 @@ pub struct PublicGif {
     pub is_one_off: bool,
     pub is_public: bool,
     pub use_count: i64,
-    pub template_id: Option<String>,
     pub owner_handle: Option<String>,
 }
 
@@ -271,41 +243,23 @@ impl From<PublicGif> for Gif {
             is_one_off: g.is_one_off,
             is_public: g.is_public,
             use_count: g.use_count,
-            template_id: g.template_id,
         }
     }
 }
 
-/// A template's full row (SPEC-CLOUD.md §4) — deliberately not `Serialize`:
-/// `payload_json` is a raw serialized string, never meant to reach a client
-/// as-is (see `TemplatePayload`, which every route response actually
-/// returns). Used internally for the owner-only visibility-toggle route,
-/// where any-visibility lookup is needed before the ownership check runs.
+/// A template's full row (SPEC-CLOUD.md §4, now private-to-creator-only —
+/// the sharing layer 0008/0010 added and then removed) — deliberately not
+/// `Serialize`: `payload_json` is a raw serialized string, never meant to
+/// reach a client as-is (see `TemplatePayload`, which every route response
+/// actually returns). Used internally wherever a template needs looking up
+/// by its own id rather than by its owning video.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Template {
     pub id: String,
     pub video_id: Option<String>,
     pub user_id: String,
     pub payload_json: String,
-    pub is_public: bool,
-    pub use_count: i64,
     pub saved_at: String,
-}
-
-/// The same row, joined with its creator's handle, from a query that only
-/// ever matches a public template (SPEC-CLOUD.md §4's "usual public-sharing
-/// check") — the shape every cross-user read path (`GET /api/templates/{id}`,
-/// its clip/thumbnail, and exporting via `template_id`) uses.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct PublicTemplate {
-    pub id: String,
-    pub video_id: Option<String>,
-    pub user_id: String,
-    pub payload_json: String,
-    pub is_public: bool,
-    pub use_count: i64,
-    pub saved_at: String,
-    pub owner_handle: Option<String>,
 }
 
 /// `GET /api/admin/users` row (SPEC-CLOUD.md §7): a user plus the
@@ -325,15 +279,15 @@ pub struct AdminUserView {
     pub latest_gif_at: Option<String>,
 }
 
-/// `GET/POST /api/admin/users/{id}/templates`(`/unpublish`) row
-/// (SPEC-CLOUD.md §7) — a lean, `payload_json`-free view for an admin
-/// browsing/moderating someone else's templates.
+/// `GET /api/admin/users/{id}/templates` row (SPEC-CLOUD.md §7) — a lean,
+/// `payload_json`-free view for an admin browsing/moderating someone
+/// else's templates (trust & safety, independent of the sharing layer
+/// that used to sit on top of this — templates are private-to-creator
+/// now, but an admin can still see and remove any user's content).
 #[derive(Debug, Clone, Serialize)]
 pub struct AdminTemplateView {
     pub id: String,
     pub video_id: Option<String>,
-    pub is_public: bool,
-    pub use_count: i64,
     pub saved_at: String,
 }
 
@@ -342,8 +296,6 @@ impl From<Template> for AdminTemplateView {
         Self {
             id: t.id,
             video_id: t.video_id,
-            is_public: t.is_public,
-            use_count: t.use_count,
             saved_at: t.saved_at,
         }
     }
@@ -441,5 +393,4 @@ pub struct NewGif {
     pub height: Option<i64>,
     pub external_url: Option<String>,
     pub user_id: String,
-    pub template_id: Option<String>,
 }

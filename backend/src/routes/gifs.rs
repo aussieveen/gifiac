@@ -247,7 +247,6 @@ pub async fn link_gif(
         height: None,
         external_url: Some(url),
         user_id: user.id,
-        template_id: None,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
     Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage)?)))
@@ -344,7 +343,6 @@ pub async fn import_gifs(
             height: Some(result.height),
             external_url: None,
             user_id: user.id.clone(),
-            template_id: None,
         };
         let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
         created.push(with_urls(gif, &state.storage)?);

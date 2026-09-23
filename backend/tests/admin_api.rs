@@ -358,7 +358,7 @@ async fn admin_can_list_delete_and_unpublish_another_users_gif() {
 }
 
 #[tokio::test]
-async fn admin_can_list_delete_and_unpublish_another_users_template() {
+async fn admin_can_list_and_delete_another_users_template() {
     let test_app = spawn_app().await;
     let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
     let template_id = put_test_template(&test_app).await;
@@ -386,45 +386,6 @@ async fn admin_can_list_delete_and_unpublish_another_users_template() {
     let templates = templates.as_array().unwrap();
     assert_eq!(templates.len(), 1);
     assert_eq!(templates[0]["id"], template_id);
-
-    // Made public by the owner directly (private, never-public content is
-    // also fair game for admin unpublish/delete — this just proves the
-    // toggle round-trips through the admin route too).
-    test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("PATCH")
-                .uri(format!("/api/templates/{template_id}"))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({ "is_public": true }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let unpublish_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/admin/templates/{template_id}/unpublish"))
-                .header("cookie", &admin_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(unpublish_response.status(), StatusCode::OK);
-    let unpublished: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(unpublish_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(unpublished["is_public"], false);
 
     let delete_response = test_app
         .app

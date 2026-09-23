@@ -1,16 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import {
-  createExport,
-  getTemplate,
-  getTemplateFilmstripMeta,
-  getTemplateMeta,
-  putTemplate,
-  setTemplatePublic,
-  subscribeExportProgress,
-  videoFileUrl,
-} from './api'
+import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Gif, PublicTemplate, TemplateMeta, TemplatePayload, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 /**
@@ -88,15 +79,9 @@ const SWATCH_COLORS = ['#fff35c', '#00ff99', '#00ccff', '#ff6666', '#9933ff', '#
 // CSS-scaled to fit the box) rather than a cropped film-strip frame.
 const PREVIEW_SCALE = 1
 
-// SPEC-CLOUD.md §8: "Use this template" (M7b) opens this same editor
-// against a public template's own clip instead of a video — every
-// `video`/`filmstrip` reference below generalizes to branch on `source.kind`.
-export type EditorSource =
-  | { kind: 'video'; video: Video; filmstrip: FilmstripMeta }
-  | { kind: 'template'; template: PublicTemplate }
-
 interface Props {
-  source: EditorSource
+  video: Video
+  filmstrip: FilmstripMeta
   onBack: () => void
   /** Called once an export finishes — lets the caller jump straight to
    * the new GIF (e.g. in the archive) instead of leaving the user to find
@@ -162,7 +147,6 @@ function defaultCaption(id: string, start: number, end: number): Caption {
     width: DEFAULT_CAPTION_WIDTH,
     outlineColor: '#000000',
     lineHeight: DEFAULT_LINE_HEIGHT,
-    locked: false,
   }
 }
 
@@ -196,42 +180,14 @@ interface WidthDrag {
   origWidth: number
 }
 
-export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
-  // A template source's own filmstrip sprite — trimmed to just its saved
-  // range, unlike a video source's (the full source video). Fetched
-  // below, `null` until that resolves; used by `filmstrip` further down.
-  const [templateFilmstrip, setTemplateFilmstrip] = useState<FilmstripMeta | null>(null)
-  // The clip's own full length — for a template source there's nothing
-  // "outside" it to scrub into, since a template clip is already trimmed
-  // to exactly the range it was saved with.
-  const duration =
-    source.kind === 'video' ? source.video.duration_seconds : source.template.gif_range_end - source.template.gif_range_start
-  // Matches the backend's scale.rs output size: for a video this comes
-  // from the film-strip (computed server-side, see the PREVIEW_SCALE
-  // comment below); a template's clip was already scaled to this exact
-  // size at save time, so `template.width`/`height` are it directly.
-  const outputWidth = source.kind === 'video' ? source.filmstrip.frameWidth : source.template.width
-  const outputHeight = source.kind === 'video' ? source.filmstrip.frameHeight : source.template.height
-  const clipUrl = source.kind === 'video' ? videoFileUrl(source.video.id) : source.template.clip_url
-  // A template source's filmstrip is fetched below (its own sprite,
-  // trimmed to just the template's range) rather than passed in via
-  // props the way a video source's is — `null` until that resolves.
-  const filmstrip = source.kind === 'video' ? source.filmstrip : templateFilmstrip
-  // A video source starts with no captions until the pre-fill effect
-  // below resolves; a template source already has everything the caller
-  // fetched, so its captions are ready synchronously — shifted from the
-  // template's own absolute (original-video-timeline) times into the
-  // clip's 0-based space, since that's the coordinate system this whole
-  // session (and the export request it eventually sends) works in.
-  const [captions, setCaptions] = useState<Caption[]>(() =>
-    source.kind === 'template'
-      ? source.template.captions.map((c) => ({
-          ...c,
-          startTime: c.startTime - source.template.gif_range_start,
-          endTime: c.endTime - source.template.gif_range_start,
-        }))
-      : [],
-  )
+export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props) {
+  const duration = video.duration_seconds
+  // Matches the backend's scale.rs output size — computed server-side,
+  // reflected here via the film-strip's own dimensions.
+  const outputWidth = filmstrip.frameWidth
+  const outputHeight = filmstrip.frameHeight
+  const clipUrl = videoFileUrl(video.id)
+  const [captions, setCaptions] = useState<Caption[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [gifRange, setGifRange] = useState({ start: 0, end: duration })
@@ -247,19 +203,12 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   // `video.has_template` (from the video list) gives an immediate answer
   // for which export-form control to show (checkbox vs. button) without
   // waiting on the fetch below, which then corrects it if stale and
-  // supplies the actual caption/range payload to pre-fill with. Template
-  // sources never have this UI at all (see the gated block further down).
-  const [hasTemplate, setHasTemplate] = useState(source.kind === 'video' ? (source.video.has_template ?? false) : false)
+  // supplies the actual caption/range payload to pre-fill with.
+  const [hasTemplate, setHasTemplate] = useState(video.has_template ?? false)
   const [createTemplate, setCreateTemplate] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaved, setTemplateSaved] = useState(false)
   const [templateError, setTemplateError] = useState<string | null>(null)
-  // Drives the "Make public"/"Make private" toggle next to "Overwrite
-  // template" — `null` until fetched (or while there's no template yet),
-  // refetched after every template write below since a brand-new
-  // template's id isn't known any other way.
-  const [templateMeta, setTemplateMeta] = useState<TemplateMeta | null>(null)
-  const [templatePublicSaving, setTemplatePublicSaving] = useState(false)
   // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
   // null when nothing's snapped — drives the vertical guide line.
   const [snapGuideX, setSnapGuideX] = useState<number | null>(null)
@@ -285,16 +234,14 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
 
   // SPEC.md §12: "Opening a video that has a template loads the caption
   // editor with all template data pre-filled." The user can freely change
-  // anything afterwards — this only sets the initial state. Video-mode
-  // only (a template source's captions are already set above, from props,
-  // with no fetch needed) — keyed on the video's own id rather than
-  // `source` itself, which is a fresh object every render and would
-  // re-fire this on every render if used directly as the dependency.
-  const sourceVideoId = source.kind === 'video' ? source.video.id : null
+  // anything afterwards — this only sets the initial state. Keyed on the
+  // video's own id rather than `video` itself, which is a fresh object
+  // every render and would re-fire this on every render if used directly
+  // as the dependency.
+  const videoId = video.id
   useEffect(() => {
-    if (source.kind !== 'video') return
     let cancelled = false
-    getTemplate(source.video.id)
+    getTemplate(videoId)
       .then((template) => {
         if (cancelled) return
         setHasTemplate(template !== null)
@@ -306,36 +253,10 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
       .catch((err) => {
         if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
       })
-    getTemplateMeta(source.video.id)
-      .then((meta) => {
-        if (!cancelled) setTemplateMeta(meta)
-      })
-      .catch((err) => {
-        if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
-      })
     return () => {
       cancelled = true
     }
-  }, [sourceVideoId])
-
-  // Template-mode counterpart of the effect above — its own filmstrip,
-  // trimmed to just the template's range. Keyed on the template's own id
-  // for the same re-render-stability reason `sourceVideoId` exists.
-  const sourceTemplateId = source.kind === 'template' ? source.template.id : null
-  useEffect(() => {
-    if (source.kind !== 'template') return
-    let cancelled = false
-    getTemplateFilmstripMeta(source.template.id)
-      .then((meta) => {
-        if (!cancelled) setTemplateFilmstrip(meta)
-      })
-      .catch((err) => {
-        if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sourceTemplateId])
+  }, [videoId])
 
   // SPEC.md §14: hovering the timeline and scrolling vertically zooms
   // instead of scrolling the page — up zooms in, down zooms out — while a
@@ -387,20 +308,8 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   }, [zoomIndex])
   const selected = captions.find((c) => c.id === selectedId) ?? null
 
-  // SPEC-CLOUD.md §4/§23: a locked caption is immutable to anyone using a
-  // template who isn't its creator — the creator's own path to changing
-  // one is video-mode's "Overwrite template", not this cross-user flow,
-  // so template-mode treats every locked caption as read-only, full
-  // stop, regardless of who's viewing. Unlocked captions stay fully
-  // editable either way. Single choke point for every caption mutation
-  // below (drag, resize, style panel, delete) so there's exactly one
-  // place this rule has to be enforced correctly, not one per handler.
-  function isLockedForViewer(caption: Caption): boolean {
-    return source.kind === 'template' && caption.locked
-  }
-
   function updateCaption(id: string, patch: Partial<Caption>) {
-    setCaptions((cs) => cs.map((c) => (c.id === id && !isLockedForViewer(c) ? { ...c, ...patch } : c)))
+    setCaptions((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)))
   }
 
   function addCaption() {
@@ -412,8 +321,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   }
 
   function deleteCaption(id: string) {
-    const target = captions.find((c) => c.id === id)
-    if (target && isLockedForViewer(target)) return
     setCaptions((cs) => cs.filter((c) => c.id !== id))
     setSelectedId((current) => (current === id ? null : current))
   }
@@ -421,7 +328,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function patchStyle(patch: Partial<Caption>) {
     if (!selected) return
     if (applyToAll) {
-      setCaptions((cs) => cs.map((c) => (isLockedForViewer(c) ? c : { ...c, ...patch })))
+      setCaptions((cs) => cs.map((c) => ({ ...c, ...patch })))
     } else {
       updateCaption(selected.id, patch)
     }
@@ -503,7 +410,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
     const cap = captions.find((c) => c.id === id)
     if (!cap) return
     setSelectedId(id)
-    if (isLockedForViewer(cap)) return
     startPillWindowDrag({ kind, id, startX: e.clientX, orig: cap })
   }
 
@@ -550,7 +456,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function setCaptionEdgeToPlayhead(id: string, edge: 'start' | 'end') {
     setCaptions((cs) =>
       cs.map((c) =>
-        c.id !== id || isLockedForViewer(c)
+        c.id !== id
           ? c
           : edge === 'start'
             ? { ...c, startTime: clamp(currentTime, 0, c.endTime - MIN_CAPTION_DURATION) }
@@ -636,7 +542,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function startPositionDrag(e: React.MouseEvent, caption: Caption) {
     e.stopPropagation()
     setSelectedId(caption.id)
-    if (isLockedForViewer(caption)) return
     startPositionWindowDrag({
       id: caption.id,
       startX: e.clientX,
@@ -664,7 +569,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function startWidthDrag(e: React.MouseEvent, caption: Caption, edge: WidthDrag['edge']) {
     e.stopPropagation()
     setSelectedId(caption.id)
-    if (isLockedForViewer(caption)) return
     startWidthWindowDrag({ id: caption.id, edge, startX: e.clientX, origWidth: caption.width })
   }
 
@@ -697,30 +601,23 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   // on the timeline. 40x48 keeps each frame closer to landscape than a
   // taller/narrower box would, so the crop isn't as severe.
   const MIN_FRAME_WIDTH = 40
-  // `filmstrip` is only non-null for a video source — a template clip has
-  // no sprite endpoint (see the top-of-component comment), so these are
-  // all empty/zero in template mode, and the frame-thumbnail `.map()`
-  // below naturally renders nothing rather than needing its own guard.
-  const visibleFrameCount = filmstrip ? clamp(Math.floor(timelineWidth / MIN_FRAME_WIDTH), 1, filmstrip.frameCount) : 0
-  const frameIndices = !filmstrip
-    ? []
-    : visibleFrameCount === 1
+  const visibleFrameCount = clamp(Math.floor(timelineWidth / MIN_FRAME_WIDTH), 1, filmstrip.frameCount)
+  const frameIndices =
+    visibleFrameCount === 1
       ? [0]
       : Array.from({ length: visibleFrameCount }, (_, i) =>
           Math.round((i * (filmstrip.frameCount - 1)) / (visibleFrameCount - 1)),
         )
-  const filmstripFrameWidth = filmstrip ? timelineWidth / visibleFrameCount : 0
-  const filmstripScale = filmstrip ? FILMSTRIP_HEIGHT / filmstrip.frameHeight : 0
+  const filmstripFrameWidth = timelineWidth / visibleFrameCount
+  const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
   // SPEC.md §12: output dimensions are derived from the video the same
   // deterministic way the export pipeline does (backend/src/scale.rs) —
   // `outputWidth`/`outputHeight` are already computed from that exact
-  // function server-side for a video source (see the PREVIEW_SCALE
-  // comment above) or from the template's own save-time scaling for a
-  // template source, so this needs no export to run first to know what
-  // they'd be. Shared by both the standalone "Overwrite template" action
-  // and "Create template" on export completion, which otherwise build the
-  // identical payload. Video-mode only — see the callers.
+  // function server-side (see the PREVIEW_SCALE comment above), so this
+  // needs no export to run first to know what they'd be. Shared by both
+  // the standalone "Overwrite template" action and "Create template" on
+  // export completion, which otherwise build the identical payload.
   function buildTemplatePayload(captionsForTemplate: Caption[]): TemplatePayload {
     return {
       captions: captionsForTemplate,
@@ -732,41 +629,19 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   }
 
   // SPEC.md §12: "Overwriting is independent of exporting — the user can
-  // update the template without triggering a new GIF export." Only
-  // reachable from video-mode UI (see the gated JSX below), but guarded
-  // here too since there's no video to attach a template to otherwise.
+  // update the template without triggering a new GIF export."
   async function overwriteTemplate() {
-    if (source.kind !== 'video') return
     setTemplateSaving(true)
     setTemplateError(null)
     setTemplateSaved(false)
     try {
-      await putTemplate(source.video.id, buildTemplatePayload(captions))
+      await putTemplate(video.id, buildTemplatePayload(captions))
       setHasTemplate(true)
       setTemplateSaved(true)
-      // A first-time save just created a template with a fresh id this
-      // component doesn't know yet — refetch rather than guess it.
-      setTemplateMeta(await getTemplateMeta(source.video.id))
     } catch (err) {
       setTemplateError(err instanceof Error ? err.message : String(err))
     } finally {
       setTemplateSaving(false)
-    }
-  }
-
-  // SPEC-CLOUD.md §4/§8: opts the video's saved template into (or out of)
-  // the global library, mirroring Archive.tsx's togglePublic for gifs.
-  async function toggleTemplatePublic() {
-    if (!templateMeta) return
-    setTemplatePublicSaving(true)
-    setTemplateError(null)
-    try {
-      const updated = await setTemplatePublic(templateMeta.id, !templateMeta.is_public)
-      setTemplateMeta(updated)
-    } catch (err) {
-      setTemplateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setTemplatePublicSaving(false)
     }
   }
 
@@ -789,17 +664,15 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
         return el ? { ...c, text: measureWrappedLines(el) } : c
       })
       const result = await createExport({
-        video_id: source.kind === 'video' ? source.video.id : undefined,
-        template_id: source.kind === 'template' ? source.template.id : undefined,
+        video_id: video.id,
         name: trimmedName,
         // SPEC.md §12: "Checking it saves the current export parameters
         // as the video's template when the GIF is exported." Sent as
         // part of the export request itself, not a separate follow-up
         // PUT after it completes — a video not saved as a template
         // doesn't survive past its own export (SPEC-CLOUD.md §6), so a
-        // later call here would race that cleanup and 404. Video-mode
-        // only — `createTemplate`'s checkbox is never shown otherwise.
-        save_as_template: source.kind === 'video' && createTemplate,
+        // later call here would race that cleanup and 404.
+        save_as_template: createTemplate,
         captions: captionsWithWrapping,
         gif_range_start: Number(gifRange.start.toFixed(2)),
         gif_range_end: Number(gifRange.end.toFixed(2)),
@@ -810,16 +683,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
           setCompletedGif(gif)
           setExportProgress(null)
           setSubmitting(false)
-          // The backend already saved the template as part of the export
-          // above (if requested) — this just reads back its id/is_public
-          // for the toggle, same as after a standalone `overwriteTemplate`.
-          if (source.kind === 'video' && createTemplate) {
-            const videoId = source.video.id
-            setHasTemplate(true)
-            getTemplateMeta(videoId)
-              .then((meta) => setTemplateMeta(meta))
-              .catch((err) => setTemplateError(err instanceof Error ? err.message : String(err)))
-          }
+          if (createTemplate) setHasTemplate(true)
           onGifCreated?.(gif)
         },
         onError: (message) => {
@@ -839,7 +703,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
       <button className="back-link" onClick={onBack}>
         ← back to library
       </button>
-      <h1>{source.kind === 'video' ? source.video.original_filename : `@${source.template.owner_handle ?? 'unknown'}'s template`}</h1>
+      <h1>{video.original_filename}</h1>
       <p className="subtitle">
         {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
       </p>
@@ -860,7 +724,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
           {activeCaptions.map((c) => (
             <div
               key={c.id}
-              className={`preview-caption ${selectedId === c.id ? 'selected' : ''} ${isLockedForViewer(c) ? 'locked-readonly' : ''}`}
+              className={`preview-caption ${selectedId === c.id ? 'selected' : ''}`}
               onMouseDown={(e) => startPositionDrag(e, c)}
               style={{
                 left: `${c.x * 100}%`,
@@ -921,31 +785,19 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
         <div className="va-style-panel">
           {selected ? (
             <>
-              {isLockedForViewer(selected) && (
-                <p className="va-hint va-locked-hint">🔒 Locked by the template's creator — read-only.</p>
-              )}
               <textarea
                 aria-label="Caption text"
                 value={selected.text}
                 onChange={(e) => patchStyle({ text: e.target.value })}
-                disabled={isLockedForViewer(selected)}
               />
               <div className="va-style-row">
                 <span className="va-hint">
                   {selected.startTime.toFixed(2)}s – {selected.endTime.toFixed(2)}s
                 </span>
-                <button
-                  className="va-btn"
-                  onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}
-                  disabled={isLockedForViewer(selected)}
-                >
+                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}>
                   Set start to playhead
                 </button>
-                <button
-                  className="va-btn"
-                  onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}
-                  disabled={isLockedForViewer(selected)}
-                >
+                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}>
                   Set end to playhead
                 </button>
               </div>
@@ -954,7 +806,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   aria-label="Font family"
                   value={selected.fontFamily}
                   onChange={(e) => patchStyle({ fontFamily: e.target.value })}
-                  disabled={isLockedForViewer(selected)}
                 >
                   {FONTS.map((f) => (
                     <option key={f} value={f}>
@@ -969,7 +820,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   max={64}
                   value={selected.fontSize}
                   onChange={(e) => patchStyle({ fontSize: Number(e.target.value) })}
-                  disabled={isLockedForViewer(selected)}
                 />
                 <span className="va-hint">{selected.fontSize}px</span>
               </div>
@@ -986,7 +836,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   step={0.05}
                   value={selected.lineHeight}
                   onChange={(e) => patchStyle({ lineHeight: Number(e.target.value) })}
-                  disabled={isLockedForViewer(selected)}
                 />
                 <span className="va-hint">{selected.lineHeight.toFixed(2)}×</span>
               </div>
@@ -996,20 +845,13 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   type="color"
                   value={selected.color}
                   onChange={(e) => patchStyle({ color: e.target.value })}
-                  disabled={isLockedForViewer(selected)}
                 />
-                <ColorSwatches
-                  label="Text"
-                  value={selected.color}
-                  onSelect={(color) => patchStyle({ color })}
-                  disabled={isLockedForViewer(selected)}
-                />
+                <ColorSwatches label="Text" value={selected.color} onSelect={(color) => patchStyle({ color })} />
                 {(['left', 'center', 'right'] as const).map((a) => (
                   <button
                     key={a}
                     className={`va-align-btn ${selected.align === a ? 'active' : ''}`}
                     onClick={() => patchStyle({ align: a })}
-                    disabled={isLockedForViewer(selected)}
                   >
                     {a}
                   </button>
@@ -1021,7 +863,6 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                     type="checkbox"
                     checked={selected.outlineColor !== null}
                     onChange={(e) => patchStyle({ outlineColor: e.target.checked ? (selected.outlineColor ?? '#000000') : null })}
-                    disabled={isLockedForViewer(selected)}
                   />{' '}
                   Outline
                 </label>
@@ -1032,13 +873,11 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                       type="color"
                       value={selected.outlineColor}
                       onChange={(e) => patchStyle({ outlineColor: e.target.value })}
-                      disabled={isLockedForViewer(selected)}
                     />
                     <ColorSwatches
                       label="Outline"
                       value={selected.outlineColor}
                       onSelect={(color) => patchStyle({ outlineColor: color })}
-                      disabled={isLockedForViewer(selected)}
                     />
                   </>
                 )}
@@ -1073,24 +912,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                 <div className="va-track-handle left" onMouseDown={(e) => startPillDrag(e, c.id, 'left')} />
                 <div className="va-track-handle right" onMouseDown={(e) => startPillDrag(e, c.id, 'right')} />
               </div>
-              <button
-                className={`va-track-lock ${c.locked ? 'locked' : ''}`}
-                aria-label={c.locked ? `Unlock caption "${c.text}"` : `Lock caption "${c.text}"`}
-                onClick={() => updateCaption(c.id, { locked: !c.locked })}
-                // Lock management is the template creator's alone — done
-                // via video-mode's "Overwrite template", not here. A
-                // template-mode viewer sees this purely as a status
-                // indicator, never a control.
-                disabled={source.kind === 'template'}
-              >
-                {c.locked ? 'Locked' : 'Lock'}
-              </button>
-              <button
-                className="va-track-delete"
-                aria-label={`Delete caption "${c.text}"`}
-                onClick={() => deleteCaption(c.id)}
-                disabled={isLockedForViewer(c)}
-              >
+              <button className="va-track-delete" aria-label={`Delete caption "${c.text}"`} onClick={() => deleteCaption(c.id)}>
                 ✕
               </button>
             </div>
@@ -1177,31 +999,17 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
             {/* SPEC.md §12: a video with no template gets a "Create
                 template" checkbox on the Make GIF form; a video already
                 working from one gets a standalone "Overwrite template"
-                button instead, independent of exporting. Video-mode only —
-                a "use this template" session has no video to attach a
-                (possibly derivative) template to. */}
-            {source.kind === 'video' &&
-              (!hasTemplate ? (
-                <label className="va-hint">
-                  <input
-                    type="checkbox"
-                    checked={createTemplate}
-                    onChange={(e) => setCreateTemplate(e.target.checked)}
-                  />{' '}
-                  Create template
-                </label>
-              ) : (
-                <>
-                  <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
-                    {templateSaving ? 'Saving…' : 'Overwrite template'}
-                  </button>
-                  {templateMeta && (
-                    <button className="va-btn" onClick={toggleTemplatePublic} disabled={templatePublicSaving}>
-                      {templatePublicSaving ? 'Saving…' : templateMeta.is_public ? '🔒 Make private' : '🌐 Make public'}
-                    </button>
-                  )}
-                </>
-              ))}
+                button instead, independent of exporting. */}
+            {!hasTemplate ? (
+              <label className="va-hint">
+                <input type="checkbox" checked={createTemplate} onChange={(e) => setCreateTemplate(e.target.checked)} />{' '}
+                Create template
+              </label>
+            ) : (
+              <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
+                {templateSaving ? 'Saving…' : 'Overwrite template'}
+              </button>
+            )}
             <input
               className="va-name-input"
               placeholder="Name this GIF…"
