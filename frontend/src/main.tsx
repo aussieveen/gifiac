@@ -5,9 +5,12 @@ import './index.css'
 import App from './App.tsx'
 import { ProfilePage } from './ProfilePage.tsx'
 
-// SPEC-CLOUD.md §5: the first real route this app has (`/u/:handle`) —
-// everything else still lives inside App's own view-switching, which is
-// unchanged here; the full nav redesign is a later milestone (§9).
+// `/u/:handle` (SPEC-CLOUD.md §5) is the one route that renders outside
+// App's own auth-gated shell (public profiles need no session) — every
+// other path falls through to `*` and is matched by App's own nested
+// `<Routes>` instead. Those nested routes use absolute (`/`-prefixed)
+// paths, so they resolve the same regardless of being reached through
+// this wildcard.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>

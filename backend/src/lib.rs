@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use config::Config;
@@ -80,9 +80,16 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-        // Anything not under /api — `ServeDir` already serves `index.html`
-        // for a directory-root request (i.e. `/`) on its own.
-        .fallback_service(ServeDir::new(STATIC_DIR))
+        // Anything not under /api. `ServeDir` alone only serves index.html
+        // for a directory-root request (`/`) — since the frontend is now a
+        // real client-side router (multiple paths, not one view-switching
+        // page), a deep link like `/library` or a refresh on one 404s
+        // without this: `not_found_service` falls back to index.html for
+        // any path ServeDir can't match to a real static file, letting the
+        // client-side router take over from there.
+        .fallback_service(
+            ServeDir::new(STATIC_DIR).not_found_service(ServeFile::new(format!("{STATIC_DIR}/index.html"))),
+        )
 }
 
 pub async fn run() -> anyhow::Result<()> {

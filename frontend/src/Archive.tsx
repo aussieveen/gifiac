@@ -57,18 +57,27 @@ interface Props {
    * actions are immediately at hand instead of the user having to find it
    * in the grid themselves. */
   initialSelectedId?: string | null
+  /** Called whenever the selection changes (a thumbnail click, or a
+   * delete clearing it back to none) so a caller that mirrors selection
+   * into the URL (`/library/:gifId`) can keep it in sync — optional since
+   * not every caller needs a shareable selection. */
+  onSelectGif?: (id: string | null) => void
   /** SPEC-CLOUD.md §9: "New GIF" isn't a top-level nav tab — it's this
    * toolbar action, starting the video-picker/caption-editor flow that
    * stays conceptually nested under My Library. */
   onNewGif: () => void
 }
 
-export function Archive({ initialSelectedId, onNewGif }: Props) {
+export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
   const [gifs, setGifs] = useState<Gif[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null)
+  const [selectedId, setSelectedIdState] = useState<string | null>(initialSelectedId ?? null)
+  function setSelectedId(id: string | null) {
+    setSelectedIdState(id)
+    onSelectGif?.(id)
+  }
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
