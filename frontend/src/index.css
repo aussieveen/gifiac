@@ -185,6 +185,16 @@ button {
   outline: 1px dashed #f5c518;
 }
 
+/* A locked caption in "use this template" mode — read-only, per
+   SPEC-CLOUD.md §4/§23, so it shouldn't even look draggable. */
+.preview-caption.locked-readonly {
+  cursor: not-allowed;
+}
+
+.va-locked-hint {
+  color: #f5c518;
+}
+
 /* Off-screen twin of a caption used only to measure its real wrapped
    lines (see CaptionEditor's measureRefs) — a separate class (rather than
    reusing .preview-caption) so tests/selectors that count rendered

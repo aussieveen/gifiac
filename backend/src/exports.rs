@@ -52,21 +52,38 @@ pub enum ExportSource {
 /// outside it).
 pub(crate) fn normalize_locked_captions(submitted: Vec<Caption>, template: &TemplatePayload) -> Vec<Caption> {
     let shift = template.gif_range_start;
-    submitted
+    let shifted = |t: &Caption| Caption {
+        start_time: t.start_time - shift,
+        end_time: t.end_time - shift,
+        ..t.clone()
+    };
+
+    let mut seen_locked_ids = std::collections::HashSet::new();
+    let mut result: Vec<Caption> = submitted
         .into_iter()
         .map(|c| {
             template
                 .captions
                 .iter()
                 .find(|t| t.id == c.id && t.locked)
-                .map(|t| Caption {
-                    start_time: t.start_time - shift,
-                    end_time: t.end_time - shift,
-                    ..t.clone()
+                .map(|t| {
+                    seen_locked_ids.insert(t.id.clone());
+                    shifted(t)
                 })
                 .unwrap_or(c)
         })
-        .collect()
+        .collect();
+
+    // Protecting a locked caption's *fields* isn't enough if the client
+    // can just drop it from the request entirely — that's deletion, not
+    // modification, but it's just as much a bypass of "immutable to
+    // anyone but the creator." Force every locked caption to be present
+    // regardless of what was actually submitted.
+    for t in template.captions.iter().filter(|t| t.locked && !seen_locked_ids.contains(&t.id)) {
+        result.push(shifted(t));
+    }
+
+    result
 }
 
 /// Runs the full pipeline and broadcasts its outcome. Never returns an
@@ -334,4 +351,107 @@ pub async fn transcode_and_upload(
     // `tmp_dir` drops here, deleting the local ass/palette/gif/mp4/webm
     // scratch files — R2 is the only persistent home for the outputs
     // (SPEC.md §9).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CaptionAlign;
+
+    fn caption(id: &str, start: f64, end: f64, text: &str, locked: bool) -> Caption {
+        Caption {
+            id: id.to_string(),
+            start_time: start,
+            end_time: end,
+            text: text.to_string(),
+            font_family: "Impact, sans-serif".to_string(),
+            font_size: 28.0,
+            color: "#ffffff".to_string(),
+            align: CaptionAlign::Center,
+            x: 0.5,
+            y: 0.88,
+            width: 0.6,
+            outline_color: None,
+            line_height: 0.65,
+            locked,
+        }
+    }
+
+    fn template_with(captions: Vec<Caption>, gif_range_start: f64) -> TemplatePayload {
+        TemplatePayload {
+            captions,
+            gif_range_start,
+            gif_range_end: gif_range_start + 1.0,
+            width: 320,
+            height: 240,
+        }
+    }
+
+    #[test]
+    fn normalize_locked_captions_overwrites_a_tampered_locked_caption_with_the_templates_own_values() {
+        let template = template_with(vec![caption("c1", 2.2, 2.8, "locked caption", true)], 2.0);
+        let submitted = vec![caption("c1", 0.0, 1.0, "an attempted override", false)];
+
+        let result = normalize_locked_captions(submitted, &template);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "locked caption");
+        // Shifted into the clip's own 0-based space (2.2 - gif_range_start 2.0).
+        assert!((result[0].start_time - 0.2).abs() < 1e-9);
+        assert!((result[0].end_time - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn normalize_locked_captions_passes_through_an_unlocked_captions_edits_unchanged() {
+        let template = template_with(vec![caption("c2", 2.1, 2.9, "changeable caption", false)], 2.0);
+        let submitted = vec![caption("c2", 0.0, 1.0, "a real edit", false)];
+
+        let result = normalize_locked_captions(submitted, &template);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "a real edit");
+        assert_eq!(result[0].start_time, 0.0);
+    }
+
+    /// The bypass this whole fix closes: protecting a locked caption's
+    /// *fields* does nothing if the client can just leave it out of the
+    /// request instead of modifying it — that's deletion, not
+    /// modification, but just as much a violation of "immutable to
+    /// anyone but the creator."
+    #[test]
+    fn normalize_locked_captions_re_adds_a_locked_caption_the_client_omitted_entirely() {
+        let template = template_with(
+            vec![
+                caption("c1", 2.2, 2.8, "locked caption", true),
+                caption("c2", 2.1, 2.9, "changeable caption", false),
+            ],
+            2.0,
+        );
+        // Client submits only the unlocked caption — as if "c1" had been
+        // deleted client-side before export.
+        let submitted = vec![caption("c2", 0.0, 1.0, "a real edit", false)];
+
+        let result = normalize_locked_captions(submitted, &template);
+
+        assert_eq!(result.len(), 2, "the locked caption must survive even though the client dropped it");
+        let locked = result.iter().find(|c| c.id == "c1").expect("locked caption c1 should have been re-added");
+        assert_eq!(locked.text, "locked caption");
+        assert!((locked.start_time - 0.2).abs() < 1e-9);
+        let unlocked = result.iter().find(|c| c.id == "c2").expect("unlocked caption c2 should still be present");
+        assert_eq!(unlocked.text, "a real edit");
+    }
+
+    #[test]
+    fn normalize_locked_captions_lets_a_new_caption_with_no_template_match_through() {
+        let template = template_with(vec![caption("c1", 2.2, 2.8, "locked caption", true)], 2.0);
+        let submitted = vec![
+            caption("c1", 0.2, 0.8, "locked caption", true),
+            caption("new-1", 0.0, 0.5, "brand new caption", false),
+        ];
+
+        let result = normalize_locked_captions(submitted, &template);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|c| c.id == "new-1" && c.text == "brand new caption"));
+    }
 }

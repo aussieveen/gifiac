@@ -111,7 +111,17 @@ function outlineTextShadow(outlineColor: string | null): string {
 }
 
 /** SPEC.md §14: quick-select swatches shown alongside a native color picker. */
-function ColorSwatches({ label, value, onSelect }: { label: string; value: string; onSelect: (color: string) => void }) {
+function ColorSwatches({
+  label,
+  value,
+  onSelect,
+  disabled,
+}: {
+  label: string
+  value: string
+  onSelect: (color: string) => void
+  disabled?: boolean
+}) {
   return (
     <div className="va-swatches">
       {SWATCH_COLORS.map((color) => (
@@ -122,6 +132,7 @@ function ColorSwatches({ label, value, onSelect }: { label: string; value: strin
           style={{ backgroundColor: color }}
           aria-label={`${label} color ${color}`}
           onClick={() => onSelect(color)}
+          disabled={disabled}
         />
       ))}
     </div>
@@ -376,8 +387,20 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   }, [zoomIndex])
   const selected = captions.find((c) => c.id === selectedId) ?? null
 
+  // SPEC-CLOUD.md §4/§23: a locked caption is immutable to anyone using a
+  // template who isn't its creator — the creator's own path to changing
+  // one is video-mode's "Overwrite template", not this cross-user flow,
+  // so template-mode treats every locked caption as read-only, full
+  // stop, regardless of who's viewing. Unlocked captions stay fully
+  // editable either way. Single choke point for every caption mutation
+  // below (drag, resize, style panel, delete) so there's exactly one
+  // place this rule has to be enforced correctly, not one per handler.
+  function isLockedForViewer(caption: Caption): boolean {
+    return source.kind === 'template' && caption.locked
+  }
+
   function updateCaption(id: string, patch: Partial<Caption>) {
-    setCaptions((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)))
+    setCaptions((cs) => cs.map((c) => (c.id === id && !isLockedForViewer(c) ? { ...c, ...patch } : c)))
   }
 
   function addCaption() {
@@ -389,6 +412,8 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   }
 
   function deleteCaption(id: string) {
+    const target = captions.find((c) => c.id === id)
+    if (target && isLockedForViewer(target)) return
     setCaptions((cs) => cs.filter((c) => c.id !== id))
     setSelectedId((current) => (current === id ? null : current))
   }
@@ -396,7 +421,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function patchStyle(patch: Partial<Caption>) {
     if (!selected) return
     if (applyToAll) {
-      setCaptions((cs) => cs.map((c) => ({ ...c, ...patch })))
+      setCaptions((cs) => cs.map((c) => (isLockedForViewer(c) ? c : { ...c, ...patch })))
     } else {
       updateCaption(selected.id, patch)
     }
@@ -478,6 +503,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
     const cap = captions.find((c) => c.id === id)
     if (!cap) return
     setSelectedId(id)
+    if (isLockedForViewer(cap)) return
     startPillWindowDrag({ kind, id, startX: e.clientX, orig: cap })
   }
 
@@ -524,7 +550,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function setCaptionEdgeToPlayhead(id: string, edge: 'start' | 'end') {
     setCaptions((cs) =>
       cs.map((c) =>
-        c.id !== id
+        c.id !== id || isLockedForViewer(c)
           ? c
           : edge === 'start'
             ? { ...c, startTime: clamp(currentTime, 0, c.endTime - MIN_CAPTION_DURATION) }
@@ -610,6 +636,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function startPositionDrag(e: React.MouseEvent, caption: Caption) {
     e.stopPropagation()
     setSelectedId(caption.id)
+    if (isLockedForViewer(caption)) return
     startPositionWindowDrag({
       id: caption.id,
       startX: e.clientX,
@@ -637,6 +664,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
   function startWidthDrag(e: React.MouseEvent, caption: Caption, edge: WidthDrag['edge']) {
     e.stopPropagation()
     setSelectedId(caption.id)
+    if (isLockedForViewer(caption)) return
     startWidthWindowDrag({ id: caption.id, edge, startX: e.clientX, origWidth: caption.width })
   }
 
@@ -832,7 +860,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
           {activeCaptions.map((c) => (
             <div
               key={c.id}
-              className={`preview-caption ${selectedId === c.id ? 'selected' : ''}`}
+              className={`preview-caption ${selectedId === c.id ? 'selected' : ''} ${isLockedForViewer(c) ? 'locked-readonly' : ''}`}
               onMouseDown={(e) => startPositionDrag(e, c)}
               style={{
                 left: `${c.x * 100}%`,
@@ -893,19 +921,31 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
         <div className="va-style-panel">
           {selected ? (
             <>
+              {isLockedForViewer(selected) && (
+                <p className="va-hint va-locked-hint">🔒 Locked by the template's creator — read-only.</p>
+              )}
               <textarea
                 aria-label="Caption text"
                 value={selected.text}
                 onChange={(e) => patchStyle({ text: e.target.value })}
+                disabled={isLockedForViewer(selected)}
               />
               <div className="va-style-row">
                 <span className="va-hint">
                   {selected.startTime.toFixed(2)}s – {selected.endTime.toFixed(2)}s
                 </span>
-                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}>
+                <button
+                  className="va-btn"
+                  onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}
+                  disabled={isLockedForViewer(selected)}
+                >
                   Set start to playhead
                 </button>
-                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}>
+                <button
+                  className="va-btn"
+                  onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}
+                  disabled={isLockedForViewer(selected)}
+                >
                   Set end to playhead
                 </button>
               </div>
@@ -914,6 +954,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   aria-label="Font family"
                   value={selected.fontFamily}
                   onChange={(e) => patchStyle({ fontFamily: e.target.value })}
+                  disabled={isLockedForViewer(selected)}
                 >
                   {FONTS.map((f) => (
                     <option key={f} value={f}>
@@ -928,6 +969,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   max={64}
                   value={selected.fontSize}
                   onChange={(e) => patchStyle({ fontSize: Number(e.target.value) })}
+                  disabled={isLockedForViewer(selected)}
                 />
                 <span className="va-hint">{selected.fontSize}px</span>
               </div>
@@ -944,6 +986,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   step={0.05}
                   value={selected.lineHeight}
                   onChange={(e) => patchStyle({ lineHeight: Number(e.target.value) })}
+                  disabled={isLockedForViewer(selected)}
                 />
                 <span className="va-hint">{selected.lineHeight.toFixed(2)}×</span>
               </div>
@@ -953,13 +996,20 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                   type="color"
                   value={selected.color}
                   onChange={(e) => patchStyle({ color: e.target.value })}
+                  disabled={isLockedForViewer(selected)}
                 />
-                <ColorSwatches label="Text" value={selected.color} onSelect={(color) => patchStyle({ color })} />
+                <ColorSwatches
+                  label="Text"
+                  value={selected.color}
+                  onSelect={(color) => patchStyle({ color })}
+                  disabled={isLockedForViewer(selected)}
+                />
                 {(['left', 'center', 'right'] as const).map((a) => (
                   <button
                     key={a}
                     className={`va-align-btn ${selected.align === a ? 'active' : ''}`}
                     onClick={() => patchStyle({ align: a })}
+                    disabled={isLockedForViewer(selected)}
                   >
                     {a}
                   </button>
@@ -971,6 +1021,7 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                     type="checkbox"
                     checked={selected.outlineColor !== null}
                     onChange={(e) => patchStyle({ outlineColor: e.target.checked ? (selected.outlineColor ?? '#000000') : null })}
+                    disabled={isLockedForViewer(selected)}
                   />{' '}
                   Outline
                 </label>
@@ -981,11 +1032,13 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                       type="color"
                       value={selected.outlineColor}
                       onChange={(e) => patchStyle({ outlineColor: e.target.value })}
+                      disabled={isLockedForViewer(selected)}
                     />
                     <ColorSwatches
                       label="Outline"
                       value={selected.outlineColor}
                       onSelect={(color) => patchStyle({ outlineColor: color })}
+                      disabled={isLockedForViewer(selected)}
                     />
                   </>
                 )}
@@ -1024,10 +1077,20 @@ export function CaptionEditor({ source, onBack, onGifCreated }: Props) {
                 className={`va-track-lock ${c.locked ? 'locked' : ''}`}
                 aria-label={c.locked ? `Unlock caption "${c.text}"` : `Lock caption "${c.text}"`}
                 onClick={() => updateCaption(c.id, { locked: !c.locked })}
+                // Lock management is the template creator's alone — done
+                // via video-mode's "Overwrite template", not here. A
+                // template-mode viewer sees this purely as a status
+                // indicator, never a control.
+                disabled={source.kind === 'template'}
               >
                 {c.locked ? 'Locked' : 'Lock'}
               </button>
-              <button className="va-track-delete" aria-label={`Delete caption "${c.text}"`} onClick={() => deleteCaption(c.id)}>
+              <button
+                className="va-track-delete"
+                aria-label={`Delete caption "${c.text}"`}
+                onClick={() => deleteCaption(c.id)}
+                disabled={isLockedForViewer(c)}
+              >
                 ✕
               </button>
             </div>

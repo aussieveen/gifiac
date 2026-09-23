@@ -929,6 +929,99 @@ describe('CaptionEditor with a template source', () => {
     expect(screen.getByRole('button', { name: /unlock caption/i })).toHaveTextContent('Locked')
   })
 
+  describe('locked captions are actually enforced, not just labeled', () => {
+    it("disables every style control for a locked caption when it's not your template", async () => {
+      const user = userEvent.setup()
+      render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+      await user.click(screen.getByText('locked caption', { selector: '.va-track-pill' }))
+
+      expect(screen.getByLabelText('Caption text')).toBeDisabled()
+      expect(screen.getByLabelText('Font family')).toBeDisabled()
+      expect(screen.getByLabelText('Font size')).toBeDisabled()
+      expect(screen.getByLabelText('Line height')).toBeDisabled()
+      expect(screen.getByLabelText('Caption color')).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'left' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'center' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'right' })).toBeDisabled()
+      expect(screen.getByLabelText('Outline')).toBeDisabled()
+      expect(screen.getByText(/locked by the template's creator/i)).toBeInTheDocument()
+    })
+
+    it('actually refuses a typed edit to a locked caption\'s text, not just showing it disabled', async () => {
+      const user = userEvent.setup()
+      render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+      await user.click(screen.getByText('locked caption', { selector: '.va-track-pill' }))
+
+      const textarea = screen.getByLabelText('Caption text') as HTMLTextAreaElement
+      await user.type(textarea, 'tampered')
+
+      expect(textarea.value).toBe('locked caption')
+    })
+
+    it("disables the lock toggle itself — lock management is the creator's alone", async () => {
+      const user = userEvent.setup()
+      render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+      await user.click(screen.getByText('locked caption', { selector: '.va-track-pill' }))
+
+      expect(screen.getByRole('button', { name: /unlock caption/i })).toBeDisabled()
+    })
+
+    it('disables deleting a locked caption', async () => {
+      render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+
+      expect(screen.getByRole('button', { name: /delete caption "locked caption"/i })).toBeDisabled()
+    })
+
+    it("doesn't move a locked caption's time range via a timeline-pill drag attempt", async () => {
+      const user = userEvent.setup()
+      render(<CaptionEditor source={{ kind: 'template', template: publicTemplate }} onBack={() => {}} />)
+      await user.click(screen.getByText('locked caption', { selector: '.va-track-pill' }))
+      expect(screen.getByText(/2\.00s – 3\.00s/)).toBeInTheDocument()
+
+      const pill = screen.getByText('locked caption', { selector: '.va-track-pill' })
+      fireEvent.mouseDown(pill, { clientX: 100 })
+      fireEvent.mouseMove(document, { clientX: 300 })
+      fireEvent.mouseUp(document)
+
+      expect(screen.getByText(/2\.00s – 3\.00s/)).toBeInTheDocument()
+    })
+
+    it("leaves an unlocked caption in the same template fully editable", async () => {
+      const templateWithAnUnlockedCaption: PublicTemplate = {
+        ...publicTemplate,
+        captions: [
+          ...publicTemplate.captions,
+          {
+            id: 'c2',
+            startTime: 12.5,
+            endTime: 13,
+            text: 'changeable caption',
+            fontFamily: 'Impact, sans-serif',
+            fontSize: 28,
+            color: '#ffffff',
+            align: 'center',
+            x: 0.5,
+            y: 0.5,
+            width: 0.6,
+            outlineColor: null,
+            lineHeight: 0.65,
+            locked: false,
+          },
+        ],
+      }
+      const user = userEvent.setup()
+      render(<CaptionEditor source={{ kind: 'template', template: templateWithAnUnlockedCaption }} onBack={() => {}} />)
+      await user.click(screen.getByText('changeable caption', { selector: '.va-track-pill' }))
+
+      const textarea = screen.getByLabelText('Caption text') as HTMLTextAreaElement
+      expect(textarea).not.toBeDisabled()
+      await user.clear(textarea)
+      await user.type(textarea, 'a real edit')
+
+      expect(textarea.value).toBe('a real edit')
+    })
+  })
+
   it("fetches and renders the template's own filmstrip, trimmed to its own range", async () => {
     vi.mocked(getTemplateFilmstripMeta).mockResolvedValue({
       frameCount: 3,
