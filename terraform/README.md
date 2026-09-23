@@ -97,6 +97,22 @@ way a Route53-hosted domain could. That makes `apply` genuinely two-phase
   `send-command` — it re-fetches secrets from SSM and does
   `docker compose pull && up -d` each time.
 
+## Rotating a secret (`google_client_secret`, `r2_access_key_id`, etc.)
+
+Updating `terraform.tfvars` and running `apply` only writes the new value
+into SSM Parameter Store — it does **not** touch the running container.
+The instance's `.env` (and thus the running app) still has whatever value
+was baked in the last time `deploy.sh` actually ran, so a rotated secret
+silently goes stale until something re-runs it. After `apply`, either:
+
+```bash
+# On the instance, via an SSM session:
+sudo bash /opt/gifiac/deploy.sh
+```
+
+or push a trivial commit to `main` to let the GitHub Actions `deploy` job
+do the same thing. `apply` alone is not enough.
+
 ## Verification without applying
 
 `terraform fmt -check -recursive` and `terraform validate` check syntax
