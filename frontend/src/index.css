@@ -1751,6 +1751,14 @@ button {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  /* Without this, clicking a thumb several rows down the grid opens a
+     panel that's already scrolled off the top of the viewport — .app-header
+     isn't sticky itself, so there's nothing above to clear. Sticking the
+     panel keeps it in view as the grid scrolls past it. */
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 .archive-panel-empty {
