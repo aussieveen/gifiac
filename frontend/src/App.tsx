@@ -52,6 +52,9 @@ function AccountMenu({ user }: { user: CurrentUser }) {
           >
             View profile
           </Link>
+          <Link className="account-dropdown-item" to="/privacy" role="menuitem" onClick={() => setOpen(false)}>
+            Privacy policy
+          </Link>
           <button
             type="button"
             className="account-dropdown-item"

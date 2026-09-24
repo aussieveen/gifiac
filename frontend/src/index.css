@@ -451,6 +451,19 @@ button {
   max-width: 480px;
 }
 
+.auth-footer {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 0 24px 32px;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.auth-footer a {
+  color: var(--text-subtle);
+}
+
 .app-nav {
   display: flex;
   align-items: center;
@@ -1605,6 +1618,50 @@ button {
   object-fit: cover;
   border-radius: 4px;
   background: var(--bg-sunken);
+}
+
+/* ---------- public pages (about, privacy) ---------- */
+
+.public-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 24px 120px;
+}
+
+.public-page h2 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 40px 0 12px;
+}
+
+.public-page p,
+.public-page li {
+  color: var(--text-muted);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.public-page-footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.public-page-footer a {
+  color: var(--text-subtle);
+}
+
+/* Plain blue washes out on the dark background — brand accent reads much
+   better here, and these are the only inline links against prose (the
+   footer's internal nav links above stay muted/subtle on purpose). */
+.public-page a[href^='mailto:'] {
+  color: var(--accent);
 }
 
 .library-tile {
