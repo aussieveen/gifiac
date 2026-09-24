@@ -300,45 +300,107 @@ async fn migrate_template(
     Ok(())
 }
 
-/// Backfills just the filmstrip for a template a previous run of this
-/// script already fully migrated (row + clip + thumbnail), for a template
-/// migrated before filmstrip generation existed at all. Reuses the
-/// already-migrated clip file rather than re-clipping from the source
-/// video, so it works even if the source video itself is long gone.
-/// Returns whether it actually generated one.
-async fn backfill_template_filmstrip(
+/// Backfills whatever's missing on disk for a template a previous run of
+/// this script already migrated the *row* for (row present, but clip
+/// and/or thumbnail and/or filmstrip absent — either because filmstrip
+/// generation didn't exist yet when it was first migrated, or because
+/// these are the same local-disk-only assets `restore_video_assets`
+/// documents as gone if the instance's root volume ever is, and a prior
+/// run already migrated the row before that happened).
+///
+/// If the clip itself is missing, this re-clips from the *old* archive's
+/// source video (same as a fresh `migrate_template`, reusing the existing
+/// template_id/paths instead of allocating a new one) and regenerates the
+/// thumbnail and filmstrip from that fresh clip. If only the filmstrip
+/// (or only the thumbnail) is missing, only that is regenerated, reusing
+/// the existing clip file rather than re-clipping from source — so this
+/// still works even if the source video itself is long gone, as long as
+/// the clip survived.
+///
+/// Returns whether anything was actually regenerated.
+async fn backfill_template_assets(
     pool: &PgPool,
     config: &Config,
+    args: &Args,
     video_id: &str,
     payload: &TemplatePayload,
+    old_videos: &[OldVideo],
 ) -> Result<bool> {
     let template_id_str = db::get_template_id(pool, video_id)
         .await?
         .with_context(|| format!("template row for video {video_id} vanished mid-migration"))?;
     let template_id = Uuid::parse_str(&template_id_str)?;
 
-    let filmstrip_path = paths::template_filmstrip_path(&config.video_dir, &template_id);
-    if tokio::fs::try_exists(&filmstrip_path).await.unwrap_or(false) {
-        return Ok(false);
-    }
-
     let clip_path = paths::template_clip_path(&config.video_dir, &template_id);
+    let thumb_path = paths::template_thumbnail_path(&config.video_dir, &template_id);
+    let filmstrip_path = paths::template_filmstrip_path(&config.video_dir, &template_id);
+
+    let mut restored_any = false;
+
     if !tokio::fs::try_exists(&clip_path).await.unwrap_or(false) {
-        bail!(
-            "template clip missing at {} — can't backfill a filmstrip without it",
-            clip_path.display()
+        let source_video = old_videos
+            .iter()
+            .find(|v| v.id == video_id)
+            .with_context(|| format!("template references unknown video {video_id}"))?;
+        let source_uuid = Uuid::parse_str(&source_video.id)?;
+        let source_path = paths::video_path(&args.old_video_dir, &source_uuid, &source_video.extension);
+        if !source_path.exists() {
+            bail!(
+                "template clip missing at {} and source video missing at {} — can't re-clip without either",
+                clip_path.display(),
+                source_path.display()
+            );
+        }
+
+        ffmpeg::trim_video(
+            &source_path,
+            &clip_path,
+            payload.gif_range_start,
+            payload.gif_range_end - payload.gif_range_start,
+            payload.width,
+            payload.height,
+        )
+        .await
+        .with_context(|| format!("re-clipping template video for {video_id}"))?;
+        restored_any = true;
+
+        // The clip was just rebuilt from scratch, so any pre-existing
+        // thumbnail/filmstrip (that survived while the clip didn't — an
+        // unlikely mix, but the copy is cheap) is now stale.
+        ffmpeg::generate_thumbnail(&clip_path, &thumb_path, 0.0)
+            .await
+            .context("generating template thumbnail")?;
+        let layout = compute_filmstrip_layout(
+            payload.gif_range_end - payload.gif_range_start,
+            payload.width,
+            payload.height,
         );
+        ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &layout)
+            .await
+            .context("generating template filmstrip")?;
+        return Ok(restored_any);
     }
 
-    let layout = compute_filmstrip_layout(
-        payload.gif_range_end - payload.gif_range_start,
-        payload.width,
-        payload.height,
-    );
-    ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &layout)
-        .await
-        .context("generating template filmstrip")?;
-    Ok(true)
+    if !tokio::fs::try_exists(&thumb_path).await.unwrap_or(false) {
+        ffmpeg::generate_thumbnail(&clip_path, &thumb_path, 0.0)
+            .await
+            .context("generating template thumbnail")?;
+        restored_any = true;
+    }
+
+    if !tokio::fs::try_exists(&filmstrip_path).await.unwrap_or(false) {
+        let layout = compute_filmstrip_layout(
+            payload.gif_range_end - payload.gif_range_start,
+            payload.width,
+            payload.height,
+        );
+        ffmpeg::generate_filmstrip_sprite(&clip_path, &filmstrip_path, &layout)
+            .await
+            .context("generating template filmstrip")?;
+        restored_any = true;
+    }
+
+    Ok(restored_any)
 }
 
 /// Returns whether any row failed — callers use this to pick the process
@@ -445,16 +507,19 @@ async fn run() -> Result<bool> {
 
     let mut templates_migrated = 0;
     let mut templates_failed = 0;
-    let mut filmstrips_backfilled = 0;
+    let mut assets_backfilled = 0;
     for template in &old_templates {
         if let Some(existing_payload) = db::get_template(&pool, &template.video_id).await? {
-            // Already migrated by an earlier run — that run may predate
-            // filmstrip generation entirely, so backfill just that rather
-            // than skipping outright.
-            match backfill_template_filmstrip(&pool, &config, &template.video_id, &existing_payload).await {
-                Ok(true) => filmstrips_backfilled += 1,
+            // Row already migrated by an earlier run, but the clip,
+            // thumbnail, and/or filmstrip on disk may be missing — either
+            // because that run predates filmstrip generation, or because
+            // they're the same local-disk-only assets that don't survive
+            // a root-volume loss. Backfill whatever's gone rather than
+            // skipping outright.
+            match backfill_template_assets(&pool, &config, &args, &template.video_id, &existing_payload, &old_videos).await {
+                Ok(true) => assets_backfilled += 1,
                 Ok(false) => {}
-                Err(err) => eprintln!("template filmstrip backfill for video {} failed: {err:#}", template.video_id),
+                Err(err) => eprintln!("template asset backfill for video {} failed: {err:#}", template.video_id),
             }
             continue;
         }
@@ -467,7 +532,7 @@ async fn run() -> Result<bool> {
         }
     }
     println!(
-        "templates: {templates_migrated} clipped, {templates_failed} failed, {} already present ({filmstrips_backfilled} filmstrips backfilled)",
+        "templates: {templates_migrated} clipped, {templates_failed} failed, {} already present ({assets_backfilled} had assets backfilled)",
         old_templates.len() - templates_migrated - templates_failed
     );
 

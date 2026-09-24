@@ -52,6 +52,20 @@ resource "aws_instance" "app" {
     source_videos_s3_region = var.aws_region
   })
 
+  # `data.aws_ami.al2023` re-resolves to whatever AMI is newest at plan
+  # time, but `ami` is a ForceNew attribute on aws_instance — so an
+  # ordinary `terraform apply` for an unrelated change (a new variable, a
+  # security group tweak) can silently pick up a newer AMI and replace the
+  # instance, destroying the root volume and with it every locally-stored
+  # template clip/thumbnail/filmstrip, exactly like the user_data case
+  # above but without even a code diff to explain it. Once created, this
+  # instance keeps its AMI; bump it deliberately (change the filter, or
+  # `terraform apply -replace=aws_instance.app`) when you actually want to
+  # move to a newer base image.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = {
     Name = "gifiac"
   }

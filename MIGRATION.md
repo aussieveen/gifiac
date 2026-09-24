@@ -45,10 +45,15 @@ Docker image as the server (`./migrate_archive`, alongside
   old video files on disk, not just the old database.
 
 Safe to re-run: every row is skipped if it's already present (by id for
-videos/gifs, by video_id for templates) — except the asset copy above,
-which always runs regardless, so a re-run also backfills raw
-files/thumbnails/filmstrips for videos an earlier run already migrated the
-row for.
+videos/gifs, by video_id for templates) — except the asset copy/backfill
+above, which always runs regardless of whether the row was just inserted
+or already existed. So a re-run also backfills raw files/thumbnails/
+filmstrips for videos, and clips/thumbnails/filmstrips for templates, that
+an earlier run already migrated the row for but whose on-disk assets are
+now missing — including the case where they're all missing at once (e.g.
+after a root-volume loss like the one in ec2.tf's `ignore_changes = [ami]`
+comment): templates re-clip from the old archive's source video in that
+case, same as a first-time migration.
 
 ## Prerequisites
 
