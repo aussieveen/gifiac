@@ -1727,7 +1727,10 @@ button {
 .archive-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Same reasoning as .archive-panel-preview: `cover` crops any GIF that
+     isn't close to 16:10, which linked/imported ones often aren't.
+     `contain` letterboxes on --bg-sunken instead of losing content. */
+  object-fit: contain;
   display: block;
 }
 
@@ -1785,7 +1788,11 @@ button {
   border-radius: var(--radius);
   background: var(--bg-sunken);
   aspect-ratio: 16 / 10;
-  object-fit: cover;
+  /* `cover` crops anything that isn't close to 16:10 — fine for this app's
+     own video-clip exports, but linked/imported GIFs can be any shape
+     (SPEC.md §13) and lose real content off the top/bottom or sides.
+     `contain` always shows the whole GIF, letterboxed on --bg-sunken. */
+  object-fit: contain;
 }
 
 .archive-panel-header {
