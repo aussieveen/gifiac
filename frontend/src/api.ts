@@ -11,15 +11,18 @@ import type {
   Video,
 } from './types'
 
-async function throwIfNotOk(input: string, response: Response): Promise<void> {
+// Deliberately doesn't include the request URL/route — that's an
+// implementation detail, not something a user should see in an error
+// message.
+async function throwIfNotOk(response: Response): Promise<void> {
   if (response.ok) return
   const body = await response.text().catch(() => '')
-  throw new Error(`${input} failed (${response.status}): ${body || response.statusText}`)
+  throw new Error(`Request failed (${response.status}): ${body || response.statusText}`)
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
-  await throwIfNotOk(input, response)
+  await throwIfNotOk(response)
   return (await response.json()) as T
 }
 
@@ -35,7 +38,7 @@ export function getCurrentUser(): Promise<CurrentUser | null> {
 
 export async function logout(): Promise<void> {
   const input = '/api/auth/logout'
-  await throwIfNotOk(input, await fetch(input, { method: 'POST' }))
+  await throwIfNotOk(await fetch(input, { method: 'POST' }))
 }
 
 // SPEC-CLOUD.md §5: a handle can only ever be set once — a second call
@@ -68,7 +71,7 @@ export function uploadVideo(file: File): Promise<Video> {
 
 export async function deleteVideo(id: string): Promise<void> {
   const input = `/api/videos/${id}`
-  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
 }
 
 export function getFilmstripMeta(id: string): Promise<FilmstripMeta> {
@@ -214,7 +217,7 @@ export function recordGifUse(id: string): Promise<Gif> {
 
 export async function deleteGif(id: string): Promise<void> {
   const input = `/api/gifs/${id}`
-  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
 }
 
 // Bulk import per SPEC.md §7 — multiple files in one multipart request,
@@ -241,7 +244,7 @@ export async function getTemplate(videoId: string): Promise<TemplatePayload | nu
   const input = `/api/videos/${videoId}/template`
   const response = await fetch(input)
   if (response.status === 404) return null
-  await throwIfNotOk(input, response)
+  await throwIfNotOk(response)
   return (await response.json()) as TemplatePayload
 }
 
@@ -255,7 +258,7 @@ export function putTemplate(videoId: string, payload: TemplatePayload): Promise<
 
 export async function deleteTemplate(videoId: string): Promise<void> {
   const input = `/api/videos/${videoId}/template`
-  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
 }
 
 // Admin area per SPEC-CLOUD.md §7 — every user plus per-user usage stats,
@@ -278,5 +281,5 @@ export function setUserDisabled(id: string, disabled: boolean): Promise<{ id: st
 // action, admin-only).
 export async function adminDeleteGif(id: string): Promise<void> {
   const input = `/api/admin/gifs/${id}`
-  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
 }

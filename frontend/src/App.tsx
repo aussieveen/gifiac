@@ -5,6 +5,7 @@ import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, getVideo, logout } from './api'
 import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
+import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
 import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
 import { Library } from './Library'
@@ -20,6 +21,12 @@ function AccountMenu({ user }: { user: CurrentUser }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   useClickOutside(rootRef, open, () => setOpen(false))
+
+  // AccountMenu is only ever rendered once App has confirmed
+  // user.handle !== null — handle and slug are always set together
+  // (db::set_handle), so this also proves user.slug to TypeScript, for
+  // profileUrl below.
+  if (!user.handle || !user.slug) return null
 
   return (
     <div className="account-menu" ref={rootRef}>
@@ -38,7 +45,7 @@ function AccountMenu({ user }: { user: CurrentUser }) {
         <div className="account-dropdown" role="menu">
           <Link
             className="account-dropdown-item"
-            to={`/u/${user.handle}`}
+            to={profileUrl(user.slug)}
             role="menuitem"
             onClick={() => setOpen(false)}
           >

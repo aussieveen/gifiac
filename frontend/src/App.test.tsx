@@ -53,6 +53,7 @@ import type { CurrentUser } from './types'
 const loggedInUser: CurrentUser = {
   id: 'u1',
   handle: 'testuser',
+  slug: 'testuser',
   role: 'user',
   avatarUrl: null,
   suggestedHandle: null,
@@ -260,6 +261,23 @@ describe('App', () => {
 
     const profileLink = screen.getByRole('menuitem', { name: 'View profile' })
     expect(profileLink).toHaveAttribute('href', `/u/${loggedInUser.handle}`)
+  })
+
+  it('shows the handle as typed, but links to the real (possibly suffixed) slug', async () => {
+    // slug is a real, backend-assigned field independent of handle's
+    // display case — including a collision suffix (migration 0012) — so
+    // it must never be re-derived from the handle on the frontend.
+    vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, handle: 'Simon_Mc', slug: 'simon_mc2' })
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+    renderApp()
+    await screen.findByText(/no gifs yet/i)
+
+    expect(screen.getByText('Simon_Mc')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Simon_Mc' }))
+
+    const profileLink = screen.getByRole('menuitem', { name: 'View profile' })
+    expect(profileLink).toHaveAttribute('href', '/u/simon_mc2')
   })
 
   it('sign out (from the account menu) calls the logout API', async () => {

@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
+use crate::handle;
 use crate::models::{
     AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PublicGif, Session, Template, TemplatePayload, User, Video,
     VideoListItem, VideoTemplate,
@@ -343,7 +344,7 @@ pub async fn get_template_by_id(pool: &PgPool, id: &str) -> Result<Option<Templa
         .map_err(Into::into)
 }
 
-const USER_COLUMNS: &str = "id, handle, role, created_at, email, avatar_url, display_name, disabled";
+const USER_COLUMNS: &str = "id, handle, slug, role, created_at, email, avatar_url, display_name, disabled";
 
 /// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a
 /// user — no merging by email, since Google is (for now) the only
@@ -530,29 +531,46 @@ pub async fn admin_delete_template(pool: &PgPool, id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-/// Sets a user's handle exactly once — `false` covers both "already set"
-/// (the `WHERE handle IS NULL` matches no row) and "taken by someone
-/// else" (a unique-constraint violation, caught here rather than
-/// propagated) so the route can turn either into the same 409 without
-/// needing to tell them apart (SPEC-CLOUD.md §5: "locked permanently once
-/// set").
+/// Astronomically generous — collisions this deep would mean thousands of
+/// handles case-folding to the same base slug, not a real scenario, just
+/// a bound so a pathological case can't loop forever.
+const MAX_SLUG_ATTEMPTS: u32 = 1000;
+
+/// Sets a user's handle (and its derived, collision-resistant slug,
+/// migration 0012) exactly once — `false` covers "already set" (the
+/// `WHERE handle IS NULL` matches no row) and "this exact handle string
+/// is already taken" (a `users_handle_key` violation) — SPEC-CLOUD.md §5:
+/// "locked permanently once set". A *slug* collision — a different
+/// handle that case-folds to the same lowercase form — isn't a failure:
+/// it just retries with the next numbered suffix
+/// (`handle::slug_candidate`) until a free one is found.
 pub async fn set_handle(pool: &PgPool, user_id: &str, handle: &str) -> Result<bool> {
-    let result = sqlx::query("UPDATE users SET handle = $1 WHERE id = $2 AND handle IS NULL")
-        .bind(handle)
-        .bind(user_id)
-        .execute(pool)
-        .await;
-    match result {
-        Ok(result) => Ok(result.rows_affected() > 0),
-        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => Ok(false),
-        Err(err) => Err(err.into()),
+    let base = handle::base_slug(handle);
+    for attempt in 1..=MAX_SLUG_ATTEMPTS {
+        let slug = handle::slug_candidate(&base, attempt);
+        let result = sqlx::query("UPDATE users SET handle = $1, slug = $2 WHERE id = $3 AND handle IS NULL")
+            .bind(handle)
+            .bind(&slug)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+        match result {
+            Ok(result) => return Ok(result.rows_affected() > 0),
+            Err(sqlx::Error::Database(db_err)) if db_err.constraint() == Some("users_slug_key") => continue,
+            Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
     }
+    Ok(false)
 }
 
-pub async fn get_user_by_handle(pool: &PgPool, handle: &str) -> Result<Option<User>> {
-    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE handle = $1");
+/// Exact match — `slug` is already the canonical, collision-resolved
+/// lowercase form (`db::set_handle`), so unlike the old
+/// `get_user_by_handle` (migration 0011) this needs no `lower()` folding.
+pub async fn get_user_by_slug(pool: &PgPool, slug: &str) -> Result<Option<User>> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE slug = $1");
     sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
-        .bind(handle)
+        .bind(slug)
         .fetch_optional(pool)
         .await
         .map_err(Into::into)
@@ -580,7 +598,8 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle";
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle, \
+         users.slug AS owner_slug";
     let order_by = match sort {
         LibrarySort::Newest => "gifs.created_at DESC",
         LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
@@ -1346,14 +1365,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_user_by_handle_round_trips() {
+    async fn get_user_by_slug_round_trips() {
         let pool = test_pool().await;
         let user = seed_user(&pool).await;
         set_handle(&pool, &user, "simon").await.unwrap();
 
-        let found = get_user_by_handle(&pool, "simon").await.unwrap().unwrap();
+        let found = get_user_by_slug(&pool, "simon").await.unwrap().unwrap();
         assert_eq!(found.id, user);
-        assert!(get_user_by_handle(&pool, "nobody").await.unwrap().is_none());
+        assert!(get_user_by_slug(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_handle_preserves_case_and_a_case_variant_still_succeeds_with_a_suffixed_slug() {
+        let pool = test_pool().await;
+        let first = seed_user(&pool).await;
+        let second = seed_user(&pool).await;
+
+        assert!(set_handle(&pool, &first, "Simon").await.unwrap());
+        assert_eq!(
+            get_user(&pool, &first).await.unwrap().unwrap().handle.as_deref(),
+            Some("Simon")
+        );
+        assert_eq!(get_user(&pool, &first).await.unwrap().unwrap().slug.as_deref(), Some("simon"));
+
+        // "simon" case-folds to the already-taken slug "simon" — rather
+        // than being rejected, it succeeds with its own handle preserved
+        // exactly and a suffixed slug for disambiguation (migration 0012).
+        assert!(set_handle(&pool, &second, "simon").await.unwrap());
+        let second_user = get_user(&pool, &second).await.unwrap().unwrap();
+        assert_eq!(second_user.handle.as_deref(), Some("simon"));
+        assert_eq!(second_user.slug.as_deref(), Some("simon2"));
+    }
+
+    #[tokio::test]
+    async fn set_handle_keeps_incrementing_the_suffix_across_repeated_slug_collisions() {
+        let pool = test_pool().await;
+        let first = seed_user(&pool).await;
+        let second = seed_user(&pool).await;
+        let third = seed_user(&pool).await;
+
+        assert!(set_handle(&pool, &first, "Sim_Mc").await.unwrap());
+        assert!(set_handle(&pool, &second, "sim_mc").await.unwrap());
+        assert!(set_handle(&pool, &third, "SIM_MC").await.unwrap());
+
+        assert_eq!(get_user(&pool, &first).await.unwrap().unwrap().slug.as_deref(), Some("sim_mc"));
+        assert_eq!(get_user(&pool, &second).await.unwrap().unwrap().slug.as_deref(), Some("sim_mc2"));
+        assert_eq!(get_user(&pool, &third).await.unwrap().unwrap().slug.as_deref(), Some("sim_mc3"));
+    }
+
+    #[tokio::test]
+    async fn get_user_by_slug_is_an_exact_match_not_case_insensitive() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        set_handle(&pool, &user, "Simon").await.unwrap();
+
+        // slug is always stored lowercase, so a lowercase lookup finds it...
+        assert_eq!(get_user_by_slug(&pool, "simon").await.unwrap().unwrap().id, user);
+        // ...but an uppercase lookup does not — the frontend always builds
+        // links from the real `slug` the API returns, never guesses one.
+        assert!(get_user_by_slug(&pool, "SIMON").await.unwrap().is_none());
     }
 
     #[tokio::test]

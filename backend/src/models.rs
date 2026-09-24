@@ -224,6 +224,7 @@ pub struct PublicGif {
     pub is_public: bool,
     pub use_count: i64,
     pub owner_handle: Option<String>,
+    pub owner_slug: Option<String>,
 }
 
 impl From<PublicGif> for Gif {
@@ -307,6 +308,11 @@ impl From<Template> for AdminTemplateView {
 pub struct User {
     pub id: String,
     pub handle: Option<String>,
+    /// Persisted, collision-resistant lowercase URL slug (migration
+    /// 0012) — computed once at handle-set time (`db::set_handle`), not
+    /// derived on the fly. Only meaningful once `handle` is set; the two
+    /// are always written together.
+    pub slug: Option<String>,
     pub role: String,
     pub created_at: String,
     /// Refreshed from the OAuth payload on every login — not part of
@@ -337,6 +343,11 @@ pub struct User {
 pub struct CurrentUserView {
     pub id: String,
     pub handle: Option<String>,
+    /// The real, possibly-suffixed slug (migration 0012) — the frontend
+    /// must use this for building `/u/{slug}` links rather than deriving
+    /// one from `handle` itself, since a collision suffix makes the two
+    /// divergeable (e.g. handle "Sim_Mc" but slug "sim_mc2").
+    pub slug: Option<String>,
     pub role: String,
     pub avatar_url: Option<String>,
     pub suggested_handle: Option<String>,
@@ -352,6 +363,7 @@ impl From<User> for CurrentUserView {
         Self {
             id: user.id,
             handle: user.handle,
+            slug: user.slug,
             role: user.role,
             avatar_url: user.avatar_url,
             suggested_handle,

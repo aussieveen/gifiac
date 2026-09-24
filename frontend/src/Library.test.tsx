@@ -31,11 +31,13 @@ const entryA: LibraryEntry = {
   use_count: 0,
   gif_url: 'http://example.com/g1.gif',
   owner_handle: 'simon',
+  owner_slug: 'simon',
 }
 
 const plainUser: CurrentUser = {
   id: 'u1',
   handle: 'viewer',
+  slug: 'viewer',
   role: 'user',
   avatarUrl: null,
   suggestedHandle: null,
@@ -103,8 +105,22 @@ describe('Library', () => {
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByText('cat jumping')).toBeInTheDocument()
-    const link = screen.getByRole('link', { name: '@simon' })
+    const link = screen.getByRole('link', { name: 'simon' })
     expect(link).toHaveAttribute('href', '/u/simon')
+  })
+
+  it('shows the owner handle as typed, but links to the real (possibly suffixed) slug', async () => {
+    // owner_slug is a real, backend-assigned field independent of
+    // owner_handle's display case — including a collision suffix
+    // (migration 0012) — so it must never be re-derived on the frontend.
+    vi.mocked(listLibrary).mockResolvedValue([{ ...entryA, owner_handle: 'Simon_Mc', owner_slug: 'simon_mc2' }])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    const link = screen.getByRole('link', { name: 'Simon_Mc' })
+    expect(link).toHaveAttribute('href', '/u/simon_mc2')
   })
 
   it('the copy-link button copies the gif url and bumps its use count', async () => {

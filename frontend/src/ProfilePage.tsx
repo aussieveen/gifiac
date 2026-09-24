@@ -84,7 +84,7 @@ export function ProfilePage() {
         {profile.avatarUrl && (
           <img src={profile.avatarUrl} alt={`${profile.handle}'s avatar`} className="profile-avatar" />
         )}
-        <h1>@{profile.handle}</h1>
+        <h1>{profile.handle}</h1>
       </div>
       {profile.gifs.length === 0 ? (
         <p className="va-hint">No public GIFs yet.</p>

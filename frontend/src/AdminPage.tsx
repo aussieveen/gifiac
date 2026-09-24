@@ -71,7 +71,7 @@ export function AdminPage() {
         <tbody>
           {users.map((user) => (
             <tr key={user.id} className={user.disabled ? 'admin-user-disabled' : ''}>
-              <td>{user.handle ? `@${user.handle}` : <span className="va-hint">(no handle)</span>}</td>
+              <td>{user.handle ?? <span className="va-hint">(no handle)</span>}</td>
               <td>{user.email ?? <span className="va-hint">—</span>}</td>
               <td>{user.role}</td>
               <td>{user.gif_count}</td>

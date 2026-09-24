@@ -46,7 +46,7 @@ describe('AdminPage', () => {
 
     render(<AdminPage />)
 
-    await screen.findByText('@simon')
+    await screen.findByText('simon')
     expect(screen.getByText('simon@example.com')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getByText('(no handle)')).toBeInTheDocument()
@@ -67,7 +67,7 @@ describe('AdminPage', () => {
     const user = userEvent.setup()
 
     render(<AdminPage />)
-    await screen.findByText('@simon')
+    await screen.findByText('simon')
     await user.click(screen.getByRole('button', { name: 'Disable' }))
 
     expect(setUserDisabled).toHaveBeenCalledWith('u1', true)
@@ -81,7 +81,7 @@ describe('AdminPage', () => {
     const user = userEvent.setup()
 
     render(<AdminPage />)
-    await screen.findByText('@simon')
+    await screen.findByText('simon')
     await user.click(screen.getByRole('button', { name: 'Enable' }))
 
     expect(setUserDisabled).toHaveBeenCalledWith('u1', false)

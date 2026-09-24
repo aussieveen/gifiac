@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminDeleteGif, listLibrary, recordGifUse } from './api'
+import { profileUrl } from './handles'
 import { CheckIcon, CodeIcon, DownloadIcon, ExternalLinkIcon, LinkIcon, SearchIcon, TrashIcon } from './icons'
 import type { LibraryEntry, LibrarySort } from './types'
 import { useCurrentUser } from './useCurrentUser'
@@ -201,9 +202,9 @@ export function Library() {
               />
               <div className="archive-panel-header">
                 <p className="archive-panel-title-text">{selected.name}</p>
-                {selected.owner_handle && (
-                  <Link className="archive-owner-link" to={`/u/${selected.owner_handle}`}>
-                    @{selected.owner_handle}
+                {selected.owner_handle && selected.owner_slug && (
+                  <Link className="archive-owner-link" to={profileUrl(selected.owner_slug)}>
+                    {selected.owner_handle}
                   </Link>
                 )}
               </div>

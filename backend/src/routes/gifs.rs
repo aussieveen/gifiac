@@ -159,6 +159,10 @@ pub struct LibraryEntry {
     #[serde(flatten)]
     gif: GifResponse,
     owner_handle: Option<String>,
+    // The owner's real slug (migration 0012) — the frontend must use this
+    // to build the attribution link rather than deriving one from
+    // `owner_handle`, since a collision suffix can make the two diverge.
+    owner_slug: Option<String>,
 }
 
 pub async fn list_library(
@@ -170,7 +174,8 @@ pub async fn list_library(
         .into_iter()
         .map(|public_gif| {
             let owner_handle = public_gif.owner_handle.clone();
-            with_urls(public_gif.into(), &state.storage).map(|gif| LibraryEntry { gif, owner_handle })
+            let owner_slug = public_gif.owner_slug.clone();
+            with_urls(public_gif.into(), &state.storage).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(entries))

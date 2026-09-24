@@ -35,7 +35,7 @@ describe('ProfilePage', () => {
     vi.mocked(getProfile).mockResolvedValue(profile)
     renderAt('simon')
 
-    expect(await screen.findByText('@simon')).toBeInTheDocument()
+    expect(await screen.findByText('simon')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: "simon's avatar" })).toHaveAttribute('src', profile.avatarUrl)
   })
 
@@ -57,7 +57,18 @@ describe('ProfilePage', () => {
     vi.mocked(getProfile).mockResolvedValue(profile)
     renderAt('simon')
 
-    await screen.findByText('@simon')
+    await screen.findByText('simon')
     expect(screen.getByRole('link', { name: /back/i })).toHaveAttribute('href', '/')
+  })
+
+  it('renders the case from the API response, not the case in the url', async () => {
+    // Regression guard for the matching backend fix (get_profile used to
+    // echo the raw URL path segment back as `handle` instead of the
+    // stored user's own value) — the frontend should trust whatever case
+    // the response says, even though this was reached via a lowercase url.
+    vi.mocked(getProfile).mockResolvedValue({ ...profile, handle: 'Simon_Mc' })
+    renderAt('simon_mc')
+
+    expect(await screen.findByText('Simon_Mc')).toBeInTheDocument()
   })
 })

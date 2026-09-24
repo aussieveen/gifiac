@@ -51,6 +51,10 @@ export interface TemplatePayload {
 export interface CurrentUser {
   id: string
   handle: string | null
+  // The real, possibly collision-suffixed profile-URL slug (migration
+  // 0012) — always use this (never derive one from `handle`) when
+  // building a `/u/:slug` link; see handles.ts's `profileUrl`.
+  slug: string | null
   role: string
   avatarUrl: string | null
   // SPEC-CLOUD.md §5: a slugified guess at a handle, computed server-side
@@ -119,6 +123,10 @@ export interface Gif {
 // `LibraryEntry` (which flattens `GifResponse`, itself snake_case).
 export interface LibraryEntry extends Gif {
   owner_handle: string | null
+  // The owner's real profile-URL slug (migration 0012) — see
+  // `CurrentUser.slug`'s comment; use this, not `owner_handle`, for the
+  // attribution link.
+  owner_slug: string | null
 }
 
 // `GET /api/library?sort=` (SPEC-CLOUD.md §8) — matching the backend's
