@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
+import mark from './assets/brand/strewthgif-mark.svg'
 import {
   AlignCenterIcon,
   AlignLeftIcon,
@@ -777,7 +778,7 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
           <button className="btn btn-secondary editor-back-btn" onClick={onBack} aria-label="Back to library">
             <ArrowLeftIcon />
           </button>
-          <span className="editor-brand">Gifiac</span>
+          <img src={mark} alt="StrewthGif" className="editor-brand" />
           <div className="editor-divider" />
           <div className="editor-title-block">
             <input

@@ -178,7 +178,7 @@ export function Library() {
             >
               {item.gif_url && <img src={item.gif_url} alt={item.name} />}
               {item.external_url && (
-                <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
+                <span className="archive-badge-external" title="Linked — hosted externally, not by StrewthGif">
                   <LinkIcon size={14} />
                 </span>
               )}

@@ -1,4 +1,4 @@
-# Gifiac — Specification
+# StrewthGif — Specification
 
 A self-hosted GIF/clip creation and archival tool. Upload a video, scrub to a moment, caption it Frinkiac-style, export as a GIF/MP4/WebM, and keep a searchable archive of everything you've made — plus bulk-import GIFs you already have from elsewhere (e.g. Giphy).
 
@@ -189,7 +189,7 @@ This makes bulk import a generic feature, not Giphy-specific. (Note: this sectio
 - **Mechanism**: bulk browser upload — a multi-file picker/drag-and-drop, reusing the same multipart-POST pattern as video ingest, extended to accept multiple files in one request (`POST /api/gifs/import`) and return an array of created `gifs` rows.
 - **Schema**: no new columns (see §2). An imported GIF has `video_id = NULL` and `captions_json = NULL`. `name` defaults to the uploaded filename with its extension stripped, immediately renameable via `PATCH /api/gifs/{id}`. `caption_text` is left empty — archive search falls back to matching `name` only for imported items.
 - **Re-edit is unavailable for imports**: the archive UI hides/disables the "edit captions" action whenever `video_id` is null.
-- **Format normalization**: imported files (typically GIF-only) are run through the **same FFmpeg transcode step as the export pipeline**, filling in whichever of GIF/MP4/WebM are missing — every `gifs` row ends up with all three formats, whether created in Gifiac or imported.
+- **Format normalization**: imported files (typically GIF-only) are run through the **same FFmpeg transcode step as the export pipeline**, filling in whichever of GIF/MP4/WebM are missing — every `gifs` row ends up with all three formats, whether created in StrewthGif or imported.
 - **Storage**: identical R2 key convention as exports — a fresh UUID v4 per imported item, `gifs/{id}.gif` / `clips/{id}.mp4` / `clips/{id}.webm`. No separate "imports" namespace; an imported GIF is just a `gifs` row like any other from the API/archive's point of view.
 
 ---
@@ -309,7 +309,7 @@ A way to add a GIF to the archive by pasting a URL and a title, instead of uploa
 
 ### Behaviour
 
-- **Pure hotlink, no re-hosting.** The `gifs` row stores the URL (`external_url`, see §2); Gifiac never fetches and stores the file body. The archive thumbnail and detail-panel preview render it directly as a live `<img src={external_url}>`. If the source disappears, the entry breaks — that tradeoff is accepted in exchange for zero storage cost and zero processing.
+- **Pure hotlink, no re-hosting.** The `gifs` row stores the URL (`external_url`, see §2); StrewthGif never fetches and stores the file body. The archive thumbnail and detail-panel preview render it directly as a live `<img src={external_url}>`. If the source disappears, the entry breaks — that tradeoff is accepted in exchange for zero storage cost and zero processing.
 - **GIF format only.** No MP4/WebM sibling formats are generated — generating them would require fetching the source file server-side, which contradicts "pure hotlink." This is a deliberate exception to §7's "every `gifs` row ends up with all three formats" rule; it applies only to file-based imports and native exports, not to linked GIFs.
 - **Lightweight validation on submit.** The server does a HEAD (or ranged GET) request against the submitted URL to confirm it resolves and looks like an image, with basic SSRF guards (reject private/loopback/link-local IP ranges). This is a sanity check only — no width/height are probed or persisted; the frontend sizes the thumbnail from the live image's natural dimensions.
 - **Fixed at creation.** The URL can't be edited afterwards via `PATCH` — only `name` is patchable (see §5). To fix a typo'd or moved link, delete the row and re-add it. This keeps `PATCH`'s contract uniform across every GIF type.

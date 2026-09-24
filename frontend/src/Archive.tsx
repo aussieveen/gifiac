@@ -17,7 +17,7 @@ import { useClickOutside } from './useClickOutside'
 import { useToast } from './useToast'
 
 /** `navigator.clipboard` only exists in secure contexts (HTTPS, or
- * localhost) — Gifiac is a self-hosted LAN tool typically served over plain
+ * localhost) — StrewthGif is a self-hosted LAN tool typically served over plain
  * HTTP on a local hostname/IP, so it's routinely unavailable. Falls back to
  * the older `execCommand('copy')` path, which isn't secure-context-gated. */
 async function copyToClipboard(text: string) {
@@ -388,7 +388,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                       if the source does. File-based imports don't get this;
                       they're fully re-hosted, same as native GIFs. */}
                   {g.external_url && (
-                    <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
+                    <span className="archive-badge-external" title="Linked — hosted externally, not by StrewthGif">
                       <LinkIcon size={14} />
                     </span>
                   )}
@@ -438,7 +438,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
               </p>
               {selected.external_url && (
                 <p className="va-hint archive-panel-external-note">
-                  <LinkIcon size={14} /> Linked — hosted externally, not by Gifiac
+                  <LinkIcon size={14} /> Linked — hosted externally, not by StrewthGif
                 </p>
               )}
 

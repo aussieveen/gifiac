@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getProfile } from './api'
+import lockup from './assets/brand/strewthgif-lockup-on-dark.svg'
 import { ArrowLeftIcon } from './icons'
 import type { Profile } from './types'
 
@@ -13,7 +14,9 @@ import type { Profile } from './types'
 function ProfileTopBar() {
   return (
     <div className="profile-topbar">
-      <span className="app-header-brand">Gifiac</span>
+      <Link to="/" className="app-header-brand" aria-label="StrewthGif">
+        <img src={lockup} alt="StrewthGif" />
+      </Link>
       <Link className="btn btn-secondary" to="/">
         <ArrowLeftIcon size={16} />
         Back

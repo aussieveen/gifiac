@@ -1,6 +1,6 @@
-# Gifiac — Multi-Tenant AWS Specification
+# StrewthGif — Multi-Tenant AWS Specification
 
-This document layers on top of [`SPEC.md`](SPEC.md), which stays the reference for single-user mechanics that don't change (caption editor, export pipeline, bulk import, URL-linked GIFs, etc.). `SPEC-CLOUD.md` specifies everything that changes to take Gifiac from a single-user, no-auth, one-container tool on a home Unraid box to a multi-tenant, publicly-deployed service on AWS: pluggable auth, ownership, sharing, the admin area, the global library, AWS infrastructure, and the mandatory migration of Simon's existing archive.
+This document layers on top of [`SPEC.md`](SPEC.md), which stays the reference for single-user mechanics that don't change (caption editor, export pipeline, bulk import, URL-linked GIFs, etc.). `SPEC-CLOUD.md` specifies everything that changes to take StrewthGif from a single-user, no-auth, one-container tool on a home Unraid box to a multi-tenant, publicly-deployed service on AWS: pluggable auth, ownership, sharing, the admin area, the global library, AWS infrastructure, and the mandatory migration of Simon's existing archive.
 
 **Launch posture: friends-only, trusted userbase.** Several things are deliberately deferred rather than designed now — see §11, Out of scope. Section numbers below reference `SPEC.md` sections directly where this document extends or supersedes them; otherwise sections are new.
 

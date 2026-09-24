@@ -1,4 +1,4 @@
-# Gifiac
+# StrewthGif
 
 A self-hosted GIF/clip creation and archival tool. Upload a video, scrub to a
 moment, caption it Frinkiac-style, export as a GIF/MP4/WebM, and keep a
@@ -47,7 +47,7 @@ pipeline details.
 
 ## Deployment (Docker)
 
-This is the intended way to run Gifiac day-to-day. The image is built and
+This is the intended way to run StrewthGif day-to-day. The image is built and
 published to [GHCR](https://ghcr.io) automatically by
 [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
 on every push to `main` — no local build required.
@@ -69,7 +69,7 @@ on every push to `main` — no local build required.
    docker compose up -d
    ```
 
-Gifiac stores source videos under the `/data` volume mount — back that up
+StrewthGif stores source videos under the `/data` volume mount — back that up
 alongside the Postgres database, which lives outside the container; the
 finished GIFs/clips live in R2.
 
@@ -86,7 +86,7 @@ finished GIFs/clips live in R2.
 | `R2_PUBLIC_BASE_URL` | *(required)* | Public base URL GIF/clip links are derived from |
 | `GOOGLE_CLIENT_ID` | *(required)* | Google OAuth client id |
 | `GOOGLE_CLIENT_SECRET` | *(required)* | Google OAuth client secret |
-| `APP_BASE_URL` | *(required)* | Public site origin (e.g. `https://gifiac.example.com`) — builds the Google redirect URI and the post-login redirect target. `http://localhost:5173` in local dev; session cookies are only marked `Secure` when this is `https://` |
+| `APP_BASE_URL` | *(required)* | Public site origin (e.g. `https://strewthgif.example.com`) — builds the Google redirect URI and the post-login redirect target. `http://localhost:5173` in local dev; session cookies are only marked `Secure` when this is `https://` |
 | `SOURCE_VIDEOS_S3_ACCESS_KEY_ID` | *(required)* | Access key for the private source-video S3 bucket |
 | `SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY` | *(required)* | Secret key for the same bucket |
 | `SOURCE_VIDEOS_S3_BUCKET` | *(required)* | Bucket name |

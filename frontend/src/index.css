@@ -199,11 +199,14 @@ button {
 }
 
 .app-header-brand {
-  font-family: var(--font-display);
-  font-size: 26px;
-  color: var(--accent);
-  letter-spacing: 1px;
-  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+}
+
+.app-header-brand img {
+  height: 38px;
+  width: auto;
+  display: block;
 }
 
 .app-header-tabs {
@@ -321,11 +324,8 @@ button {
   position: absolute;
   top: 32px;
   left: 48px;
-  font-family: var(--font-display);
-  font-size: 26px;
-  color: var(--accent);
-  letter-spacing: 1px;
-  text-transform: uppercase;
+  height: 38px;
+  width: auto;
 }
 
 .auth-center {
@@ -421,10 +421,23 @@ button {
 }
 
 .auth-headline {
-  font-size: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   line-height: 0.95;
   margin: 0;
   max-width: 900px;
+}
+
+/* 2:1 ratio held at every width via matching clamp() bounds — no
+   @media breakpoint needed, nothing else in this file uses one. */
+.auth-headline-line1 {
+  font-size: clamp(48px, 12vw, 112px);
+}
+
+.auth-headline-line2 {
+  font-size: clamp(24px, 6vw, 56px);
 }
 
 .auth-headline-accent {
@@ -926,11 +939,8 @@ button {
 }
 
 .editor-brand {
-  font-family: var(--font-display);
-  font-size: 22px;
-  color: var(--accent);
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  height: 32px;
+  width: auto;
   flex-shrink: 0;
 }
 

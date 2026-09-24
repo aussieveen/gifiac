@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AdminPage } from './AdminPage'
 import { Archive } from './Archive'
+import lockup from './assets/brand/strewthgif-lockup-on-dark.svg'
 import { LOGIN_URL, getFilmstripMeta, getVideo, logout } from './api'
 import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
@@ -177,8 +178,9 @@ export default function App() {
             <span className="caption-text auth-tile-caption">FAIR.</span>
           </div>
         </div>
-        <h1 className="caption-text auth-headline">
-          SAY IT WITH A <span className="auth-headline-accent">GIF.</span>
+        <h1 className="auth-headline">
+          <span className="caption-text auth-headline-line1 auth-headline-accent">STREWTH!</span>
+          <span className="caption-text auth-headline-line2">THERE'S A GIF FOR THAT.</span>
         </h1>
         <p className="auth-subline">Clip it, caption it, send it. Sign in to get to your library.</p>
         <a className="btn btn-primary btn-hero" href={LOGIN_URL}>
@@ -213,7 +215,9 @@ export default function App() {
   const nav = (
     <header className="app-header">
       <div className="app-header-left">
-        <span className="app-header-brand">Gifiac</span>
+        <Link to="/library" className="app-header-brand" aria-label="StrewthGif — My Library">
+          <img src={lockup} alt="StrewthGif" />
+        </Link>
         <nav className="app-header-tabs" aria-label="Main">
           <Link className={`app-header-tab ${libraryActive ? 'active' : ''}`} to="/library">
             My Library
