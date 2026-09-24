@@ -1,24 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { deleteGif, importGifs, linkGif, listGifs, recordGifUse, renameGif, setGifOneOff, setGifPublic } from './api'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CodeIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  LinkIcon,
+  LockIcon,
+  SearchIcon,
+  TrashIcon,
+} from './icons'
 import type { Gif } from './types'
-
-/** Auto-dismisses after a beat, matching the archive prototype's toast. */
-function useToast() {
-  const [message, setMessage] = useState<string | null>(null)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  function show(msg: string) {
-    setMessage(msg)
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    timeoutRef.current = setTimeout(() => setMessage(null), 2000)
-  }
-
-  useEffect(() => () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-  }, [])
-
-  return { message, show }
-}
+import { useClickOutside } from './useClickOutside'
+import { useToast } from './useToast'
 
 /** `navigator.clipboard` only exists in secure contexts (HTTPS, or
  * localhost) — Gifiac is a self-hosted LAN tool typically served over plain
@@ -51,6 +47,15 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+type Filter = 'all' | 'public' | 'private' | 'one-offs'
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'public', label: 'Public' },
+  { id: 'private', label: 'Private' },
+  { id: 'one-offs', label: 'One-offs' },
+]
+
 interface Props {
   /** Pre-selects this GIF in the detail panel once it loads — used when
    * arriving here right after making a GIF, so its link/download/rename
@@ -62,17 +67,14 @@ interface Props {
    * into the URL (`/library/:gifId`) can keep it in sync — optional since
    * not every caller needs a shareable selection. */
   onSelectGif?: (id: string | null) => void
-  /** SPEC-CLOUD.md §9: "New GIF" isn't a top-level nav tab — it's this
-   * toolbar action, starting the video-picker/caption-editor flow that
-   * stays conceptually nested under My Library. */
-  onNewGif: () => void
 }
 
-export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
+export function Archive({ initialSelectedId, onSelectGif }: Props) {
   const [gifs, setGifs] = useState<Gif[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<Filter>('all')
   const [selectedId, setSelectedIdState] = useState<string | null>(initialSelectedId ?? null)
   function setSelectedId(id: string | null) {
     setSelectedIdState(id)
@@ -81,6 +83,9 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [showImportMenu, setShowImportMenu] = useState(false)
+  const importMenuRef = useRef<HTMLDivElement>(null)
+  useClickOutside(importMenuRef, showImportMenu, () => setShowImportMenu(false))
   const [showLinkForm, setShowLinkForm] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
   const [linkName, setLinkName] = useState('')
@@ -91,7 +96,9 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
   // as you type, matching `GET /api/gifs?q={query}` exactly" — rather than
   // filtering a client-side copy, so this always reflects the same search
-  // the API itself implements (name + caption_text together).
+  // the API itself implements (name + caption_text together). The
+  // public/private/one-off chips are a second, client-side filter layered
+  // on top of that same result set.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -110,6 +117,13 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
       cancelled = true
     }
   }, [query])
+
+  const filteredGifs = gifs.filter((g) => {
+    if (filter === 'public') return g.is_public
+    if (filter === 'private') return !g.is_public
+    if (filter === 'one-offs') return g.is_one_off
+    return true
+  })
 
   const selected = gifs.find((g) => g.id === selectedId) ?? null
 
@@ -160,7 +174,7 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
     }
   }
 
-  // Flips `is_one_off` (SPEC.md §8) — the same button un-marks a GIF back
+  // Flips `is_one_off` (SPEC.md §8) — the same switch un-marks a GIF back
   // to reusable, moving it from the bottom "One-offs" group back to the
   // main list.
   async function toggleOneOff() {
@@ -243,37 +257,78 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
 
   return (
     <div className="page">
-      <h1>My Library</h1>
-      <p className="subtitle">Search, re-download, or delete GIFs you've made.</p>
+      <div className="archive-title-row">
+        <div className="archive-title-group">
+          <h1 className="page-title">My Library</h1>
+          <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
+        </div>
+        <div className="archive-import-menu" ref={importMenuRef}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowImportMenu((o) => !o)}
+            aria-haspopup="true"
+            aria-expanded={showImportMenu}
+          >
+            Import
+            <ChevronDownIcon size={14} />
+          </button>
+          {showImportMenu && (
+            <div className="account-dropdown archive-import-dropdown" role="menu">
+              <label className="account-dropdown-item" role="menuitem">
+                {importing ? 'Importing…' : 'Upload GIFs'}
+                <input
+                  type="file"
+                  accept="image/gif,video/*"
+                  multiple
+                  hidden
+                  disabled={importing}
+                  onChange={(e) => {
+                    handleImport(e.target.files)
+                    e.target.value = '' // allow re-selecting the same file(s) later
+                    setShowImportMenu(false)
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="account-dropdown-item"
+                role="menuitem"
+                onClick={() => {
+                  setShowLinkForm((s) => !s)
+                  setShowImportMenu(false)
+                }}
+              >
+                Add from URL
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="archive-toolbar">
-        <input
-          className="archive-search"
-          placeholder="Search by name or caption text…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search archive"
-        />
-        <button className="va-btn" onClick={onNewGif}>
-          + New GIF
-        </button>
-        <label className="va-btn archive-import-btn">
-          {importing ? 'Importing…' : '+ Import GIFs'}
+        <div className="archive-search-wrap">
+          <SearchIcon size={16} className="archive-search-icon" />
           <input
-            type="file"
-            accept="image/gif,video/*"
-            multiple
-            hidden
-            disabled={importing}
-            onChange={(e) => {
-              handleImport(e.target.files)
-              e.target.value = '' // allow re-selecting the same file(s) later
-            }}
+            className="archive-search"
+            placeholder="Search names and captions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search archive"
           />
-        </label>
-        <button className="va-btn" onClick={() => setShowLinkForm((s) => !s)}>
-          + Add from URL
-        </button>
+        </div>
+        <div className="archive-chips" role="group" aria-label="Filter GIFs">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={`archive-chip ${filter === f.id ? 'active' : ''}`}
+              onClick={() => setFilter(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {showLinkForm && (
@@ -292,7 +347,7 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
             onChange={(e) => setLinkName(e.target.value)}
             aria-label="Linked GIF title"
           />
-          <button className="va-btn" type="submit" disabled={linking || !linkUrl.trim() || !linkName.trim()}>
+          <button className="btn btn-primary" type="submit" disabled={linking || !linkUrl.trim() || !linkName.trim()}>
             {linking ? 'Adding…' : 'Add'}
           </button>
         </form>
@@ -305,13 +360,15 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
 
       <div className="archive-layout">
         <div className="archive-grid">
-          {gifs.map((g, i) => {
+          {filteredGifs.map((g, i) => {
             // SPEC.md §8: the backend already sorts reusable GIFs before
             // one-offs (each group newest-first) — the divider goes
             // wherever the flag first flips to true in that single
-            // ordered list, and only renders when a one-off actually
-            // exists in the current results (search included).
-            const showDivider = g.is_one_off && (i === 0 || !gifs[i - 1].is_one_off)
+            // ordered list. Only shown for the "All" chip — once a chip
+            // narrows the grid to a single group (or filters across both
+            // groups by visibility), a divider inside it stops being
+            // meaningful.
+            const showDivider = filter === 'all' && g.is_one_off && (i === 0 || !filteredGifs[i - 1].is_one_off)
             return (
               <div key={g.id} className="archive-grid-item">
                 {showDivider && <div className="archive-grid-divider">One-offs</div>}
@@ -321,13 +378,18 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
                   aria-label={g.name}
                 >
                   {g.gif_url && <img src={g.gif_url} alt={g.name} />}
+                  {!g.is_public && (
+                    <span className="archive-badge-lock" title="Private">
+                      <LockIcon size={14} />
+                    </span>
+                  )}
                   {/* SPEC.md §13/§8: marks a GIF hotlinked to a third-party
                       URL — media outside our controlled R2 that could vanish
                       if the source does. File-based imports don't get this;
                       they're fully re-hosted, same as native GIFs. */}
                   {g.external_url && (
                     <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
-                      🔗
+                      <LinkIcon size={14} />
                     </span>
                   )}
                 </button>
@@ -335,11 +397,16 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
             )
           })}
           {!loading && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
+          {!loading && gifs.length > 0 && filteredGifs.length === 0 && (
+            <p className="va-hint">No GIFs match this filter.</p>
+          )}
         </div>
 
         <div className="archive-panel">
           {!selected ? (
-            <p className="va-hint">Select a GIF to view details and actions.</p>
+            <div className="archive-panel-empty">
+              <p className="va-hint">Select a GIF to view details and actions.</p>
+            </div>
           ) : (
             <>
               {/* `key` forces a fresh <img> per selection, so the GIF's
@@ -351,56 +418,108 @@ export function Archive({ initialSelectedId, onSelectGif, onNewGif }: Props) {
                 src={selected.gif_url}
                 alt={`${selected.name} preview`}
               />
-              <input
-                className="archive-panel-name"
-                aria-label="GIF name"
-                defaultValue={selected.name}
-                key={`name-${selected.id}`}
-                onBlur={(e) => rename(e.target.value)}
-              />
+              <div className="archive-panel-header">
+                <input
+                  className="archive-panel-name"
+                  aria-label="GIF name"
+                  defaultValue={selected.name}
+                  key={`name-${selected.id}`}
+                  onBlur={(e) => rename(e.target.value)}
+                />
+                <span className={`archive-visibility-pill ${selected.is_public ? 'public' : 'private'}`}>
+                  {selected.is_public ? 'Public' : 'Private'}
+                </span>
+              </div>
               {selected.caption_text && <p className="archive-panel-caption">{selected.caption_text}</p>}
+              <p className="archive-panel-meta">
+                <span>{new Date(selected.created_at).toLocaleString()}</span>
+                <span className="archive-panel-meta-sep">·</span>
+                <span>{selected.use_count === 1 ? '1 use' : `${selected.use_count} uses`}</span>
+              </p>
               {selected.external_url && (
-                <p className="va-hint archive-panel-external-note">🔗 Linked — hosted externally, not by Gifiac</p>
+                <p className="va-hint archive-panel-external-note">
+                  <LinkIcon size={14} /> Linked — hosted externally, not by Gifiac
+                </p>
               )}
-              <p className="va-hint">{new Date(selected.created_at).toLocaleString()}</p>
-              <p className="va-hint">{selected.use_count === 1 ? '1 use' : `${selected.use_count} uses`}</p>
-              <div className="archive-panel-actions">
-                <button className="va-btn" onClick={copyLink}>
-                  🔗 Copy link
-                </button>
-                <button className="va-btn" onClick={copyEmbed}>
-                  {'</> Copy embed'}
-                </button>
-                <button className="va-btn" onClick={toggleOneOff}>
-                  {selected.is_one_off ? '↩ Mark as reusable' : '⤵ Mark as one-off'}
-                </button>
-                <button className="va-btn" onClick={togglePublic}>
-                  {selected.is_public ? '🔒 Make private' : '🌐 Make public'}
+
+              <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                <LinkIcon /> Copy link
+              </button>
+
+              <div className="archive-panel-secondary-row">
+                <button className="btn btn-secondary" onClick={copyEmbed}>
+                  <CodeIcon /> Embed
                 </button>
                 {selected.external_url ? (
-                  <a className="va-btn" href={selected.external_url} target="_blank" rel="noopener noreferrer">
-                    ↗ Open original
+                  <a className="btn btn-secondary" href={selected.external_url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLinkIcon /> Open original
                   </a>
                 ) : (
                   <a
-                    className="va-btn"
+                    className="btn btn-secondary"
                     href={selected.gif_url}
                     download={`${selected.name}.gif`}
                     onClick={() => recordUse(selected.id)}
                   >
-                    ⬇ Download
+                    <DownloadIcon /> Download
                   </a>
                 )}
-                <button className="va-btn danger" onClick={remove} disabled={deleting}>
-                  ✕ {deleting ? 'Deleting…' : 'Delete'}
-                </button>
+                {selected.video_id && (
+                  <Link className="btn btn-secondary" to={`/edit/${selected.video_id}`}>
+                    Remix
+                  </Link>
+                )}
               </div>
+
+              <div className="archive-settings-list">
+                <div className="archive-settings-row">
+                  <div>
+                    <p className="archive-settings-title">Public</p>
+                    <p className="archive-settings-help">Show in the Global Library</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={selected.is_public}
+                    aria-label="Public"
+                    className={`archive-switch ${selected.is_public ? 'on' : ''}`}
+                    onClick={togglePublic}
+                  >
+                    <span className="archive-switch-knob" />
+                  </button>
+                </div>
+                <div className="archive-settings-row">
+                  <div>
+                    <p className="archive-settings-title">One-off</p>
+                    <p className="archive-settings-help">Hide from search after use</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={selected.is_one_off}
+                    aria-label="One-off"
+                    className={`archive-switch ${selected.is_one_off ? 'on' : ''}`}
+                    onClick={toggleOneOff}
+                  >
+                    <span className="archive-switch-knob" />
+                  </button>
+                </div>
+              </div>
+
+              <button className="btn btn-danger" onClick={remove} disabled={deleting}>
+                <TrashIcon /> {deleting ? 'Deleting…' : 'Delete GIF'}
+              </button>
             </>
           )}
         </div>
       </div>
 
-      {toast.message && <p className="archive-toast">{toast.message}</p>}
+      {toast.message && (
+        <div className="archive-toast">
+          <CheckIcon size={16} />
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   )
 }

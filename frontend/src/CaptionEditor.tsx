@@ -1,5 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
+import {
+  AlignCenterIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
+  ArrowLeftIcon,
+  MinusIcon,
+  PauseIcon,
+  PlayheadIcon,
+  PlayIcon,
+  PlusIcon,
+  XIcon,
+} from './icons'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
@@ -74,10 +86,26 @@ const SWATCH_COLORS = ['#fff35c', '#00ff99', '#00ccff', '#ff6666', '#9933ff', '#
 // The live preview box is sized from the film-strip's frame dimensions
 // (see backend/src/scale.rs MAX_WIDTH) — the same scaled-down size the
 // export pipeline burns captions into — so caption font-size/position in
-// this preview matches the real export pixel-for-pixel, even though the
-// preview itself plays the actual <video> (full source resolution,
-// CSS-scaled to fit the box) rather than a cropped film-strip frame.
-const PREVIEW_SCALE = 1
+// this preview matches the real export pixel-for-pixel (once scaled back
+// down by the current zoom — see the ZoomMode/scale logic below), even
+// though the preview itself plays the actual <video> (full source
+// resolution, CSS-scaled to fit the box) rather than a cropped film-strip
+// frame.
+type ZoomMode = '1x' | '2x' | 'fit'
+// Below this output width, starting at 1x would make the preview too
+// small to work with, so the default zoom is 'fit' instead (the largest
+// whole-number scale — never a fraction, so pixels stay crisp — that fits
+// the stage) rather than the usual 1x.
+const TINY_OUTPUT_WIDTH = 320
+// The inspector's own fixed width (.editor-inspector in index.css) and
+// the preview stage's padding on each side — subtracted from the
+// viewport to estimate how much room 'fit' actually has to work with.
+const INSPECTOR_WIDTH = 400
+const STAGE_PADDING = 32
+// The transport row (play button + timecode + zoom control) has its own
+// floor so it doesn't cramp at 1x on a small output, even though it
+// otherwise matches the preview's width.
+const MIN_TRANSPORT_WIDTH = 480
 
 interface Props {
   video: Video
@@ -90,9 +118,19 @@ interface Props {
 }
 
 /** Mirrors the backend's optional ASS outline: `null` renders no border. */
-function outlineTextShadow(outlineColor: string | null): string {
+function outlineTextShadow(outlineColor: string | null, scale: number): string {
   if (!outlineColor) return 'none'
-  return `2px 2px 0 ${outlineColor}, -2px -2px 0 ${outlineColor}, 2px -2px 0 ${outlineColor}, -2px 2px 0 ${outlineColor}`
+  const o = 2 * scale
+  return `${o}px ${o}px 0 ${outlineColor}, -${o}px -${o}px 0 ${outlineColor}, ${o}px -${o}px 0 ${outlineColor}, -${o}px ${o}px 0 ${outlineColor}`
+}
+
+/** `0:05.18` — minutes:seconds.hundredths, design brief §6's transport
+ * timecode format. */
+function formatTimecode(seconds: number): string {
+  const clamped = Math.max(0, seconds)
+  const minutes = Math.floor(clamped / 60)
+  const rest = (clamped - minutes * 60).toFixed(2).padStart(5, '0')
+  return `${minutes}:${rest}`
 }
 
 /** SPEC.md §14: quick-select swatches shown alongside a native color picker. */
@@ -212,6 +250,26 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
   // null when nothing's snapped — drives the vertical guide line.
   const [snapGuideX, setSnapGuideX] = useState<number | null>(null)
+  // The preview's own zoom (1x/2x/Fit — not to be confused with
+  // `zoomIndex` above, which zooms the *timeline*). Defaults to 'fit' for
+  // a tiny output so it isn't rendered at an unusably small size; a
+  // normal-sized output starts at a true 1x "actual size" preview.
+  const [previewZoomMode, setPreviewZoomMode] = useState<ZoomMode>(() =>
+    outputWidth < TINY_OUTPUT_WIDTH ? 'fit' : '1x',
+  )
+  // Tracks viewport width only to estimate how much room 'fit' has to
+  // work with (see previewFitScale below) — not for any layout that
+  // actually depends on exact reflow.
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerWidth,
+  )
+  useEffect(() => {
+    function onResize() {
+      setViewportWidth(window.innerWidth)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const previewRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -573,8 +631,20 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   }
 
   const activeCaptions = captions.filter((c) => currentTime >= c.startTime && currentTime <= c.endTime)
-  const previewWidth = outputWidth * PREVIEW_SCALE
-  const previewHeight = outputHeight * PREVIEW_SCALE
+
+  // 'fit': the largest whole-number scale that still fits the stage —
+  // never a fraction, so a pixel in the preview always maps to a whole
+  // number of real output pixels. viewportWidth is only ever an estimate
+  // of available room (see the state comment above), so this always
+  // floors to at least 1x rather than ever going to 0 or negative.
+  const previewFitScale = Math.max(
+    1,
+    Math.floor((viewportWidth - INSPECTOR_WIDTH - STAGE_PADDING * 2) / Math.max(1, outputWidth)),
+  )
+  const previewScale = previewZoomMode === '1x' ? 1 : previewZoomMode === '2x' ? 2 : previewFitScale
+  const previewWidth = outputWidth * previewScale
+  const previewHeight = outputHeight * previewScale
+  const transportWidth = Math.max(previewWidth, MIN_TRANSPORT_WIDTH)
 
   // A fixed strip height, independent of zoom/frame count, so frames stay
   // clearly visible rather than shrinking (and letterboxing inside a
@@ -698,182 +768,337 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     }
   }
 
+  const trimmedDuration = gifRange.end - gifRange.start
+
   return (
-    <div className="page">
-      <button className="back-link" onClick={onBack}>
-        ← back to library
-      </button>
-      <h1>{video.original_filename}</h1>
-      <p className="subtitle">
-        {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
-      </p>
-
-      <div className="va-top">
-        <div className="preview-col">
-        <div className="preview-frame" ref={previewRef} style={{ width: previewWidth, height: previewHeight }}>
-          <video
-            ref={videoRef}
-            src={clipUrl}
-            className="preview-video"
-            preload="auto"
-            onTimeUpdate={handleVideoTimeUpdate}
-            onEnded={handleVideoEnded}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-          />
-          {activeCaptions.map((c) => (
-            <div
-              key={c.id}
-              className={`preview-caption ${selectedId === c.id ? 'selected' : ''}`}
-              onMouseDown={(e) => startPositionDrag(e, c)}
-              style={{
-                left: `${c.x * 100}%`,
-                top: `${c.y * 100}%`,
-                width: `${c.width * 100}%`,
-                fontFamily: c.fontFamily,
-                fontSize: c.fontSize,
-                lineHeight: c.lineHeight,
-                color: c.color,
-                textAlign: c.align,
-                textShadow: outlineTextShadow(c.outlineColor),
-              }}
-            >
-              {c.text}
-              {selectedId === c.id && (
-                <>
-                  <div className="preview-caption-handle left" onMouseDown={(e) => startWidthDrag(e, c, 'left')} />
-                  <div className="preview-caption-handle right" onMouseDown={(e) => startWidthDrag(e, c, 'right')} />
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="preview-controls">
-          <button className="va-btn" onClick={togglePlayback}>
-            {isPlaying ? '⏸ Pause' : '▶ Play'}
+    <div className="editor-shell">
+      <header className="editor-header">
+        <div className="editor-header-left">
+          <button className="btn btn-secondary editor-back-btn" onClick={onBack} aria-label="Back to library">
+            <ArrowLeftIcon />
           </button>
-          <span className="va-hint">{currentTime.toFixed(2)}s</span>
+          <span className="editor-brand">Gifiac</span>
+          <div className="editor-divider" />
+          <div className="editor-title-block">
+            <input
+              className="editor-name-input"
+              placeholder="Untitled GIF"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              aria-label="GIF name"
+            />
+            <p className="editor-source-info">
+              {video.original_filename} · {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
+            </p>
+          </div>
         </div>
+        <div className="editor-header-right">
+          {/* SPEC.md §12: a video with no template gets a toggle that
+              marks the *next* export as also saving a template; a video
+              already working from one gets a standalone "Overwrite
+              template" action instead, independent of exporting. */}
+          {!hasTemplate ? (
+            <button
+              type="button"
+              className="btn btn-secondary editor-template-btn"
+              aria-pressed={createTemplate}
+              onClick={() => setCreateTemplate((v) => !v)}
+            >
+              Save as template
+            </button>
+          ) : (
+            <button className="btn btn-secondary" onClick={overwriteTemplate} disabled={templateSaving}>
+              {templateSaving ? 'Saving…' : 'Overwrite template'}
+            </button>
+          )}
+          <button
+            className="btn btn-primary"
+            aria-label="Make GIF"
+            disabled={!name.trim() || submitting}
+            onClick={makeGif}
+          >
+            {submitting ? (
+              'Making…'
+            ) : (
+              <>
+                Make GIF
+                <span className="editor-make-gif-duration">{trimmedDuration.toFixed(1)}s</span>
+              </>
+            )}
+          </button>
+        </div>
+      </header>
 
-        {/* Off-screen twins of every caption's box, purely for
-            measureWrappedLines to read real wrap points from at export
-            time — see the measureRefs comment. Not `display: none`;
-            layout (and therefore wrapping) only happens for elements the
-            browser actually lays out. */}
-        <div aria-hidden="true" style={{ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}>
-          {captions.map((c) => (
-            <div key={c.id} style={{ width: c.width * previewWidth }}>
+      {exportProgress && (
+        <div className="editor-toast">
+          {exportProgress.stage} — {exportProgress.percent}%
+        </div>
+      )}
+      {exportError && <div className="editor-toast editor-toast-error">{exportError}</div>}
+      {templateError && <div className="editor-toast editor-toast-error">{templateError}</div>}
+      {templateSaved && <div className="editor-toast">Template saved.</div>}
+      {completedGif && (
+        <div className="editor-toast">
+          "{completedGif.name}" is ready ({completedGif.width}×{completedGif.height}).
+        </div>
+      )}
+
+      <div className="editor-main">
+        <div className="editor-preview-stage">
+          <div className="preview-frame" ref={previewRef} style={{ width: previewWidth, height: previewHeight }}>
+            <video
+              ref={videoRef}
+              src={clipUrl}
+              className="preview-video"
+              preload="auto"
+              onTimeUpdate={handleVideoTimeUpdate}
+              onEnded={handleVideoEnded}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+            />
+            {activeCaptions.map((c) => (
               <div
-                ref={(el) => {
-                  measureRefs.current[c.id] = el
-                }}
-                className="preview-caption-measure"
+                key={c.id}
+                className={`preview-caption ${selectedId === c.id ? 'selected' : ''}`}
+                onMouseDown={(e) => startPositionDrag(e, c)}
                 style={{
-                  width: '100%',
+                  left: `${c.x * 100}%`,
+                  top: `${c.y * 100}%`,
+                  width: `${c.width * 100}%`,
                   fontFamily: c.fontFamily,
-                  fontSize: c.fontSize,
+                  // c.fontSize is in *output* pixels (what the backend
+                  // actually burns in) — scaled up here by the preview's
+                  // current zoom so it reads correctly on screen at 1x,
+                  // 2x, or Fit alike.
+                  fontSize: c.fontSize * previewScale,
+                  lineHeight: c.lineHeight,
+                  color: c.color,
+                  textAlign: c.align,
+                  textShadow: outlineTextShadow(c.outlineColor, previewScale),
                 }}
               >
                 {c.text}
+                {selectedId === c.id && (
+                  <>
+                    <div className="preview-caption-handle left" onMouseDown={(e) => startWidthDrag(e, c, 'left')} />
+                    <div className="preview-caption-handle right" onMouseDown={(e) => startWidthDrag(e, c, 'right')} />
+                  </>
+                )}
               </div>
+            ))}
+          </div>
+
+          <div className="editor-transport" style={{ width: transportWidth }}>
+            <button
+              className="editor-play-btn"
+              onClick={togglePlayback}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            </button>
+            <span className="editor-timecode">
+              <span className="editor-timecode-current">{formatTimecode(currentTime)}</span>
+              <span className="editor-timecode-total"> / {formatTimecode(duration)}</span>
+            </span>
+            <div className="editor-preview-zoom">
+              <div className="editor-segmented" role="group" aria-label="Preview zoom">
+                <button
+                  type="button"
+                  className={`editor-segmented-btn ${previewZoomMode === '1x' ? 'active' : ''}`}
+                  onClick={() => setPreviewZoomMode('1x')}
+                >
+                  1×
+                </button>
+                <button
+                  type="button"
+                  className={`editor-segmented-btn ${previewZoomMode === '2x' ? 'active' : ''}`}
+                  onClick={() => setPreviewZoomMode('2x')}
+                >
+                  2×
+                </button>
+                <button
+                  type="button"
+                  className={`editor-segmented-btn ${previewZoomMode === 'fit' ? 'active' : ''}`}
+                  onClick={() => setPreviewZoomMode('fit')}
+                >
+                  Fit
+                </button>
+              </div>
+              {previewScale === 1 && <span className="field-label editor-preview-zoom-hint">Actual size</span>}
             </div>
-          ))}
-        </div>
+          </div>
+
+          {/* Off-screen twins of every caption's box, purely for
+              measureWrappedLines to read real wrap points from at export
+              time — see the measureRefs comment. Not `display: none`;
+              layout (and therefore wrapping) only happens for elements the
+              browser actually lays out. Sized from the real output width,
+              not `previewWidth` — this has to measure the same wrap
+              points the backend will actually burn in regardless of
+              whatever zoom the preview happens to be showing. */}
+          <div aria-hidden="true" style={{ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}>
+            {captions.map((c) => (
+              <div key={c.id} style={{ width: c.width * outputWidth }}>
+                <div
+                  ref={(el) => {
+                    measureRefs.current[c.id] = el
+                  }}
+                  className="preview-caption-measure"
+                  style={{
+                    width: '100%',
+                    fontFamily: c.fontFamily,
+                    fontSize: c.fontSize,
+                  }}
+                >
+                  {c.text}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="va-style-panel">
-          {selected ? (
-            <>
-              <textarea
-                aria-label="Caption text"
-                value={selected.text}
-                onChange={(e) => patchStyle({ text: e.target.value })}
-              />
-              <div className="va-style-row">
-                <span className="va-hint">
+        <aside className="editor-inspector">
+          <div className="editor-inspector-section">
+            <div className="editor-inspector-section-header">
+              <span className="section-label">Captions</span>
+              <button
+                type="button"
+                className="btn btn-secondary editor-icon-btn-sm"
+                aria-label="Add caption"
+                onClick={addCaption}
+              >
+                <PlusIcon size={14} />
+              </button>
+            </div>
+            {selected && (
+              <>
+                <textarea
+                  className="editor-caption-textarea"
+                  aria-label="Caption text"
+                  value={selected.text}
+                  onChange={(e) => patchStyle({ text: e.target.value })}
+                />
+                <div className="editor-caption-io-row">
+                  <div className="editor-caption-io">
+                    <span className="field-label">Caption in</span>
+                    <button
+                      type="button"
+                      className="editor-io-btn"
+                      aria-label="Set start to playhead"
+                      onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}
+                    >
+                      <PlayheadIcon />
+                      {selected.startTime.toFixed(2)}s
+                    </button>
+                  </div>
+                  <div className="editor-caption-io">
+                    <span className="field-label">Caption out</span>
+                    <button
+                      type="button"
+                      className="editor-io-btn"
+                      aria-label="Set end to playhead"
+                      onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}
+                    >
+                      <PlayheadIcon />
+                      {selected.endTime.toFixed(2)}s
+                    </button>
+                  </div>
+                </div>
+                {/* Kept as plain text alongside the in/out buttons above —
+                    several tests assert on this exact "X.XXs – Y.YYs"
+                    range text, so it stays even though the buttons now
+                    also show each edge's time. */}
+                <p className="va-hint">
                   {selected.startTime.toFixed(2)}s – {selected.endTime.toFixed(2)}s
-                </span>
-                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'start')}>
-                  Set start to playhead
-                </button>
-                <button className="va-btn" onClick={() => setCaptionEdgeToPlayhead(selected.id, 'end')}>
-                  Set end to playhead
-                </button>
-              </div>
-              <div className="va-style-row">
-                <select
-                  aria-label="Font family"
-                  value={selected.fontFamily}
-                  onChange={(e) => patchStyle({ fontFamily: e.target.value })}
-                >
-                  {FONTS.map((f) => (
-                    <option key={f} value={f}>
-                      {f.split(',')[0]}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  aria-label="Font size"
-                  type="range"
-                  min={12}
-                  max={64}
-                  value={selected.fontSize}
-                  onChange={(e) => patchStyle({ fontSize: Number(e.target.value) })}
-                />
-                <span className="va-hint">{selected.fontSize}px</span>
-              </div>
-              <div className="va-style-row">
-                <label className="va-hint" htmlFor="line-height-input">
-                  Line height
-                </label>
-                <input
-                  id="line-height-input"
-                  aria-label="Line height"
-                  type="range"
-                  min={MIN_LINE_HEIGHT}
-                  max={MAX_LINE_HEIGHT}
-                  step={0.05}
-                  value={selected.lineHeight}
-                  onChange={(e) => patchStyle({ lineHeight: Number(e.target.value) })}
-                />
-                <span className="va-hint">{selected.lineHeight.toFixed(2)}×</span>
-              </div>
-              <div className="va-style-row">
-                <input
-                  aria-label="Caption color"
-                  type="color"
-                  value={selected.color}
-                  onChange={(e) => patchStyle({ color: e.target.value })}
-                />
-                <ColorSwatches label="Text" value={selected.color} onSelect={(color) => patchStyle({ color })} />
-                {(['left', 'center', 'right'] as const).map((a) => (
-                  <button
-                    key={a}
-                    className={`va-align-btn ${selected.align === a ? 'active' : ''}`}
-                    onClick={() => patchStyle({ align: a })}
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="editor-inspector-section">
+            <span className="section-label">Style</span>
+            {selected ? (
+              <>
+                <div className="editor-style-row">
+                  <select
+                    aria-label="Font family"
+                    value={selected.fontFamily}
+                    onChange={(e) => patchStyle({ fontFamily: e.target.value })}
                   >
-                    {a}
-                  </button>
-                ))}
-              </div>
-              <div className="va-style-row">
-                <label className="va-hint">
+                    {FONTS.map((f) => (
+                      <option key={f} value={f}>
+                        {f.split(',')[0]}
+                      </option>
+                    ))}
+                  </select>
                   <input
-                    type="checkbox"
-                    checked={selected.outlineColor !== null}
-                    onChange={(e) => patchStyle({ outlineColor: e.target.checked ? (selected.outlineColor ?? '#000000') : null })}
-                  />{' '}
-                  Outline
-                </label>
+                    aria-label="Font size"
+                    type="range"
+                    min={12}
+                    max={64}
+                    value={selected.fontSize}
+                    onChange={(e) => patchStyle({ fontSize: Number(e.target.value) })}
+                  />
+                  <span className="editor-field-value">{selected.fontSize}px</span>
+                </div>
+
+                <div className="editor-field-row">
+                  <label className="field-label" htmlFor="line-height-input">
+                    Line height
+                  </label>
+                  <input
+                    id="line-height-input"
+                    aria-label="Line height"
+                    type="range"
+                    min={MIN_LINE_HEIGHT}
+                    max={MAX_LINE_HEIGHT}
+                    step={0.05}
+                    value={selected.lineHeight}
+                    onChange={(e) => patchStyle({ lineHeight: Number(e.target.value) })}
+                  />
+                  <span className="editor-field-value">{selected.lineHeight.toFixed(2)}×</span>
+                </div>
+
+                <div className="editor-field-row">
+                  <span className="field-label">Text colour</span>
+                  <input
+                    aria-label="Caption color"
+                    type="color"
+                    value={selected.color}
+                    onChange={(e) => patchStyle({ color: e.target.value })}
+                  />
+                </div>
+                <ColorSwatches label="Text" value={selected.color} onSelect={(color) => patchStyle({ color })} />
+
+                <div className="editor-field-row">
+                  <label className="field-label" htmlFor="outline-switch">
+                    Outline
+                  </label>
+                  <button
+                    id="outline-switch"
+                    type="button"
+                    role="switch"
+                    aria-checked={selected.outlineColor !== null}
+                    aria-label="Outline"
+                    className={`archive-switch ${selected.outlineColor !== null ? 'on' : ''}`}
+                    onClick={() =>
+                      patchStyle({ outlineColor: selected.outlineColor !== null ? null : (selected.outlineColor ?? '#000000') })
+                    }
+                  >
+                    <span className="archive-switch-knob" />
+                  </button>
+                </div>
                 {selected.outlineColor !== null && (
                   <>
-                    <input
-                      aria-label="Outline color"
-                      type="color"
-                      value={selected.outlineColor}
-                      onChange={(e) => patchStyle({ outlineColor: e.target.value })}
-                    />
+                    <div className="editor-field-row">
+                      <span className="field-label">Outline colour</span>
+                      <input
+                        aria-label="Outline color"
+                        type="color"
+                        value={selected.outlineColor}
+                        onChange={(e) => patchStyle({ outlineColor: e.target.value })}
+                      />
+                    </div>
                     <ColorSwatches
                       label="Outline"
                       value={selected.outlineColor}
@@ -881,161 +1106,168 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                     />
                   </>
                 )}
+
+                <div className="editor-field-row">
+                  <span className="field-label">Alignment</span>
+                  <div className="editor-segmented" role="group" aria-label="Alignment">
+                    {(
+                      [
+                        ['left', AlignLeftIcon],
+                        ['center', AlignCenterIcon],
+                        ['right', AlignRightIcon],
+                      ] as const
+                    ).map(([a, Icon]) => (
+                      <button
+                        key={a}
+                        type="button"
+                        className={`editor-segmented-btn ${selected.align === a ? 'active' : ''}`}
+                        aria-label={`Align ${a}`}
+                        onClick={() => patchStyle({ align: a })}
+                      >
+                        <Icon size={15} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="editor-apply-all">
+                  <input type="checkbox" checked={applyToAll} onChange={(e) => setApplyToAll(e.target.checked)} />
+                  Apply this style to every caption
+                </label>
+              </>
+            ) : (
+              <div className="editor-inspector-empty">
+                <p className="va-hint">Select a caption on the timeline, or add one.</p>
               </div>
-              <label className="va-hint">
-                <input type="checkbox" checked={applyToAll} onChange={(e) => setApplyToAll(e.target.checked)} /> All
-                tracks
-              </label>
-            </>
-          ) : (
-            <span className="va-hint">Select a caption track to edit its style, or add one below.</span>
-          )}
-        </div>
+            )}
+          </div>
+        </aside>
       </div>
 
       <div className="va-timeline">
-        <div className="va-timeline-scroll" ref={timelineScrollRef}>
-          <div className="va-timeline-tracks" style={{ width: timelineWidth + 40 }}>
-          {snapGuideX !== null && <div className="va-snap-guide" style={{ left: snapGuideX }} />}
-          {captions.map((c) => (
-            <div key={c.id} className="va-track-row" style={{ width: timelineWidth }}>
-              <div
-                className={`va-track-pill ${selectedId === c.id ? 'selected' : ''}`}
-                style={{
-                  left: timeToX(c.startTime, duration, timelineWidth),
-                  width: Math.max(4, timeToX(c.endTime, duration, timelineWidth) - timeToX(c.startTime, duration, timelineWidth)),
-                }}
-                onMouseDown={(e) => startPillDrag(e, c.id, 'move')}
-                onClick={() => setSelectedId(c.id)}
-              >
-                {c.text}
-                <div className="va-track-handle left" onMouseDown={(e) => startPillDrag(e, c.id, 'left')} />
-                <div className="va-track-handle right" onMouseDown={(e) => startPillDrag(e, c.id, 'right')} />
-              </div>
-              <button className="va-track-delete" aria-label={`Delete caption "${c.text}"`} onClick={() => deleteCaption(c.id)}>
-                ✕
-              </button>
-            </div>
-          ))}
-
-          <div className="va-filmstrip-wrap" style={{ height: FILMSTRIP_HEIGHT + PLAYHEAD_ADD_CLEARANCE }}>
-            <div
-              className="va-filmstrip"
-              style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }}
-              onClick={scrubTo}
-            >
-              {filmstrip &&
-                frameIndices.map((frameIndex) => (
-                  <div
-                    key={frameIndex}
-                    className="va-frame"
-                    style={{
-                      width: filmstripFrameWidth,
-                      height: FILMSTRIP_HEIGHT,
-                      ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, filmstripScale),
-                    }}
-                  />
-                ))}
-              <div
-                className="va-range-highlight"
-                style={{
-                  left: timeToX(gifRange.start, duration, timelineWidth),
-                  width: timeToX(gifRange.end, duration, timelineWidth) - timeToX(gifRange.start, duration, timelineWidth),
-                }}
-              >
-                <div className="va-range-handle" style={{ left: -5 }} onMouseDown={(e) => startRangeDrag(e, 'start')} />
-                <div className="va-range-handle" style={{ right: -5 }} onMouseDown={(e) => startRangeDrag(e, 'end')} />
-              </div>
-              <div
-                className="va-playhead"
-                style={{ left: timeToX(currentTime, duration, timelineWidth) }}
-                onMouseDown={startPlayheadDrag}
-              >
-                <div className="va-playhead-grip" />
-              </div>
-            </div>
-            {/* SPEC.md §14: rendered as a sibling of .va-filmstrip (which
-                clips overflow) rather than nested inside it, so it's never
-                clipped — always visible and following the playhead,
-                including once you've scrolled/zoomed to find a spot. */}
+        <div className="editor-timeline-toolbar">
+          <span className="section-label">Timeline</span>
+          <div className="editor-trim-pill">
+            <span className="editor-trim-swatch" />
+            Trim {gifRange.start.toFixed(2)}s → {gifRange.end.toFixed(2)}s · {trimmedDuration.toFixed(2)}s
+          </div>
+          <button className="btn btn-secondary" onClick={setRangeStartToPlayhead}>
+            Trim start
+          </button>
+          <button className="btn btn-secondary" onClick={setRangeEndToPlayhead}>
+            Trim end
+          </button>
+          <div className="editor-zoom-controls">
             <button
               type="button"
-              className="va-playhead-add"
-              style={{ left: timeToX(currentTime, duration, timelineWidth), top: FILMSTRIP_HEIGHT + 4 }}
-              aria-label="Add caption at playhead"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={addCaption}
-            >
-              +
-            </button>
-          </div>
-          </div>
-        </div>
-
-        <div className="va-controls">
-            <button
-              className="va-btn"
+              className="editor-zoom-btn"
+              aria-label="Zoom out"
               disabled={zoomIndex === 0}
               onClick={() => setZoomIndex((z) => Math.max(0, z - 1))}
             >
-              🔍−
+              <MinusIcon size={14} />
             </button>
             <button
-              className="va-btn"
+              type="button"
+              className="editor-zoom-btn"
+              aria-label="Zoom in"
               disabled={zoomIndex === ZOOM_LEVELS.length - 1}
               onClick={() => setZoomIndex((z) => Math.min(ZOOM_LEVELS.length - 1, z + 1))}
             >
-              🔍+
+              <PlusIcon size={14} />
             </button>
-            <span className="va-hint">
-              GIF range: {gifRange.start.toFixed(2)}s – {gifRange.end.toFixed(2)}s ({(gifRange.end - gifRange.start).toFixed(2)}s)
-            </span>
-            <button className="va-btn" onClick={setRangeStartToPlayhead}>
-              Set start
-            </button>
-            <button className="va-btn" onClick={setRangeEndToPlayhead}>
-              Set end
-            </button>
-            {/* SPEC.md §12: a video with no template gets a "Create
-                template" checkbox on the Make GIF form; a video already
-                working from one gets a standalone "Overwrite template"
-                button instead, independent of exporting. */}
-            {!hasTemplate ? (
-              <label className="va-hint">
-                <input type="checkbox" checked={createTemplate} onChange={(e) => setCreateTemplate(e.target.checked)} />{' '}
-                Create template
-              </label>
-            ) : (
-              <button className="va-btn" onClick={overwriteTemplate} disabled={templateSaving}>
-                {templateSaving ? 'Saving…' : 'Overwrite template'}
+          </div>
+        </div>
+
+        <div className="va-timeline-scroll" ref={timelineScrollRef}>
+          <div className="va-timeline-tracks" style={{ width: timelineWidth + 40 }}>
+            {snapGuideX !== null && <div className="va-snap-guide" style={{ left: snapGuideX }} />}
+            {captions.map((c) => (
+              <div key={c.id} className="va-track-row" style={{ width: timelineWidth }}>
+                <div
+                  className={`va-track-pill ${selectedId === c.id ? 'selected' : ''}`}
+                  style={{
+                    left: timeToX(c.startTime, duration, timelineWidth),
+                    width: Math.max(
+                      4,
+                      timeToX(c.endTime, duration, timelineWidth) - timeToX(c.startTime, duration, timelineWidth),
+                    ),
+                  }}
+                  onMouseDown={(e) => startPillDrag(e, c.id, 'move')}
+                  onClick={() => setSelectedId(c.id)}
+                >
+                  {c.text}
+                  <div className="va-track-handle left" onMouseDown={(e) => startPillDrag(e, c.id, 'left')} />
+                  <div className="va-track-handle right" onMouseDown={(e) => startPillDrag(e, c.id, 'right')} />
+                </div>
+                <button
+                  className="va-track-delete"
+                  aria-label={`Delete caption "${c.text}"`}
+                  onClick={() => deleteCaption(c.id)}
+                >
+                  <XIcon size={11} />
+                </button>
+              </div>
+            ))}
+
+            <div className="va-filmstrip-wrap" style={{ height: FILMSTRIP_HEIGHT + PLAYHEAD_ADD_CLEARANCE }}>
+              <div className="va-filmstrip" style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }} onClick={scrubTo}>
+                {filmstrip &&
+                  frameIndices.map((frameIndex) => (
+                    <div
+                      key={frameIndex}
+                      className="va-frame"
+                      style={{
+                        width: filmstripFrameWidth,
+                        height: FILMSTRIP_HEIGHT,
+                        ...spriteBackgroundStyle(frameIndex, filmstrip, filmstrip.imageUrl, filmstripScale),
+                      }}
+                    />
+                  ))}
+                <div className="va-range-dim" style={{ left: 0, width: timeToX(gifRange.start, duration, timelineWidth) }} />
+                <div
+                  className="va-range-dim"
+                  style={{
+                    left: timeToX(gifRange.end, duration, timelineWidth),
+                    width: timelineWidth - timeToX(gifRange.end, duration, timelineWidth),
+                  }}
+                />
+                <div
+                  className="va-range-highlight"
+                  style={{
+                    left: timeToX(gifRange.start, duration, timelineWidth),
+                    width: timeToX(gifRange.end, duration, timelineWidth) - timeToX(gifRange.start, duration, timelineWidth),
+                  }}
+                >
+                  <div className="va-range-handle" style={{ left: -5 }} onMouseDown={(e) => startRangeDrag(e, 'start')} />
+                  <div className="va-range-handle" style={{ right: -5 }} onMouseDown={(e) => startRangeDrag(e, 'end')} />
+                </div>
+                <div
+                  className="va-playhead"
+                  style={{ left: timeToX(currentTime, duration, timelineWidth) }}
+                  onMouseDown={startPlayheadDrag}
+                >
+                  <div className="va-playhead-grip" />
+                </div>
+              </div>
+              {/* SPEC.md §14: rendered as a sibling of .va-filmstrip (which
+                  clips overflow) rather than nested inside it, so it's never
+                  clipped — always visible and following the playhead,
+                  including once you've scrolled/zoomed to find a spot. */}
+              <button
+                type="button"
+                className="va-playhead-add"
+                style={{ left: timeToX(currentTime, duration, timelineWidth), top: FILMSTRIP_HEIGHT + 4 }}
+                aria-label="Add caption at playhead"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={addCaption}
+              >
+                +
               </button>
-            )}
-            <input
-              className="va-name-input"
-              placeholder="Name this GIF…"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              aria-label="GIF name"
-            />
-            <button className="va-make-gif" disabled={!name.trim() || submitting} onClick={makeGif}>
-              {submitting ? 'Making…' : 'Make GIF'}
-            </button>
+            </div>
+          </div>
         </div>
       </div>
-
-      {exportProgress && (
-        <p className="va-hint">
-          {exportProgress.stage} — {exportProgress.percent}%
-        </p>
-      )}
-      {exportError && <p className="export-error">{exportError}</p>}
-      {templateError && <p className="export-error">{templateError}</p>}
-      {templateSaved && <p className="export-success">Template saved.</p>}
-      {completedGif && (
-        <p className="export-success">
-          "{completedGif.name}" is ready ({completedGif.width}×{completedGif.height}).
-        </p>
-      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { setHandle } from './api'
+import { AuthShell } from './AuthShell'
 import type { CurrentUser } from './types'
 
 interface HandlePickerProps {
@@ -30,24 +31,25 @@ export function HandlePicker({ suggestedHandle, onHandleSet }: HandlePickerProps
   }
 
   return (
-    <div className="page">
-      <h1>Choose your handle</h1>
-      <p className="va-hint">
+    <AuthShell>
+      <h1 className="auth-heading">Choose your handle</h1>
+      <p className="auth-hint">
         This is permanent and can't be changed later. It's how others will find your public GIFs and templates.
       </p>
-      <form onSubmit={submit}>
+      <form className="auth-form" onSubmit={submit}>
         <input
+          className="auth-input"
           aria-label="Handle"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           disabled={saving}
           autoFocus
         />
-        <button type="submit" className="va-btn" disabled={saving || value.trim().length === 0}>
+        <button type="submit" className="btn btn-primary" disabled={saving || value.trim().length === 0}>
           {saving ? 'Saving…' : 'Confirm handle'}
         </button>
       </form>
       {error && <p className="export-error">{error}</p>}
-    </div>
+    </AuthShell>
   )
 }

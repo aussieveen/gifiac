@@ -1,7 +1,26 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getProfile } from './api'
+import { ArrowLeftIcon } from './icons'
 import type { Profile } from './types'
+
+/** A public profile has no persistent nav of its own (SPEC-CLOUD.md §9 —
+ * it deliberately replaces the whole page rather than nesting inside
+ * App's shell, and it's reachable while signed out), but still carries
+ * the wordmark and a real button-styled back link so it doesn't look
+ * like a different, unbranded app to someone arriving from a shared
+ * link. */
+function ProfileTopBar() {
+  return (
+    <div className="profile-topbar">
+      <span className="app-header-brand">Gifiac</span>
+      <Link className="btn btn-secondary" to="/">
+        <ArrowLeftIcon size={16} />
+        Back
+      </Link>
+    </div>
+  )
+}
 
 // SPEC-CLOUD.md §5: a public profile page — no sign-in required to view
 // it. Only shows public gifs for now; templates join once they're
@@ -43,9 +62,7 @@ export function ProfilePage() {
   if (loading) {
     return (
       <div className="page">
-        <Link className="back-link" to="/">
-          ← Back
-        </Link>
+        <ProfileTopBar />
         <p className="va-hint">Loading…</p>
       </div>
     )
@@ -54,9 +71,7 @@ export function ProfilePage() {
   if (notFound || !profile) {
     return (
       <div className="page">
-        <Link className="back-link" to="/">
-          ← Back
-        </Link>
+        <ProfileTopBar />
         <p className="va-hint">No such user.</p>
       </div>
     )
@@ -64,9 +79,7 @@ export function ProfilePage() {
 
   return (
     <div className="page">
-      <Link className="back-link" to="/">
-        ← Back
-      </Link>
+      <ProfileTopBar />
       <div className="profile-header">
         {profile.avatarUrl && (
           <img src={profile.avatarUrl} alt={`${profile.handle}'s avatar`} className="profile-avatar" />

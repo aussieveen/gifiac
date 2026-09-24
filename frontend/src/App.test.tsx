@@ -165,7 +165,7 @@ describe('App', () => {
     renderApp()
     await screen.findByText(/no gifs yet/i)
 
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
 
     await screen.findByText('New GIF', { selector: 'h1' })
   })
@@ -179,11 +179,16 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
-    expect(await screen.findByText('clip.mp4')).toBeInTheDocument()
+    expect(await screen.findByText(/clip\.mp4/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
+    // The editor renders its own full header (back button, wordmark,
+    // title) — the global app header would just be a redundant second one
+    // stacked above it, so App.tsx skips it for this route.
+    expect(screen.queryByRole('link', { name: 'My Library' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /back to library/i })).toBeInTheDocument()
   })
 
   it('shows an error and lets you go back if the film-strip fails to load', async () => {
@@ -195,7 +200,7 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
 
     await screen.findByText(/boom/)
@@ -216,9 +221,9 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
-    await screen.findByText('clip.mp4')
+    await screen.findByText(/clip\.mp4/)
 
     await user.click(screen.getByRole('button', { name: /back to library/i }))
     await user.click(await screen.findByRole('button', { name: /^other\.mp4/i }))
@@ -236,7 +241,7 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
     await screen.findByText('New GIF', { selector: 'h1' })
 
     await user.click(screen.getByRole('link', { name: 'My Library' }))
@@ -245,16 +250,19 @@ describe('App', () => {
     expect(listGifs).toHaveBeenCalled()
   })
 
-  it('the avatar/handle button links to the current user\'s own profile', async () => {
+  it('the account pill opens a menu linking to the current user\'s own profile', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
     renderApp()
     await screen.findByText(/no gifs yet/i)
 
-    const profileLink = screen.getByRole('link', { name: loggedInUser.handle! })
+    await user.click(screen.getByRole('button', { name: loggedInUser.handle! }))
+
+    const profileLink = screen.getByRole('menuitem', { name: 'View profile' })
     expect(profileLink).toHaveAttribute('href', `/u/${loggedInUser.handle}`)
   })
 
-  it('sign out calls the logout API', async () => {
+  it('sign out (from the account menu) calls the logout API', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     // window.location.reload isn't implemented in jsdom — stub it so the
     // post-logout reload the button triggers doesn't error the test.
@@ -263,7 +271,8 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await user.click(screen.getByRole('button', { name: loggedInUser.handle! }))
+    await user.click(screen.getByRole('menuitem', { name: 'Sign out' }))
 
     await waitFor(() => expect(logout).toHaveBeenCalled())
   })
@@ -300,9 +309,9 @@ describe('App', () => {
 
     renderApp()
     await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    await user.click(screen.getByRole('link', { name: 'New GIF' }))
     await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
-    await screen.findByText('clip.mp4')
+    await screen.findByText(/clip\.mp4/)
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
     vi.mocked(listGifs).mockResolvedValue([createdGif])
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))

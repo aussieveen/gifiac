@@ -1,3 +1,13 @@
+/* Body/mono text, unlike Anton below, never gets burned into an export —
+   no pixel-parity requirement with the backend, so these are pulled in via
+   @fontsource (self-hosted the same way, just package-managed) rather than
+   vendored by hand. @import must lead the file — nothing, not even a rule
+   above it, is allowed to precede it. */
+@import '@fontsource/dm-sans/400.css';
+@import '@fontsource/dm-sans/500.css';
+@import '@fontsource/dm-sans/700.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
 /* Self-hosted so the caption preview renders the same glyphs the backend
    burns in via libass — relying on the OS to have "Anton" installed would
    make the preview's font (and therefore its text wrapping/sizing) silently
@@ -12,15 +22,149 @@
   font-display: block;
 }
 
+/* ---------- design tokens ---------- */
+
+:root {
+  --bg: #111114; /* page background */
+  --bg-sunken: #0c0c0f; /* editor preview stage */
+  --surface: #1a1b21; /* cards, panels, inputs on bg */
+  --surface-2: #16171c; /* editor side panel + timeline */
+  --raised: #22232b; /* badges, selected segmented item */
+  --border: #2c2d37;
+  --border-subtle: #22232b;
+  --text: #ededf0;
+  --text-muted: #b4b5c0;
+  --text-subtle: #8a8b98; /* labels, metadata — don't go darker for text */
+  --accent: #f5c518; /* primary actions + selection ONLY */
+  --accent-hover: #ffd84d;
+  --on-accent: #111114;
+  --trim: #5b9dff; /* GIF trim range — must differ from captions */
+  --trim-bg: #1d2a3d;
+  --trim-text: #9cc2ff;
+  --danger: #ff7b6b;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+
+  --font-display: 'Anton', Impact, sans-serif;
+  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  accent-color: var(--accent); /* fixes default-blue sliders/checkboxes */
+}
+
+/* ---------- type scale ---------- */
+
+.page-title,
+.page h1 {
+  font-family: var(--font-display);
+  font-size: 48px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  margin: 0 0 4px;
+  font-weight: normal; /* Anton is already the heaviest cut there is */
+}
+
+.section-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-subtle);
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+/* ---------- outlined "meme caption" text ---------- */
+
+.caption-text {
+  font-family: var(--font-display);
+  color: #fff;
+  -webkit-text-stroke: 0.07em #000;
+  paint-order: stroke fill;
+}
+
+/* ---------- buttons ---------- */
+/* Three variants (design brief §1): primary (one per screen), secondary,
+   and a borderless danger text button. Existing ad hoc button classes
+   (.va-btn, .app-nav-btn, etc.) are restyled screen-by-screen rather than
+   switched to these outright, so both coexist for now. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--radius);
+  font-family: var(--font-body);
+  font-size: 15px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  border: none;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-hero {
+  height: 56px;
+  font-size: 17px;
+  padding: 0 28px;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--text-subtle);
+}
+
+.btn-danger {
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  font-weight: 500;
+  height: auto;
+  padding: 0;
+}
+
+.btn-danger:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: #16171d;
-  color: #e8e8e8;
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
 }
 
 button {
@@ -29,9 +173,269 @@ button {
 }
 
 .page {
-  padding: 24px 24px 100px;
-  max-width: 1100px;
-  margin: 0 auto;
+  padding: 24px 48px 100px;
+}
+
+/* ---------- app header ---------- */
+/* Replaces .app-nav below for the authenticated shell — that older class
+   (and .app-nav-btn/.app-logo/.app-avatar) stays defined a little longer
+   since the signed-out screen still uses .app-nav-btn for its one link
+   until its own redesign pass. */
+
+.app-header {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 48px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.app-header-left {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 40px;
+}
+
+.app-header-brand {
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--accent);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.app-header-tabs {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 32px;
+}
+
+.app-header-tab {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-subtle);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+
+.app-header-tab:hover {
+  color: var(--text-muted);
+}
+
+.app-header-tab.active {
+  color: var(--text);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.account-pill:hover {
+  border-color: var(--text-subtle);
+}
+
+.account-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.account-handle {
+  font-weight: 500;
+}
+
+.account-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 20;
+}
+
+.account-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.account-dropdown-item:hover {
+  background: var(--raised);
+}
+
+/* ---------- auth shell (sign-in, session check, handle picker) ---------- */
+
+.auth-shell {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.auth-brand {
+  position: absolute;
+  top: 32px;
+  left: 48px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--accent);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.auth-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  padding: 100px 24px 48px;
+  text-align: center;
+}
+
+.auth-heading {
+  font-family: var(--font-display);
+  font-size: 40px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  margin: 0;
+}
+
+.auth-hint {
+  max-width: 420px;
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.auth-input {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 15px;
+  min-width: 260px;
+  text-align: center;
+}
+
+/* Decorative stack of three tiles above the sign-in headline. Solid muted
+   blocks for now (design brief §3 leaves the door open to real public
+   GIFs later). */
+.auth-tiles {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-tile {
+  width: 220px;
+  aspect-ratio: 16 / 10;
+  flex-shrink: 0;
+  border: 4px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-tile-left {
+  transform: rotate(-7deg);
+  margin-right: -32px;
+}
+
+.auth-tile-right {
+  transform: rotate(7deg);
+  margin-left: -32px;
+}
+
+.auth-tile-center {
+  position: relative;
+  z-index: 1;
+}
+
+.auth-tile-caption {
+  font-size: 30px;
+  text-align: center;
+  padding: 0 12px;
+}
+
+.auth-tile-caption-accent {
+  color: var(--accent);
+}
+
+.auth-headline {
+  font-size: 88px;
+  line-height: 0.95;
+  margin: 0;
+  max-width: 900px;
+}
+
+.auth-headline-accent {
+  color: var(--accent);
+}
+
+.auth-subline {
+  font-size: 18px;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 480px;
 }
 
 .app-nav {
@@ -51,10 +455,12 @@ button {
 }
 
 .app-logo {
-  font-weight: 700;
-  color: #f5c518;
+  font-family: var(--font-display);
+  font-weight: normal;
+  color: var(--accent);
   padding: 6px 10px 6px 0;
-  font-size: 14px;
+  font-size: 16px;
+  letter-spacing: 0.5px;
 }
 
 .app-nav-btn {
@@ -63,7 +469,7 @@ button {
   gap: 6px;
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--text-subtle);
   font-size: 13px;
   padding: 6px 10px;
   border-radius: 4px;
@@ -71,12 +477,12 @@ button {
 }
 
 .app-nav-btn:hover {
-  color: #ccc;
+  color: var(--text-muted);
 }
 
 .app-nav-btn.active {
-  background: #1e2028;
-  color: #f5c518;
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .app-avatar {
@@ -86,21 +492,15 @@ button {
   object-fit: cover;
 }
 
-.page h1 {
-  font-size: 18px;
-  color: #f5c518;
-  margin: 0 0 4px;
-}
-
 .page .subtitle {
-  color: #888;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: 14px;
   margin: 0 0 20px;
 }
 
 .va-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--text-subtle);
 }
 
 .admin-users-table {
@@ -111,15 +511,15 @@ button {
 
 .admin-users-table th {
   text-align: left;
-  color: #888;
+  color: var(--text-subtle);
   font-weight: normal;
   padding: 6px 10px;
-  border-bottom: 1px solid #2a2c34;
+  border-bottom: 1px solid var(--border);
 }
 
 .admin-users-table td {
   padding: 6px 10px;
-  border-bottom: 1px solid #1e2028;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .admin-user-disabled {
@@ -129,24 +529,17 @@ button {
 .back-link {
   background: transparent;
   border: none;
-  color: #999;
+  color: var(--text-subtle);
   font-size: 12px;
   padding: 0;
   margin-bottom: 12px;
 }
 
 .back-link:hover {
-  color: #f5c518;
+  color: var(--accent);
 }
 
 /* ---------- preview + style panel ---------- */
-
-.preview-col {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex-shrink: 0;
-}
 
 .preview-frame {
   position: relative;
@@ -154,7 +547,7 @@ button {
   overflow: hidden;
   flex-shrink: 0;
   user-select: none;
-  background-color: #0d0e12;
+  background-color: var(--bg-sunken);
 }
 
 .preview-video {
@@ -164,12 +557,6 @@ button {
   height: 100%;
   object-fit: cover;
   pointer-events: none; /* dragging captions shouldn't trigger native video controls/selection */
-}
-
-.preview-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .preview-caption {
@@ -182,7 +569,7 @@ button {
 }
 
 .preview-caption.selected {
-  outline: 1px dashed #f5c518;
+  outline: 2px dashed var(--accent);
 }
 
 /* Off-screen twin of a caption used only to measure its real wrapped
@@ -202,6 +589,9 @@ button {
   bottom: 0;
   width: 10px;
   cursor: ew-resize;
+  /* Translucent accent-yellow drag handle — an alpha blend of --accent
+     (#f5c518), not an independent color, so it's exempt from the
+     tokens-only rule the same way the filmstrip's dim overlay is. */
   background: rgba(245, 197, 24, 0.6);
 }
 
@@ -213,61 +603,18 @@ button {
   right: -10px;
 }
 
-.va-top {
-  display: flex;
-  gap: 20px;
-}
-
-.va-style-panel {
-  flex: 1;
-  background: #1e2028;
-  border-radius: 6px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.va-style-panel textarea {
-  width: 100%;
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
-  border-radius: 4px;
-  padding: 8px;
-  font-size: 14px;
-  resize: vertical;
-  min-height: 50px;
-}
-
-.va-style-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.va-style-row select,
-.va-style-row input[type='range'] {
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
-  border-radius: 4px;
-  padding: 4px 6px;
-}
-
 .va-align-btn {
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #ccc;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
   border-radius: 4px;
   padding: 4px 8px;
 }
 
 .va-align-btn.active {
-  background: #f5c518;
-  color: #111;
-  border-color: #f5c518;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
 }
 
 /* SPEC.md §14: quick-select swatches alongside the native color pickers. */
@@ -280,27 +627,28 @@ button {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 1px solid #333;
+  border: 1px solid var(--border);
   padding: 0;
   cursor: pointer;
 }
 
 .va-swatch.active {
-  border-color: #f5c518;
+  border-color: var(--accent);
   border-width: 2px;
 }
 
 /* ---------- timeline / tracks / film-strip ---------- */
 
+/* Design brief §6: bottom, full-width timeline area — its own toolbar row
+   (.editor-timeline-toolbar) lives inside this too, above the scrollable
+   tracks/film-strip, so it's never scrolled out of view. */
 .va-timeline {
-  margin-top: 16px;
-  background: #1e2028;
-  border-radius: 6px;
-  padding: 10px 12px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  padding: 14px 32px;
 }
 
-/* Tracks + film-strip scroll/zoom together; .va-controls (Make GIF, name,
-   zoom buttons) lives outside this so it's never scrolled out of view.
+/* Tracks + film-strip scroll/zoom together.
    overflow-y is explicit (not left to default to `auto`, which it would
    per spec whenever overflow-x isn't `visible`): only horizontal scrolling
    is ever intended here, so no vertical scrollbar should appear even
@@ -311,37 +659,44 @@ button {
 .va-timeline-scroll {
   overflow-x: auto;
   overflow-y: hidden;
+  margin-top: 12px;
 }
 
 .va-track-row {
   position: relative;
   height: 30px;
   margin-bottom: 4px;
-  background: #0d0e12;
+  background: var(--bg);
   border-radius: 3px;
 }
 
+/* Design brief §6: captions are yellow — --accent, --on-accent Anton
+   text, 5px radius — deliberately different from the trim range's blue
+   (see .va-range-highlight/.va-range-handle) so the two are never
+   confused. */
 .va-track-pill {
   position: absolute;
   top: 2px;
   bottom: 2px;
-  background: #2f3a52;
-  border: 1px solid #5a76b8;
-  border-radius: 3px;
+  background: var(--accent);
+  border: none;
+  border-radius: 5px;
   display: flex;
   align-items: center;
   padding: 0 8px;
+  font-family: var(--font-display);
   font-size: 12px;
-  color: #cdd7ee;
+  color: var(--on-accent);
   overflow: hidden;
   white-space: nowrap;
   cursor: grab;
 }
 
+/* A ring rather than a color swap — every pill is already accent yellow,
+   so "selected" needs to read as an addition, not a different fill. */
 .va-track-pill.selected {
-  border-color: #f5c518;
-  background: #423b1f;
-  color: #ffe9a8;
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 .va-track-handle {
@@ -363,10 +718,12 @@ button {
   position: absolute;
   right: -26px;
   top: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
-  color: #d9534f;
-  font-size: 14px;
+  color: var(--danger);
 }
 
 .va-timeline-tracks {
@@ -381,7 +738,7 @@ button {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: #5ac8fa;
+  background: var(--trim);
   pointer-events: none;
   z-index: 5;
 }
@@ -394,7 +751,7 @@ button {
 .va-filmstrip {
   position: relative;
   display: flex;
-  background: #0d0e12;
+  background: var(--bg-sunken);
   border-radius: 3px;
   overflow: hidden;
   cursor: pointer;
@@ -410,10 +767,26 @@ button {
   top: -3px;
   bottom: -3px;
   /* No fill — the border alone marks exactly where the exported clip
-     starts/ends, so the filmstrip inside it stays fully visible. */
+     starts/ends, so the filmstrip inside it stays fully visible. Blue
+     (--trim), not accent yellow, so the GIF's trim range is never
+     confused with a caption. Dimming outside the range is two separate
+     .va-range-dim siblings (below), not a box-shadow spread on this
+     element — a huge (e.g. 9999px) spread is a real Chrome compositor
+     performance trap, not just an implementation detail. */
   background: transparent;
-  border: 2px solid #f5c518;
+  border: 2px solid var(--trim);
   border-radius: 3px;
+  pointer-events: none;
+}
+
+/* Design brief §6: "dim the area outside the [trim] range" — one of
+   these on each side of .va-range-highlight, sized in JS from the same
+   timeToX values, rather than one oversized box-shadow. */
+.va-range-dim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(12, 12, 15, 0.72);
   pointer-events: none;
 }
 
@@ -422,7 +795,7 @@ button {
   top: 0;
   bottom: 0;
   width: 10px;
-  background: #f5c518;
+  background: var(--trim);
   cursor: ew-resize;
   pointer-events: auto;
 }
@@ -447,19 +820,19 @@ button {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: #fff;
+  background: var(--text);
   pointer-events: none;
 }
 
+/* A small diamond (45°-rotated square), not a circle — design brief §6. */
 .va-playhead-grip {
   position: absolute;
   left: 7px;
   bottom: -8px;
-  transform: translateX(-50%);
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #fff;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: var(--text);
   pointer-events: none;
 }
 
@@ -479,8 +852,8 @@ button {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #f5c518;
-  color: #111;
+  background: var(--accent);
+  color: var(--on-accent);
   border: none;
   font-size: 13px;
   line-height: 18px;
@@ -489,18 +862,10 @@ button {
   z-index: 4;
 }
 
-.va-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-
 .va-btn {
-  background: #1e2028;
-  border: 1px solid #333;
-  color: #ddd;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
   border-radius: 4px;
   padding: 6px 12px;
   font-size: 12px;
@@ -511,52 +876,472 @@ button {
   cursor: default;
 }
 
-.va-name-input {
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
-  border-radius: 4px;
-  padding: 6px 10px;
-  font-size: 13px;
-  margin-left: auto;
-  min-width: 180px;
-}
-
-.va-make-gif {
-  background: #f5c518;
-  color: #111;
-  font-weight: 600;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 18px;
-  font-size: 13px;
-}
-
-.va-make-gif:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .export-error {
   margin-top: 12px;
-  color: #ff8c8c;
+  color: var(--danger);
   font-size: 13px;
 }
 
 .export-success {
   margin-top: 12px;
-  color: #8fdc8f;
+  color: var(--text);
   font-size: 13px;
+}
+
+/* ---------- caption editor shell (design brief §6) ---------- */
+
+/* No forced viewport height here — the editor is a normal, compact page:
+   header, then the preview/inspector row sized to its own content (not
+   stretched to fill the screen), then the timeline directly under that.
+   App.tsx also skips rendering the global app header for this route, so
+   .editor-header below is the page's only header. */
+.editor-shell {
+  position: relative;
+  background: var(--bg);
+}
+
+.editor-header {
+  flex-shrink: 0;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.editor-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.editor-back-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.editor-brand {
+  font-family: var(--font-display);
+  font-size: 22px;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.editor-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.editor-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.editor-name-input {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  margin: -2px 0 -2px -6px;
+  min-width: 200px;
+}
+
+.editor-name-input:hover,
+.editor-name-input:focus {
+  border-color: var(--border);
+}
+
+.editor-name-input::placeholder {
+  color: var(--text-subtle);
+  font-weight: 500;
+}
+
+.editor-source-info {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.editor-template-btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.editor-make-gif-duration {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+  margin-left: 6px;
+}
+
+/* Export/template progress, success, and error messages — anchored near
+   the header's Make GIF button (design brief §6), not page-bottom text. */
+.editor-toast {
+  position: absolute;
+  top: 84px;
+  right: 32px;
+  z-index: 30;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.editor-toast-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.editor-main {
+  display: flex;
+  /* Each column only as tall as its own content — the default `stretch`
+     would otherwise force the (now content-sized) preview stage to match
+     the inspector's height, undoing "the stage hugs its content". */
+  align-items: flex-start;
+}
+
+.editor-preview-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 32px;
+  background: var(--bg-sunken);
+}
+
+.editor-transport {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.editor-preview-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.editor-preview-zoom-hint {
+  white-space: nowrap;
+}
+
+.editor-play-btn {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: none;
+  background: var(--text);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.editor-timecode {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.editor-timecode-total {
+  color: var(--text-subtle);
+}
+
+/* ---------- inspector (design brief §6) ---------- */
+
+.editor-inspector {
+  width: 400px;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  border-left: 1px solid var(--border);
+}
+
+.editor-inspector-section {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.editor-inspector-section:last-child {
+  border-bottom: none;
+}
+
+.editor-inspector-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.editor-icon-btn-sm {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.editor-caption-textarea {
+  width: 100%;
+  min-height: 90px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.15;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.editor-caption-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.editor-caption-io-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.editor-caption-io {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.editor-io-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.editor-style-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.editor-style-row select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.editor-style-row input[type='range'] {
+  flex: 1;
+}
+
+.editor-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.editor-field-row input[type='range'] {
+  flex: 1;
+}
+
+.editor-field-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+.editor-swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.editor-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.editor-swatch.active {
+  outline-color: var(--accent);
+}
+
+.editor-segmented {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.editor-segmented-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+
+.editor-segmented-btn.active {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.editor-apply-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.editor-inspector-empty {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* ---------- timeline toolbar (design brief §6) ---------- */
+
+.editor-timeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.editor-trim-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--trim-bg);
+  color: var(--trim-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+
+.editor-trim-swatch {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--trim);
+}
+
+.editor-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.editor-zoom-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.editor-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.editor-ruler {
+  position: relative;
+  height: 16px;
+}
+
+.editor-ruler-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+  opacity: 0.7;
 }
 
 /* ---------- video picker ---------- */
 
 .dropzone {
-  border: 1px dashed #444;
+  border: 1px dashed var(--border);
   border-radius: 6px;
   padding: 28px;
   text-align: center;
-  color: #999;
+  color: var(--text-subtle);
   font-size: 13px;
 }
 
@@ -565,7 +1350,7 @@ button {
 }
 
 .dropzone-browse {
-  color: #f5c518;
+  color: var(--accent);
   text-decoration: underline;
 }
 
@@ -578,14 +1363,14 @@ button {
 
 .video-card {
   position: relative;
-  background: #1e2028;
-  border: 1px solid #2a2b33;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
 }
 
 .video-card:hover {
-  border-color: #f5c518;
+  border-color: var(--accent);
 }
 
 .video-card-select {
@@ -594,7 +1379,7 @@ button {
   flex-direction: column;
   gap: 6px;
   text-align: left;
-  color: #e8e8e8;
+  color: var(--text);
   background: transparent;
   border: none;
   padding: 0;
@@ -604,14 +1389,15 @@ button {
   position: absolute;
   top: 4px;
   right: 4px;
-  background: rgba(13, 14, 18, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 12, 15, 0.85);
   border: none;
-  color: #ff8c8c;
+  color: var(--danger);
   border-radius: 4px;
   width: 20px;
   height: 20px;
-  line-height: 1;
-  font-size: 12px;
 }
 
 .video-card-delete:disabled {
@@ -622,11 +1408,12 @@ button {
   position: absolute;
   top: 4px;
   left: 4px;
-  font-size: 12px;
-  line-height: 1;
-  background: rgba(13, 14, 18, 0.85);
+  display: flex;
+  align-items: center;
+  background: rgba(12, 12, 15, 0.85);
+  color: var(--text);
   border-radius: 4px;
-  padding: 3px 4px;
+  padding: 4px;
 }
 
 .video-card img {
@@ -634,7 +1421,7 @@ button {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   border-radius: 4px;
-  background: #0d0e12;
+  background: var(--bg-sunken);
 }
 
 .video-card-name {
@@ -644,43 +1431,122 @@ button {
   white-space: nowrap;
 }
 
-/* ---------- archive ---------- */
+/* ---------- archive (My Library) ---------- */
+
+.archive-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.archive-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.archive-title-group .page-title {
+  margin: 0;
+}
+
+.archive-count {
+  font-size: 15px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+.archive-import-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* The import dropdown reuses .account-dropdown's look (same "small menu"
+   pattern as the header's account pill) — just anchored to the left edge
+   instead of the right. */
+.archive-import-dropdown {
+  right: auto;
+  left: 0;
+}
 
 .archive-toolbar {
   display: flex;
-  gap: 10px;
   align-items: center;
-  margin-top: 8px;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.archive-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 240px;
+}
+
+.archive-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  color: var(--text-subtle);
+  pointer-events: none;
 }
 
 .archive-search {
-  flex: 1;
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
-  border-radius: 4px;
-  padding: 8px 10px;
+  width: 100%;
+  height: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-family: var(--font-body);
   font-size: 14px;
 }
 
-.archive-import-btn {
+/* Only the wrapped (icon-carrying) search field gets the extra indent —
+   Library.tsx's own un-wrapped .archive-search stays plain. */
+.archive-search-wrap .archive-search {
+  padding-left: 40px;
+}
+
+.archive-chips {
+  display: flex;
+  gap: 8px;
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
+}
+
+.archive-chip {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.archive-chip.active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
 }
 
 .archive-link-form {
   display: flex;
   gap: 10px;
   align-items: center;
-  margin-top: 8px;
+  margin-bottom: 16px;
 }
 
 .archive-link-url {
   flex: 2;
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
   border-radius: 4px;
   padding: 8px 10px;
   font-size: 14px;
@@ -688,9 +1554,9 @@ button {
 
 .archive-link-name {
   flex: 1;
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
   border-radius: 4px;
   padding: 8px 10px;
   font-size: 14px;
@@ -698,9 +1564,16 @@ button {
 
 .archive-layout {
   display: flex;
-  gap: 20px;
+  gap: 32px;
   margin-top: 16px;
   align-items: flex-start;
+}
+
+.profile-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32px;
 }
 
 .profile-header {
@@ -721,7 +1594,7 @@ button {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   border-radius: 4px;
-  background: #0d0e12;
+  background: var(--bg-sunken);
 }
 
 .library-tile {
@@ -736,7 +1609,7 @@ button {
   justify-content: space-between;
   gap: 6px;
   font-size: 12px;
-  color: #9aa4b8;
+  color: var(--text-muted);
 }
 
 .library-tile-caption span {
@@ -746,7 +1619,7 @@ button {
 }
 
 .library-tile-caption a {
-  color: #5ac8fa;
+  color: var(--trim-text);
   white-space: nowrap;
 }
 
@@ -764,36 +1637,48 @@ button {
 }
 
 .va-btn.active {
-  background: #1e2028;
-  color: #f5c518;
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .archive-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
 }
 
 .archive-thumb {
   position: relative;
   padding: 0;
-  border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius);
   overflow: hidden;
-  background: #0d0e12;
-  aspect-ratio: 16 / 9;
+  background: var(--bg-sunken);
+  aspect-ratio: 16 / 10;
+  outline: 3px solid transparent;
+  outline-offset: 2px;
+}
+
+.archive-badge-lock,
+.archive-badge-external {
+  position: absolute;
+  top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--text);
+  background: rgba(12, 12, 15, 0.75);
+  border-radius: 50%;
+}
+
+.archive-badge-lock {
+  left: 6px;
 }
 
 .archive-badge-external {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 12px;
-  line-height: 1;
-  background: rgba(13, 14, 18, 0.8);
-  border-radius: 3px;
-  padding: 3px 4px;
+  right: 6px;
 }
 
 /* Wraps each grid cell so the "One-offs" divider (below) can be injected
@@ -811,19 +1696,22 @@ button {
   grid-column: 1 / -1;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #888;
+  color: var(--text-subtle);
 }
 
 .archive-panel-external-note {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .archive-thumb.selected {
-  border-color: #f5c518;
+  outline-color: var(--accent);
 }
 
 .archive-thumb img {
@@ -834,22 +1722,34 @@ button {
 }
 
 .archive-panel {
-  /* Wide enough to show a GIF at its native resolution (exports cap at
-     480px — see backend/src/scale.rs MAX_WIDTH) plus padding, so the
-     browser never has to downscale it for display. Browsers use cheap,
-     low-quality real-time scaling for *animated* GIFs specifically (the
-     per-frame cost of high-quality resampling at 15fps adds up) — a
-     480px-wide GIF squeezed into a much narrower box visibly mangled
-     fine text (a capital "U" reading as "II"), even though the exported
-     file itself, and every extracted frame, was completely clean. */
-  width: 520px;
+  /* Design brief §4's fixed 460px, minus 20px padding either side, leaves
+     420px for the preview — narrower than the 480px a GIF export can be
+     (backend/src/scale.rs MAX_WIDTH). The old 520px width here existed
+     specifically to avoid that: browsers use cheap, low-quality real-time
+     scaling for *animated* GIFs, and a 480px one squeezed into a
+     meaningfully narrower box has visibly mangled fine text before (a
+     capital "U" reading as "II") even though the source file was clean.
+     Following the brief's number as specified; worth an eye on a
+     real caption-heavy GIF (not just this section's synthetic previews)
+     to see whether that artifact is back. */
+  width: 460px;
   flex-shrink: 0;
-  background: #1e2028;
-  border-radius: 6px;
-  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 20px;
+}
+
+.archive-panel-empty {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .archive-panel-preview {
@@ -864,40 +1764,164 @@ button {
   align-self: flex-start;
   max-width: 100%;
   display: block;
-  border-radius: 4px;
-  background: #0d0e12;
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+.archive-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .archive-panel-name {
-  background: #0d0e12;
-  border: 1px solid #2a2b33;
-  color: #fff;
-  border-radius: 4px;
-  padding: 6px 10px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 22px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  margin: -2px -6px;
+}
+
+.archive-panel-name:hover,
+.archive-panel-name:focus {
+  border-color: var(--border);
+}
+
+.archive-visibility-pill {
+  flex-shrink: 0;
+  background: var(--raised);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.archive-visibility-pill.public {
+  color: var(--accent);
+}
+
+/* Global Library's read-only equivalent of .archive-panel-name — the name
+   isn't yours to rename, so it's plain text, not an input. */
+.archive-panel-title-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 22px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-owner-link {
+  flex-shrink: 0;
+  color: var(--trim-text);
   font-size: 13px;
+  font-weight: 500;
 }
 
 .archive-panel-caption {
-  font-size: 13px;
-  color: #ccc;
+  font-size: 14px;
+  color: var(--text-muted);
   margin: 0;
 }
 
-.archive-panel-actions {
+.archive-panel-meta {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.archive-panel-actions a.va-btn {
-  text-decoration: none;
-  display: inline-flex;
   align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
 }
 
-.va-btn.danger {
-  border-color: #d9534f;
-  color: #ff8c8c;
+.archive-panel-meta-sep {
+  opacity: 0.6;
+}
+
+.archive-copy-link-btn {
+  width: 100%;
+  height: 52px;
+}
+
+.archive-panel-secondary-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.archive-panel-secondary-row .btn {
+  text-decoration: none;
+}
+
+.archive-settings-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.archive-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.archive-settings-row:first-child {
+  border-top: none;
+}
+
+.archive-settings-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.archive-settings-help {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.archive-switch {
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+  padding: 3px;
+  border-radius: 999px;
+  border: none;
+  background: var(--raised);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.archive-switch.on {
+  background: var(--accent);
+  justify-content: flex-end;
+}
+
+.archive-switch-knob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
 }
 
 .archive-toast {
@@ -905,10 +1929,17 @@ button {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  background: #1e2028;
-  border: 1px solid #2a2b33;
-  border-radius: 4px;
-  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 18px;
   font-size: 13px;
-  color: #fff;
+  color: var(--text);
+}
+
+.archive-toast svg {
+  color: var(--accent);
 }

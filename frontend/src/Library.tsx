@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listLibrary, recordGifUse } from './api'
+import { adminDeleteGif, listLibrary, recordGifUse } from './api'
+import { CheckIcon, CodeIcon, DownloadIcon, ExternalLinkIcon, LinkIcon, SearchIcon, TrashIcon } from './icons'
 import type { LibraryEntry, LibrarySort } from './types'
+import { useCurrentUser } from './useCurrentUser'
+import { useToast } from './useToast'
 
 /** `navigator.clipboard` only exists in secure contexts — see the matching
  * helper in Archive.tsx, which this mirrors for the library's copy-link
- * action. */
+ * and copy-embed actions. */
 async function copyToClipboard(text: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text)
@@ -26,6 +29,11 @@ async function copyToClipboard(text: string) {
   }
 }
 
+/** Mirrors Archive.tsx's copyEmbed escaping — see its own comment. */
+function escapeHtml(text: string) {
+  return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function formatUseCount(useCount: number): string {
   return useCount === 1 ? '1 use' : `${useCount} uses`
 }
@@ -33,14 +41,19 @@ function formatUseCount(useCount: number): string {
 // SPEC-CLOUD.md §8: the global library — every user's public gifs, no
 // sign-in required to view (this page still lives behind App's own login
 // gate for now, since the full nav redesign making it reachable
-// independently of sign-in is a later milestone).
+// independently of sign-in is a later milestone). Design brief §5: reuses
+// My Library's grid + detail-panel layout and CSS (Archive.tsx) so the two
+// screens read as one product, rather than the old per-tile action row.
 export function Library() {
+  const { user } = useCurrentUser()
   const [items, setItems] = useState<LibraryEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<LibrarySort>('newest')
-  const [toast, setToast] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const toast = useToast()
 
   useEffect(() => {
     let cancelled = false
@@ -61,67 +74,185 @@ export function Library() {
     }
   }, [query, sort])
 
-  useEffect(() => {
-    if (!toast) return
-    const timeout = setTimeout(() => setToast(null), 2000)
-    return () => clearTimeout(timeout)
-  }, [toast])
+  const selected = items.find((i) => i.id === selectedId) ?? null
+
+  function recordUse(id: string) {
+    recordGifUse(id)
+      .then((updated) => setItems((its) => its.map((it) => (it.id === updated.id ? { ...it, ...updated } : it))))
+      .catch(() => {})
+  }
 
   // SPEC-CLOUD.md §8: the library's primary action on a gif is "copy
   // link" — bumps the same use counter Archive.tsx's copy-link does.
-  async function copyLink(entry: LibraryEntry) {
-    if (!entry.gif_url) return
+  async function copyLink() {
+    if (!selected?.gif_url) return
     try {
-      await copyToClipboard(entry.gif_url)
-      recordGifUse(entry.id)
-        .then((updated) => setItems((its) => its.map((it) => (it.id === updated.id ? { ...it, ...updated } : it))))
-        .catch(() => {})
-      setToast('Link copied')
+      await copyToClipboard(selected.gif_url)
+      recordUse(selected.id)
+      toast.show('Link copied')
     } catch {
-      setToast('Copy failed')
+      toast.show('Copy failed')
+    }
+  }
+
+  async function copyEmbed() {
+    if (!selected?.gif_url) return
+    const tag = `<img src="${selected.gif_url}" alt="${escapeHtml(selected.name)}">`
+    try {
+      await copyToClipboard(tag)
+      recordUse(selected.id)
+      toast.show('Embed copied')
+    } catch {
+      toast.show('Copy failed')
+    }
+  }
+
+  // Admin-only (design brief §5) — everyone else's gifs in this list
+  // aren't theirs to delete.
+  async function remove() {
+    if (!selected) return
+    if (!window.confirm(`Delete "${selected.name}"? This can't be undone.`)) return
+    setDeleting(true)
+    try {
+      await adminDeleteGif(selected.id)
+      setItems((its) => its.filter((it) => it.id !== selected.id))
+      setSelectedId(null)
+      toast.show('Deleted')
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(false)
     }
   }
 
   return (
     <div className="page">
-      <h1>Global Library</h1>
-      <p className="subtitle">Browse public GIFs from everyone.</p>
-      <input
-        className="archive-search"
-        aria-label="Search the library"
-        placeholder="Search by name or caption text…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      <div className="library-sort-pills" role="group" aria-label="Sort the library">
-        <button className={`va-btn ${sort === 'newest' ? 'active' : ''}`} onClick={() => setSort('newest')}>
-          Newest
-        </button>
-        <button className={`va-btn ${sort === 'most-used' ? 'active' : ''}`} onClick={() => setSort('most-used')}>
-          Most-used
-        </button>
+      <div className="archive-title-row">
+        <div className="archive-title-group">
+          <h1 className="page-title">Global Library</h1>
+          <span className="archive-count">{items.length === 1 ? '1 GIF' : `${items.length} GIFs`}</span>
+        </div>
       </div>
+
+      <div className="archive-toolbar">
+        <div className="archive-search-wrap">
+          <SearchIcon size={16} className="archive-search-icon" />
+          <input
+            className="archive-search"
+            placeholder="Search names and captions"
+            aria-label="Search the library"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="archive-chips" role="group" aria-label="Sort the library">
+          <button
+            type="button"
+            className={`archive-chip ${sort === 'newest' ? 'active' : ''}`}
+            onClick={() => setSort('newest')}
+          >
+            Newest
+          </button>
+          <button
+            type="button"
+            className={`archive-chip ${sort === 'most-used' ? 'active' : ''}`}
+            onClick={() => setSort('most-used')}
+          >
+            Most used
+          </button>
+        </div>
+      </div>
+
+      {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
-      {!loading && items.length === 0 && !loadError && <p className="va-hint">No public GIFs yet.</p>}
-      <div className="archive-grid">
-        {items.map((item) => (
-          <div key={item.id} className="library-tile">
-            <img src={item.gif_url ?? ''} alt={item.name} title={item.name} className="profile-gif-tile" />
-            <div className="library-tile-caption">
-              <span>{item.name}</span>
-              {item.owner_handle && <Link to={`/u/${item.owner_handle}`}>@{item.owner_handle}</Link>}
+
+      <div className="archive-layout">
+        <div className="archive-grid">
+          {items.map((item) => (
+            <button
+              key={item.id}
+              className={`archive-thumb ${item.id === selectedId ? 'selected' : ''}`}
+              onClick={() => setSelectedId(item.id)}
+              aria-label={item.name}
+            >
+              {item.gif_url && <img src={item.gif_url} alt={item.name} />}
+              {item.external_url && (
+                <span className="archive-badge-external" title="Linked — hosted externally, not by Gifiac">
+                  <LinkIcon size={14} />
+                </span>
+              )}
+            </button>
+          ))}
+          {!loading && items.length === 0 && <p className="va-hint">No public GIFs yet.</p>}
+        </div>
+
+        <div className="archive-panel">
+          {!selected ? (
+            <div className="archive-panel-empty">
+              <p className="va-hint">Select a GIF to view details and actions.</p>
             </div>
-            <p className="va-hint">{new Date(item.created_at).toLocaleDateString()}</p>
-            <div className="library-tile-actions">
-              <button className="va-btn" onClick={() => copyLink(item)}>
-                🔗 Copy link
+          ) : (
+            <>
+              <img
+                key={selected.id}
+                className="archive-panel-preview"
+                src={selected.gif_url ?? ''}
+                alt={`${selected.name} preview`}
+              />
+              <div className="archive-panel-header">
+                <p className="archive-panel-title-text">{selected.name}</p>
+                {selected.owner_handle && (
+                  <Link className="archive-owner-link" to={`/u/${selected.owner_handle}`}>
+                    @{selected.owner_handle}
+                  </Link>
+                )}
+              </div>
+              <p className="archive-panel-meta">
+                <span>{new Date(selected.created_at).toLocaleDateString()}</span>
+                <span className="archive-panel-meta-sep">·</span>
+                <span>{formatUseCount(selected.use_count)}</span>
+              </p>
+
+              <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                <LinkIcon /> Copy link
               </button>
-              <span className="va-hint">{formatUseCount(item.use_count)}</span>
-            </div>
-          </div>
-        ))}
+
+              <div className="archive-panel-secondary-row">
+                <button className="btn btn-secondary" onClick={copyEmbed}>
+                  <CodeIcon /> Embed
+                </button>
+                {selected.external_url ? (
+                  <a className="btn btn-secondary" href={selected.external_url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLinkIcon /> Open original
+                  </a>
+                ) : (
+                  <a
+                    className="btn btn-secondary"
+                    href={selected.gif_url ?? ''}
+                    download={`${selected.name}.gif`}
+                    onClick={() => recordUse(selected.id)}
+                  >
+                    <DownloadIcon /> Download
+                  </a>
+                )}
+              </div>
+
+              {user?.role === 'admin' && (
+                <button className="btn btn-danger" onClick={remove} disabled={deleting}>
+                  <TrashIcon /> {deleting ? 'Deleting…' : 'Delete GIF'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
-      {toast && <p className="archive-toast">{toast}</p>}
+
+      {toast.message && (
+        <div className="archive-toast">
+          <CheckIcon size={16} />
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   )
 }

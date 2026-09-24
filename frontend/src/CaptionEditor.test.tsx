@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CaptionEditor } from './CaptionEditor'
 import type { FilmstripMeta, Video } from './types'
 
@@ -44,11 +44,15 @@ beforeEach(() => {
   vi.mocked(putTemplate).mockReset()
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 describe('CaptionEditor', () => {
   it('starts with no captions and the Make GIF button disabled', () => {
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
 
-    expect(screen.getByText(/select a caption track/i)).toBeInTheDocument()
+    expect(screen.getByText(/select a caption on the timeline/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Make GIF' })).toBeDisabled()
   })
 
@@ -103,13 +107,36 @@ describe('CaptionEditor', () => {
     expect(document.querySelector('.preview-caption')).toHaveStyle({ lineHeight: '0.4' })
   })
 
+  it('previews at a whole-number "Fit" scale by default for a small output, and 1x/2x apply exactly', async () => {
+    vi.stubGlobal('innerWidth', 1200)
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    // filmstrip.frameWidth (160) is under the 320px "tiny output"
+    // threshold, so the default zoom is 'fit': floor((1200 - 400 - 64) /
+    // 160) = 4 — a caption's fontSize (28, in *output* pixels) scales
+    // with it.
+    expect(screen.getByRole('button', { name: 'Fit' })).toHaveClass('active')
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ fontSize: '112px' })
+    expect(screen.queryByText('Actual size')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '1×' }))
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ fontSize: '28px' })
+    expect(screen.getByText('Actual size')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '2×' }))
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ fontSize: '56px' })
+    expect(screen.queryByText('Actual size')).not.toBeInTheDocument()
+  })
+
   it('unchecking Outline hides the color picker and sends outlineColor: null', async () => {
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
-    await user.click(screen.getByRole('checkbox', { name: /outline/i }))
+    await user.click(screen.getByRole('switch', { name: /outline/i }))
     expect(screen.queryByLabelText('Outline color')).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
@@ -123,9 +150,9 @@ describe('CaptionEditor', () => {
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
-    const outlineCheckbox = screen.getByRole('checkbox', { name: /outline/i })
-    await user.click(outlineCheckbox)
-    await user.click(outlineCheckbox)
+    const outlineSwitch = screen.getByRole('switch', { name: /outline/i })
+    await user.click(outlineSwitch)
+    await user.click(outlineSwitch)
 
     expect(screen.getByLabelText('Outline color')).toBeInTheDocument()
   })
@@ -150,7 +177,7 @@ describe('CaptionEditor', () => {
 
     await user.click(screen.getByRole('button', { name: /delete caption/i }))
 
-    expect(screen.getByText(/select a caption track/i)).toBeInTheDocument()
+    expect(screen.getByText(/select a caption on the timeline/i)).toBeInTheDocument()
   })
 
   it('applies a style change to every track when "All tracks" is checked', async () => {
@@ -158,9 +185,9 @@ describe('CaptionEditor', () => {
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
-    await user.click(screen.getByLabelText(/all tracks/i))
+    await user.click(screen.getByLabelText(/apply this style to every caption/i))
 
-    const redButton = screen.getAllByRole('button', { name: 'right' })[0]
+    const redButton = screen.getAllByRole('button', { name: 'Align right' })[0]
     await user.click(redButton)
 
     // Both tracks' preview captions should now render right-aligned (style
@@ -273,10 +300,10 @@ describe('CaptionEditor', () => {
     expect(onGifCreated).toHaveBeenCalledWith(gif)
   })
 
-  it('shows a "Create template" checkbox for a video with no template', async () => {
+  it('shows a "Save as template" toggle for a video with no template', async () => {
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
 
-    expect(await screen.findByText('Create template')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Save as template' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Overwrite template' })).not.toBeInTheDocument()
   })
 
@@ -308,9 +335,9 @@ describe('CaptionEditor', () => {
     render(<CaptionEditor video={{ ...video, has_template: true }} filmstrip={filmstrip} onBack={() => {}} />)
 
     await screen.findByRole('button', { name: 'Delete caption "from template"' })
-    expect(screen.getByText(/GIF range: 1\.00s – 6\.00s/)).toBeInTheDocument()
+    expect(screen.getByText(/Trim 1\.00s → 6\.00s/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Overwrite template' })).toBeInTheDocument()
-    expect(screen.queryByText('Create template')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save as template' })).not.toBeInTheDocument()
   })
 
   it('clicking "Overwrite template" saves the current captions/range without exporting', async () => {
@@ -347,7 +374,7 @@ describe('CaptionEditor', () => {
     })
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.click(await screen.findByText('Create template'))
+    await user.click(await screen.findByRole('button', { name: 'Save as template' }))
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
@@ -491,14 +518,14 @@ describe('CaptionEditor', () => {
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
 
-    const button = screen.getByRole('button', { name: '▶ Play' })
+    const button = screen.getByRole('button', { name: 'Play' })
     await user.click(button)
     expect(playSpy).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: '⏸ Pause' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '⏸ Pause' }))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     expect(pauseSpy).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: '▶ Play' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument()
 
     playSpy.mockRestore()
     pauseSpy.mockRestore()
@@ -513,7 +540,7 @@ describe('CaptionEditor', () => {
       videoEl.dispatchEvent(new Event('timeupdate'))
     })
 
-    expect(screen.getByText('3.25s')).toBeInTheDocument()
+    expect(screen.getByText('0:03.25')).toBeInTheDocument()
   })
 
   it('pauses the video and seeks it when the film-strip is clicked', () => {
@@ -558,13 +585,13 @@ describe('CaptionEditor', () => {
 
     Object.defineProperty(videoEl, 'currentTime', { value: 2, configurable: true, writable: true })
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
-    fireEvent.click(screen.getByRole('button', { name: 'Set start' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trim start' }))
 
     Object.defineProperty(videoEl, 'currentTime', { value: 6, configurable: true, writable: true })
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
-    fireEvent.click(screen.getByRole('button', { name: 'Set end' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trim end' }))
 
-    expect(screen.getByText(/GIF range: 2\.00s – 6\.00s/)).toBeInTheDocument()
+    expect(screen.getByText(/Trim 2\.00s → 6\.00s/)).toBeInTheDocument()
   })
 
   it('loops playback back to the range start once the playhead reaches the range end', () => {
@@ -581,14 +608,14 @@ describe('CaptionEditor', () => {
     // Narrow the GIF range to 1s-3s.
     Object.defineProperty(videoEl, 'currentTime', { value: 1, configurable: true, writable: true })
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
-    fireEvent.click(screen.getByRole('button', { name: 'Set start' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trim start' }))
     Object.defineProperty(videoEl, 'currentTime', { value: 3, configurable: true, writable: true })
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
-    fireEvent.click(screen.getByRole('button', { name: 'Set end' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trim end' }))
 
     // Pressing play while sitting at the range's end (out of range) snaps
     // back to its start instead of doing nothing.
-    fireEvent.click(screen.getByRole('button', { name: '▶ Play' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
     expect(videoEl.currentTime).toBe(1)
 
     // Reaching the range's end while playing loops back to its start,
@@ -597,7 +624,7 @@ describe('CaptionEditor', () => {
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
 
     expect(videoEl.currentTime).toBe(1)
-    expect(screen.getByRole('button', { name: '⏸ Pause' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument()
   })
 
   it('caps rendered film-strip frames at how many fit legibly, evenly sampled from the full sprite', () => {
@@ -758,7 +785,7 @@ describe('CaptionEditor', () => {
     Object.defineProperty(videoEl, 'currentTime', { value: 4, configurable: true, writable: true })
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
 
-    fireEvent.click(screen.getByRole('button', { name: '🔍+' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
 
     // New timelineWidth is 1050 (zoom level 1.5x); playhead at t=4/8 -> x=525;
     // centered in a 200px-wide viewport -> scrollLeft = 525 - 100 = 425.
@@ -802,6 +829,6 @@ describe('CaptionEditor', () => {
     fireEvent.mouseDown(startHandle, { clientX: 0 })
     fireEvent.mouseMove(window, { clientX: 350 })
 
-    expect(screen.getByText(/GIF range: 4\.00s – 8\.00s/)).toBeInTheDocument()
+    expect(screen.getByText(/Trim 4\.00s → 8\.00s/)).toBeInTheDocument()
   })
 })

@@ -78,7 +78,7 @@ export function AdminPage() {
               <td>{user.latest_gif_at ? new Date(user.latest_gif_at).toLocaleDateString() : '—'}</td>
               <td>{new Date(user.created_at).toLocaleDateString()}</td>
               <td>
-                <button className="va-btn" onClick={() => toggleDisabled(user)} disabled={pendingId === user.id}>
+                <button className="btn btn-secondary" onClick={() => toggleDisabled(user)} disabled={pendingId === user.id}>
                   {user.disabled ? 'Enable' : 'Disable'}
                 </button>
               </td>

@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Archive } from './Archive'
 import type { Gif } from './types'
@@ -67,10 +68,23 @@ const linkedGif: Gif = {
   webm_url: null,
 }
 
-// Passed to every render below — most tests don't care about it, only the
-// dedicated "+ New GIF" test asserts on it, so this is reset there, not
-// globally, to keep the other ~30 call sites untouched.
-const onNewGif = vi.fn()
+// Archive now renders a <Link> (the "Remix" secondary button, shown when a
+// gif has a video_id) — needs a Router context to render, in production
+// that's main.tsx's BrowserRouter, here a MemoryRouter.
+function renderArchive() {
+  return render(
+    <MemoryRouter>
+      <Archive />
+    </MemoryRouter>,
+  )
+}
+
+/** Opens the "Import" menu (design brief §4 moved "Upload GIFs"/"Add from
+ * URL" behind it) — both the file input and the "Add from URL" trigger
+ * only exist in the DOM while it's open. */
+async function openImportMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /import/i }))
+}
 
 beforeEach(() => {
   vi.mocked(listGifs).mockReset()
@@ -96,7 +110,7 @@ describe('Archive', () => {
   it('lists gifs returned by the backend as grid thumbnails', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
 
     await screen.findByRole('button', { name: 'cat jumping' })
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
@@ -105,7 +119,7 @@ describe('Archive', () => {
   it('shows a load error if the list request fails', async () => {
     vi.mocked(listGifs).mockRejectedValue(new Error('/api/gifs failed (500): boom'))
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
 
     await screen.findByText(/boom/)
   })
@@ -113,7 +127,7 @@ describe('Archive', () => {
   it('shows an empty state when there are no gifs', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
 
     await screen.findByText(/no gifs yet/i)
   })
@@ -122,7 +136,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
     expect(listGifs).toHaveBeenCalledWith('')
 
@@ -135,7 +149,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByLabelText('GIF name')).toHaveValue('cat jumping')
@@ -148,7 +162,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     const firstPreview = screen.getByAltText('cat jumping preview')
 
@@ -163,7 +177,7 @@ describe('Archive', () => {
     vi.mocked(renameGif).mockResolvedValue({ ...gifA, name: 'cat leaping' })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const nameInput = screen.getByLabelText('GIF name')
@@ -180,7 +194,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     // Defined after `userEvent.setup()`/`render` — user-event's own setup
     // touches `navigator.clipboard`, clobbering a stub installed earlier.
@@ -199,7 +213,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: undefined,
@@ -220,14 +234,14 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
       configurable: true,
       writable: true,
     })
-    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+    await user.click(screen.getByRole('button', { name: 'Embed' }))
 
     expect(writeText).toHaveBeenCalledWith(`<img src="${gifA.gif_url}" alt="cat jumping">`)
     await screen.findByText(/embed copied/i)
@@ -237,7 +251,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: undefined,
@@ -247,7 +261,7 @@ describe('Archive', () => {
     const execCommand = vi.fn().mockReturnValue(true)
     document.execCommand = execCommand
 
-    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+    await user.click(screen.getByRole('button', { name: 'Embed' }))
 
     expect(execCommand).toHaveBeenCalledWith('copy')
     await screen.findByText(/embed copied/i)
@@ -259,14 +273,14 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: gifWithSpecialName.name }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
       configurable: true,
       writable: true,
     })
-    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+    await user.click(screen.getByRole('button', { name: 'Embed' }))
 
     expect(writeText).toHaveBeenCalledWith(
       `<img src="${gifA.gif_url}" alt="cat &amp; dog &lt;&quot;jumping&quot;&gt;">`,
@@ -277,7 +291,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const downloadLink = screen.getByRole('link', { name: /download/i }) as HTMLAnchorElement
@@ -290,7 +304,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -311,7 +325,7 @@ describe('Archive', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     Object.defineProperty(window.navigator, 'clipboard', {
       value: { writeText },
@@ -319,7 +333,7 @@ describe('Archive', () => {
       writable: true,
     })
 
-    await user.click(screen.getByRole('button', { name: /copy embed/i }))
+    await user.click(screen.getByRole('button', { name: 'Embed' }))
 
     expect(recordGifUse).toHaveBeenCalledWith('g1')
     await screen.findByText('1 use')
@@ -330,7 +344,7 @@ describe('Archive', () => {
     vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     await user.click(screen.getByRole('link', { name: /download/i }))
@@ -339,17 +353,20 @@ describe('Archive', () => {
     await screen.findByText('1 use')
   })
 
-  it('marking a gif as one-off calls the API and updates the button label', async () => {
+  it('marking a gif as one-off calls the API and flips the One-off switch', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: true })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    await user.click(screen.getByRole('button', { name: /mark as one-off/i }))
+    const oneOffSwitch = screen.getByRole('switch', { name: 'One-off' })
+    expect(oneOffSwitch).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', true)
-    await screen.findByRole('button', { name: /mark as reusable/i })
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'One-off' })).toHaveAttribute('aria-checked', 'true'))
     await screen.findByText(/marked as one-off/i)
   })
 
@@ -359,26 +376,32 @@ describe('Archive', () => {
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: false })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    await user.click(screen.getByRole('button', { name: /mark as reusable/i }))
+    const oneOffSwitch = screen.getByRole('switch', { name: 'One-off' })
+    expect(oneOffSwitch).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', false)
-    await screen.findByRole('button', { name: /mark as one-off/i })
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'One-off' })).toHaveAttribute('aria-checked', 'false'))
     await screen.findByText(/marked as reusable/i)
   })
 
-  it('making a gif public calls the API and updates the button label', async () => {
+  it('making a gif public calls the API and flips the Public switch', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: true })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    await user.click(screen.getByRole('button', { name: /make public/i }))
+    const publicSwitch = screen.getByRole('switch', { name: 'Public' })
+    expect(publicSwitch).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(publicSwitch)
 
     expect(setGifPublic).toHaveBeenCalledWith('g1', true)
-    await screen.findByRole('button', { name: /make private/i })
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Public' })).toHaveAttribute('aria-checked', 'true'))
     await screen.findByText(/made public/i)
   })
 
@@ -388,25 +411,36 @@ describe('Archive', () => {
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: false })
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    await user.click(screen.getByRole('button', { name: /make private/i }))
+    const publicSwitch = screen.getByRole('switch', { name: 'Public' })
+    expect(publicSwitch).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(publicSwitch)
 
     expect(setGifPublic).toHaveBeenCalledWith('g1', false)
-    await screen.findByRole('button', { name: /make public/i })
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Public' })).toHaveAttribute('aria-checked', 'false'))
     await screen.findByText(/made private/i)
   })
 
   it('shows a "One-offs" divider above one-off gifs in the grid, only when one exists', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
-    const { rerender } = render(<Archive onNewGif={onNewGif} />)
+    const { rerender } = render(
+      <MemoryRouter>
+        <Archive />
+      </MemoryRouter>,
+    )
     await screen.findByRole('button', { name: 'cat jumping' })
-    expect(screen.queryByText('One-offs')).not.toBeInTheDocument()
+    expect(screen.queryByText('One-offs', { selector: '.archive-grid-divider' })).not.toBeInTheDocument()
 
     vi.mocked(listGifs).mockResolvedValue([gifA, { ...gifB, is_one_off: true }])
-    rerender(<Archive key="reload" onNewGif={onNewGif} />)
+    rerender(
+      <MemoryRouter>
+        <Archive key="reload" />
+      </MemoryRouter>,
+    )
     await screen.findByRole('button', { name: 'dog running' })
-    expect(screen.getByText('One-offs')).toBeInTheDocument()
+    expect(screen.getByText('One-offs', { selector: '.archive-grid-divider' })).toBeInTheDocument()
   })
 
   it('deleting asks for confirmation, then calls the API and clears the selection', async () => {
@@ -415,7 +449,7 @@ describe('Archive', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /delete/i }))
 
@@ -429,7 +463,7 @@ describe('Archive', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByRole('button', { name: /delete/i }))
 
@@ -437,16 +471,27 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
   })
 
-  it('the + New GIF toolbar button calls onNewGif', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
-    onNewGif.mockReset()
+  it('the filter chips narrow the grid client-side', async () => {
+    const publicGif = { ...gifA, is_public: true }
+    const privateOneOff = { ...gifB, is_public: false, is_one_off: true }
+    vi.mocked(listGifs).mockResolvedValue([publicGif, privateOneOff])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
-    await screen.findByText(/no gifs yet/i)
-    await user.click(screen.getByRole('button', { name: '+ New GIF' }))
+    renderArchive()
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
 
-    expect(onNewGif).toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Public' }))
+    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'One-offs' }))
+    expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'All' }))
+    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
   })
 
   it('importing files calls the API and prepends the created gifs to the grid', async () => {
@@ -454,8 +499,9 @@ describe('Archive', () => {
     vi.mocked(importGifs).mockResolvedValue([gifB])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
+    await openImportMenu(user)
 
     const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -471,8 +517,9 @@ describe('Archive', () => {
     vi.mocked(importGifs).mockRejectedValue(new Error('/api/gifs/import failed (400): bad file'))
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
+    await openImportMenu(user)
 
     const file = new File(['bytes'], 'bad.gif', { type: 'image/gif' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -485,7 +532,7 @@ describe('Archive', () => {
   it('shows an external badge only for a linked gif, not a native/imported one', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, linkedGif])
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
 
     const nativeThumb = screen.getByRole('button', { name: 'cat jumping' })
@@ -498,7 +545,7 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([linkedGif])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'linked meme' }))
 
     expect(screen.queryByRole('link', { name: /download/i })).not.toBeInTheDocument()
@@ -510,11 +557,32 @@ describe('Archive', () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.queryByRole('link', { name: /open original/i })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument()
+  })
+
+  it('a gif with a video_id offers a Remix link back into the editor', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    const remix = screen.getByRole('link', { name: 'Remix' }) as HTMLAnchorElement
+    expect(remix.getAttribute('href')).toBe(`/edit/${gifA.video_id}`)
+  })
+
+  it('a linked gif (no video_id) has no Remix link', async () => {
+    vi.mocked(listGifs).mockResolvedValue([linkedGif])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'linked meme' }))
+
+    expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
   })
 
   it('adding a gif by url calls the API and prepends it to the grid', async () => {
@@ -522,9 +590,10 @@ describe('Archive', () => {
     vi.mocked(linkGif).mockResolvedValue(linkedGif)
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
-    await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
+    await openImportMenu(user)
+    await user.click(screen.getByRole('menuitem', { name: 'Add from URL' }))
     await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/meme.gif')
     await user.type(screen.getByLabelText('Linked GIF title'), 'linked meme')
     await user.click(screen.getByRole('button', { name: 'Add' }))
@@ -539,9 +608,10 @@ describe('Archive', () => {
     vi.mocked(linkGif).mockRejectedValue(new Error('/api/gifs/link failed (400): not an image'))
     const user = userEvent.setup()
 
-    render(<Archive onNewGif={onNewGif} />)
+    renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
-    await user.click(screen.getByRole('button', { name: '+ Add from URL' }))
+    await openImportMenu(user)
+    await user.click(screen.getByRole('menuitem', { name: 'Add from URL' }))
     await user.type(screen.getByLabelText('GIF URL'), 'https://example.com/not-an-image')
     await user.type(screen.getByLabelText('Linked GIF title'), 'bad link')
     await user.click(screen.getByRole('button', { name: 'Add' }))

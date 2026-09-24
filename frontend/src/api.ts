@@ -272,3 +272,11 @@ export function setUserDisabled(id: string, disabled: boolean): Promise<{ id: st
     body: JSON.stringify({ disabled }),
   })
 }
+
+// Admin-scoped equivalent of `deleteGif` — no ownership check, so an admin
+// can remove any user's gif (design brief §5: the Global Library's Delete
+// action, admin-only).
+export async function adminDeleteGif(id: string): Promise<void> {
+  const input = `/api/admin/gifs/${id}`
+  await throwIfNotOk(input, await fetch(input, { method: 'DELETE' }))
+}

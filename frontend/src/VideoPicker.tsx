@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { deleteVideo, listVideos, thumbnailUrl, uploadVideo } from './api'
+import { BookmarkIcon, XIcon } from './icons'
 import type { Video } from './types'
 
 interface Props {
@@ -101,7 +102,7 @@ export function VideoPicker({ onSelect }: Props) {
                   small badge/icon on their card in the video picker". */}
               {v.has_template && (
                 <span className="video-card-badge-template" title="Has a saved template">
-                  📋
+                  <BookmarkIcon size={14} />
                 </span>
               )}
               <span className="video-card-name">{v.original_filename}</span>
@@ -113,7 +114,7 @@ export function VideoPicker({ onSelect }: Props) {
               disabled={deletingId === v.id}
               onClick={() => handleDelete(v)}
             >
-              ✕
+              <XIcon size={11} />
             </button>
           </div>
         ))}

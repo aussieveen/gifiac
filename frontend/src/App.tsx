@@ -1,14 +1,62 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AdminPage } from './AdminPage'
 import { Archive } from './Archive'
 import { LOGIN_URL, getFilmstripMeta, getVideo, logout } from './api'
+import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
 import { HandlePicker } from './HandlePicker'
+import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
 import { Library } from './Library'
-import type { FilmstripMeta, Gif, Video } from './types'
+import type { CurrentUser, FilmstripMeta, Gif, Video } from './types'
+import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
+
+/** The avatar/handle pill in the header — clicking it opens a small menu
+ * (design brief §2) with a link to the user's own profile and sign-out,
+ * closing on an outside click. */
+function AccountMenu({ user }: { user: CurrentUser }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useClickOutside(rootRef, open, () => setOpen(false))
+
+  return (
+    <div className="account-menu" ref={rootRef}>
+      <button
+        type="button"
+        className="account-pill"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        {user.avatarUrl && <img src={user.avatarUrl} alt="" className="account-avatar" />}
+        <span className="account-handle">{user.handle}</span>
+        <ChevronDownIcon size={14} />
+      </button>
+      {open && (
+        <div className="account-dropdown" role="menu">
+          <Link
+            className="account-dropdown-item"
+            to={`/u/${user.handle}`}
+            role="menuitem"
+            onClick={() => setOpen(false)}
+          >
+            View profile
+          </Link>
+          <button
+            type="button"
+            className="account-dropdown-item"
+            role="menuitem"
+            onClick={() => logout().then(() => window.location.reload())}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** `/library` and `/library/:gifId` both land here — the id (if any)
  * pre-selects that GIF in the detail panel, and selecting a different one
@@ -22,7 +70,6 @@ function ArchiveRoute() {
     <Archive
       initialSelectedId={gifId ?? null}
       onSelectGif={(id) => navigate(id ? `/library/${id}` : '/library', { replace: true })}
-      onNewGif={() => navigate('/new')}
     />
   )
 }
@@ -103,19 +150,35 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="page">
+      <AuthShell>
         <p className="va-hint">Loading…</p>
-      </div>
+      </AuthShell>
     )
   }
 
   if (!user) {
     return (
-      <div className="page">
-        <a className="app-nav-btn" href={LOGIN_URL}>
+      <AuthShell>
+        <div className="auth-tiles">
+          <div className="auth-tile auth-tile-left">
+            <span className="caption-text auth-tile-caption">INDEED.</span>
+          </div>
+          <div className="auth-tile auth-tile-center">
+            <span className="caption-text auth-tile-caption auth-tile-caption-accent">WELL. YES.</span>
+          </div>
+          <div className="auth-tile auth-tile-right">
+            <span className="caption-text auth-tile-caption">FAIR.</span>
+          </div>
+        </div>
+        <h1 className="caption-text auth-headline">
+          SAY IT WITH A <span className="auth-headline-accent">GIF.</span>
+        </h1>
+        <p className="auth-subline">Clip it, caption it, send it. Sign in to get to your library.</p>
+        <a className="btn btn-primary btn-hero" href={LOGIN_URL}>
+          <LogInIcon />
           Sign in with Google
         </a>
-      </div>
+      </AuthShell>
     )
   }
 
@@ -123,57 +186,60 @@ export default function App() {
     return <HandlePicker suggestedHandle={user.suggestedHandle} onHandleSet={setUser} />
   }
 
-  // SPEC-CLOUD.md §9: one fixed header — a wordmark, exactly three flat
-  // tabs (Admin only for an admin account), and an avatar/handle button on
-  // the right that opens the current user's own public profile. "New GIF"
-  // isn't one of the three tabs; it's a toolbar action inside My Library
-  // (Archive's onNewGif prop) that starts the video-picker/editor sub-flow
-  // (`/new`, `/edit/:videoId`) — still conceptually nested under My
-  // Library, so that tab stays highlighted while on either of those paths
-  // too, not just on `/library` itself.
+  // SPEC-CLOUD.md §9 / design brief §2: one fixed header — a wordmark,
+  // exactly three flat tabs (Admin only for an admin account), a primary
+  // "New GIF" button, and an account pill (avatar/handle) that opens a
+  // small menu with the profile link and sign-out. "New GIF" still isn't
+  // one of the three tabs, and the video-picker/editor sub-flow it starts
+  // (`/new`, `/edit/:videoId`) stays conceptually nested under My Library,
+  // so that tab keeps highlighting on those paths too, not just `/library`.
+  // (Archive's own toolbar copy of this action is gone as of the My
+  // Library redesign pass — this header button is the only entry point now.)
+  // The caption editor renders its own full header bar (back button,
+  // wordmark, title, Make GIF) — the global app header would just be a
+  // second, redundant one stacked above it.
+  const isEditorRoute = location.pathname.startsWith('/edit/')
+
   const libraryActive =
-    location.pathname === '/' ||
-    location.pathname.startsWith('/library') ||
-    location.pathname === '/new' ||
-    location.pathname.startsWith('/edit/')
+    location.pathname === '/' || location.pathname.startsWith('/library') || location.pathname === '/new' || isEditorRoute
 
   const nav = (
-    <nav className="app-nav">
-      <div className="app-nav-group">
-        <span className="app-logo">Gifiac</span>
-        <Link className={`app-nav-btn ${libraryActive ? 'active' : ''}`} to="/library">
-          My Library
-        </Link>
-        <Link
-          className={`app-nav-btn ${location.pathname.startsWith('/explore') ? 'active' : ''}`}
-          to="/explore"
-        >
-          Global Library
-        </Link>
-        {user.role === 'admin' && (
-          <Link
-            className={`app-nav-btn ${location.pathname.startsWith('/admin') ? 'active' : ''}`}
-            to="/admin"
-          >
-            Admin
+    <header className="app-header">
+      <div className="app-header-left">
+        <span className="app-header-brand">Gifiac</span>
+        <nav className="app-header-tabs" aria-label="Main">
+          <Link className={`app-header-tab ${libraryActive ? 'active' : ''}`} to="/library">
+            My Library
           </Link>
-        )}
+          <Link
+            className={`app-header-tab ${location.pathname.startsWith('/explore') ? 'active' : ''}`}
+            to="/explore"
+          >
+            Global Library
+          </Link>
+          {user.role === 'admin' && (
+            <Link
+              className={`app-header-tab ${location.pathname.startsWith('/admin') ? 'active' : ''}`}
+              to="/admin"
+            >
+              Admin
+            </Link>
+          )}
+        </nav>
       </div>
-      <div className="app-nav-group">
-        <Link className="app-nav-btn app-avatar-btn" to={`/u/${user.handle}`}>
-          {user.avatarUrl && <img src={user.avatarUrl} alt="" className="app-avatar" />}
-          {user.handle}
+      <div className="app-header-right">
+        <Link to="/new" className="btn btn-primary">
+          <PlusIcon />
+          New GIF
         </Link>
-        <button className="app-nav-btn" onClick={() => logout().then(() => window.location.reload())}>
-          Sign out
-        </button>
+        <AccountMenu user={user} />
       </div>
-    </nav>
+    </header>
   )
 
   return (
     <>
-      {nav}
+      {!isEditorRoute && nav}
       <Routes>
         <Route path="/" element={<Navigate to="/library" replace />} />
         <Route path="/library" element={<ArchiveRoute />} />
