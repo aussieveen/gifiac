@@ -52,6 +52,11 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),
         )
         .route("/gifs/{id}/use", post(gifs::use_gif))
+        .route(
+            "/gifs/{id}/favourite",
+            post(gifs::favourite_gif).delete(gifs::unfavourite_gif),
+        )
+        .route("/favourites", get(gifs::list_favourites))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { getProfile } from './api'
+import { favouriteGif, getProfile, LOGIN_URL, unfavouriteGif } from './api'
+import { HeartIcon } from './icons'
 import { PublicTopBar } from './PublicTopBar'
-import type { Profile } from './types'
+import type { Gif, Profile } from './types'
+import { useCurrentUser } from './useCurrentUser'
 
 // SPEC-CLOUD.md §5: a public profile page — no sign-in required to view
 // it. Only shows public gifs for now; templates join once they're
@@ -18,8 +20,10 @@ import type { Profile } from './types'
 export function ProfilePage() {
   const { handle } = useParams<{ handle: string }>()
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [gifs, setGifs] = useState<Gif[]>([])
   const [notFound, setNotFound] = useState(false)
   const [loading, setLoading] = useState(true)
+  const { user } = useCurrentUser()
 
   useEffect(() => {
     if (!handle) return
@@ -28,7 +32,10 @@ export function ProfilePage() {
     setNotFound(false)
     getProfile(handle)
       .then((result) => {
-        if (!cancelled) setProfile(result)
+        if (!cancelled) {
+          setProfile(result)
+          setGifs(result.gifs)
+        }
       })
       .catch(() => {
         if (!cancelled) setNotFound(true)
@@ -40,6 +47,16 @@ export function ProfilePage() {
       cancelled = true
     }
   }, [handle])
+
+  async function toggleFavourite(id: string, isFavourited: boolean) {
+    try {
+      const updated = isFavourited ? await unfavouriteGif(id) : await favouriteGif(id)
+      setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
+    } catch {
+      // No toast infrastructure on this standalone public page — a failed
+      // toggle just leaves the heart showing its prior, still-correct state.
+    }
+  }
 
   if (loading) {
     return (
@@ -68,13 +85,38 @@ export function ProfilePage() {
         )}
         <h1>{profile.handle}</h1>
       </div>
-      {profile.gifs.length === 0 ? (
+      {gifs.length === 0 ? (
         <p className="va-hint">No public GIFs yet.</p>
       ) : (
         <div className="archive-grid">
-          {profile.gifs.map((gif) => (
-            <img key={gif.id} src={gif.gif_url ?? ''} alt={gif.name} title={gif.name} className="profile-gif-tile" />
-          ))}
+          {gifs.map((gif) =>
+            // SPEC-CLOUD.md §14: this page is reachable while logged out
+            // (main.tsx routes it outside App's auth-gated shell) — an
+            // anonymous visitor's heart is a plain link to sign in, same
+            // pattern as every other logged-out call-to-action in this app
+            // (About.tsx, App.tsx's own sign-in link), rather than a
+            // button that 401s or navigates imperatively.
+            user ? (
+              <div key={gif.id} className="profile-gif-tile-wrap">
+                <img src={gif.gif_url ?? ''} alt={gif.name} title={gif.name} className="profile-gif-tile" />
+                <button
+                  type="button"
+                  className={`archive-heart-btn ${gif.is_favourited ? 'favourited' : ''}`}
+                  aria-label={gif.is_favourited ? 'Remove from Saved' : 'Save'}
+                  onClick={() => toggleFavourite(gif.id, gif.is_favourited)}
+                >
+                  <HeartIcon size={14} filled={gif.is_favourited} />
+                </button>
+              </div>
+            ) : (
+              <div key={gif.id} className="profile-gif-tile-wrap">
+                <img src={gif.gif_url ?? ''} alt={gif.name} title={gif.name} className="profile-gif-tile" />
+                <a className="archive-heart-btn" aria-label="Sign in to save" href={LOGIN_URL}>
+                  <HeartIcon size={14} />
+                </a>
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>

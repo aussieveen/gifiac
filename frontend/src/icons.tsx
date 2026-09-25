@@ -235,3 +235,15 @@ export function ShareIcon({ size = 16, className }: IconProps) {
     </svg>
   )
 }
+
+/** The favourite/save toggle (SPEC-CLOUD.md §14) — outline when not
+ * saved, filled (`fill: currentColor`, the one departure from this file's
+ * otherwise always-outline icons) when saved, so the two states read
+ * apart at a glance on a small grid thumbnail. */
+export function HeartIcon({ size = 16, className, filled = false }: IconProps & { filled?: boolean }) {
+  return (
+    <svg {...base} fill={filled ? 'currentColor' : 'none'} width={size} height={size} className={className}>
+      <path d="M12 21s-7.5-4.35-10-9.28C.5 8.5 2.3 5 6 5c2 0 3.3 1 4 2 .7-1 2-2 4-2 3.7 0 5.5 3.5 4 6.72C19.5 16.65 12 21 12 21z" />
+    </svg>
+  )
+}

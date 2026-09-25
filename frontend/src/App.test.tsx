@@ -330,6 +330,7 @@ describe('App', () => {
       is_one_off: false,
       is_public: false,
       use_count: 0,
+      is_favourited: false,
       created_at: '2026-01-01T00:00:00Z',
       gif_url: 'http://example.com/g1.gif',
     }

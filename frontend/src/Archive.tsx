@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { deleteGif, importGifs, linkGif, listGifs, recordGifUse, renameGif, setGifOneOff, setGifPublic } from './api'
+import {
+  deleteGif,
+  favouriteGif,
+  importGifs,
+  linkGif,
+  listFavourites,
+  listGifs,
+  recordGifUse,
+  renameGif,
+  setGifOneOff,
+  setGifPublic,
+  unfavouriteGif,
+} from './api'
+import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
   CheckIcon,
@@ -8,6 +21,7 @@ import {
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  HeartIcon,
   LinkIcon,
   LockIcon,
   SearchIcon,
@@ -15,10 +29,21 @@ import {
   TrashIcon,
   UploadIcon,
 } from './icons'
-import type { Gif } from './types'
+import type { Gif, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
+import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
+
+// SPEC-CLOUD.md §14: a Saved-mode row is `LibraryEntry`-shaped (owner
+// attribution included); a My-GIFs-mode row is a plain `Gif` (no
+// attribution — reusing `LibraryEntry`'s own field types keeps the two
+// owner fields' shape in one place rather than re-declared here). One
+// state type covers both modes rather than juggling two differently-typed
+// arrays.
+type ArchiveItem = Gif & Partial<Pick<LibraryEntry, 'owner_handle' | 'owner_slug'>>
+
+type Mode = 'mine' | 'saved'
 
 /** `navigator.clipboard` only exists in secure contexts (HTTPS, or
  * localhost) — StrewthGif is a self-hosted LAN tool typically served over plain
@@ -74,7 +99,8 @@ interface Props {
 }
 
 export function Archive({ initialSelectedId, onSelectGif }: Props) {
-  const [gifs, setGifs] = useState<Gif[]>([])
+  const [mode, setMode] = useState<Mode>('mine')
+  const [gifs, setGifs] = useState<ArchiveItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -85,6 +111,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     onSelectGif?.(id)
   }
   const canEdit = useCanEdit()
+  const { user } = useCurrentUser()
   const canShare = typeof navigator.share === 'function'
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -105,11 +132,18 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   // the API itself implements (name + caption_text together). The
   // public/private/one-off chips are a second, client-side filter layered
   // on top of that same result set.
+  //
+  // SPEC-CLOUD.md §14: Saved mode swaps the whole dataset via its own
+  // endpoint rather than filtering this one — it isn't a compatible
+  // client-side filter over "my gifs" the way the chips are, since Saved
+  // can include other users' gifs. `query` has no effect there (no
+  // search/sort for Saved yet — see the map's "Not yet specified").
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setLoadError(null)
-    listGifs(query)
+    const request = mode === 'saved' ? listFavourites() : listGifs(query)
+    request
       .then((gs) => {
         if (!cancelled) setGifs(gs)
       })
@@ -122,9 +156,10 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     return () => {
       cancelled = true
     }
-  }, [query])
+  }, [query, mode])
 
   const filteredGifs = gifs.filter((g) => {
+    if (mode === 'saved') return true
     if (filter === 'public') return g.is_public
     if (filter === 'private') return !g.is_public
     if (filter === 'one-offs') return g.is_one_off
@@ -132,6 +167,12 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   })
 
   const selected = gifs.find((g) => g.id === selectedId) ?? null
+  // SPEC-CLOUD.md §14: Saved can hold someone else's gif — owner-only
+  // controls (rename, Public/One-off, Delete, Remix) below all gate on
+  // this, matching the map's "Remix scope" decision that remixing another
+  // user's gif is out of scope, and the backend's own ownership-scoped
+  // rename/delete/publish endpoints, which 404 for a non-owner anyway.
+  const isOwnGif = !selected?.owner_slug || selected.owner_slug === user?.slug
 
   async function rename(name: string) {
     if (!selected) return
@@ -217,6 +258,25 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     }
   }
 
+  // SPEC-CLOUD.md §14: toggles the heart from either a grid thumbnail or
+  // the detail panel — both funnel through here so the two stay in sync.
+  // In Saved mode, un-favouriting a gif removes it from view entirely
+  // (Saved only ever shows gifs you've favourited), clearing the
+  // selection if that was the open one; elsewhere it's an in-place update.
+  async function toggleFavourite(id: string, isFavourited: boolean) {
+    try {
+      const updated = isFavourited ? await unfavouriteGif(id) : await favouriteGif(id)
+      if (mode === 'saved' && !updated.is_favourited) {
+        setGifs((gs) => gs.filter((g) => g.id !== updated.id))
+        if (selectedId === updated.id) setSelectedId(null)
+      } else {
+        setGifs((gs) => gs.map((g) => (g.id === updated.id ? { ...g, ...updated } : g)))
+      }
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   async function handleImport(files: FileList | null) {
     if (!files || files.length === 0) return
     setImporting(true)
@@ -278,78 +338,109 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           <h1 className="page-title">My Library</h1>
           <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
         </div>
-        <div className="archive-import-menu" ref={importMenuRef}>
-          <button
-            type="button"
-            className="btn btn-secondary archive-import-btn"
-            onClick={() => setShowImportMenu((o) => !o)}
-            aria-haspopup="true"
-            aria-expanded={showImportMenu}
-            aria-label="Import GIFs"
-          >
-            <UploadIcon size={16} className="archive-import-btn-icon" />
-            <span className="archive-import-btn-label">Import</span>
-            <ChevronDownIcon size={14} className="archive-import-btn-label" />
-          </button>
-          {showImportMenu && (
-            <div className="account-dropdown archive-import-dropdown" role="menu">
-              <label className="account-dropdown-item" role="menuitem">
-                {importing ? 'Importing…' : 'Upload GIFs'}
-                <input
-                  type="file"
-                  accept="image/gif,video/*"
-                  multiple
-                  hidden
-                  disabled={importing}
-                  onChange={(e) => {
-                    handleImport(e.target.files)
-                    e.target.value = '' // allow re-selecting the same file(s) later
+        {/* SPEC-CLOUD.md §14: importing/linking only makes sense for gifs
+            you're creating, not the Saved view of gifs you've favourited. */}
+        {mode === 'mine' && (
+          <div className="archive-import-menu" ref={importMenuRef}>
+            <button
+              type="button"
+              className="btn btn-secondary archive-import-btn"
+              onClick={() => setShowImportMenu((o) => !o)}
+              aria-haspopup="true"
+              aria-expanded={showImportMenu}
+              aria-label="Import GIFs"
+            >
+              <UploadIcon size={16} className="archive-import-btn-icon" />
+              <span className="archive-import-btn-label">Import</span>
+              <ChevronDownIcon size={14} className="archive-import-btn-label" />
+            </button>
+            {showImportMenu && (
+              <div className="account-dropdown archive-import-dropdown" role="menu">
+                <label className="account-dropdown-item" role="menuitem">
+                  {importing ? 'Importing…' : 'Upload GIFs'}
+                  <input
+                    type="file"
+                    accept="image/gif,video/*"
+                    multiple
+                    hidden
+                    disabled={importing}
+                    onChange={(e) => {
+                      handleImport(e.target.files)
+                      e.target.value = '' // allow re-selecting the same file(s) later
+                      setShowImportMenu(false)
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="account-dropdown-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowLinkForm((s) => !s)
                     setShowImportMenu(false)
                   }}
-                />
-              </label>
+                >
+                  Add from URL
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* SPEC-CLOUD.md §14: swaps the whole dataset/toolbar below, not a
+          filter over one already-fetched list — see the fetch effect. */}
+      <div className="mode-toggle" role="group" aria-label="My Library mode">
+        <button
+          type="button"
+          className={mode === 'mine' ? 'active' : ''}
+          onClick={() => {
+            setMode('mine')
+            setSelectedId(null)
+          }}
+        >
+          My GIFs
+        </button>
+        <button
+          type="button"
+          className={mode === 'saved' ? 'active' : ''}
+          onClick={() => {
+            setMode('saved')
+            setSelectedId(null)
+          }}
+        >
+          Saved
+        </button>
+      </div>
+
+      {mode === 'mine' && (
+        <div className="archive-toolbar">
+          <div className="archive-search-wrap">
+            <SearchIcon size={16} className="archive-search-icon" />
+            <input
+              className="archive-search"
+              placeholder="Search names and captions"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search archive"
+            />
+          </div>
+          <div className="archive-chips" role="group" aria-label="Filter GIFs">
+            {FILTERS.map((f) => (
               <button
+                key={f.id}
                 type="button"
-                className="account-dropdown-item"
-                role="menuitem"
-                onClick={() => {
-                  setShowLinkForm((s) => !s)
-                  setShowImportMenu(false)
-                }}
+                className={`archive-chip ${filter === f.id ? 'active' : ''}`}
+                onClick={() => setFilter(f.id)}
               >
-                Add from URL
+                {f.label}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="archive-toolbar">
-        <div className="archive-search-wrap">
-          <SearchIcon size={16} className="archive-search-icon" />
-          <input
-            className="archive-search"
-            placeholder="Search names and captions"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search archive"
-          />
-        </div>
-        <div className="archive-chips" role="group" aria-label="Filter GIFs">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={`archive-chip ${filter === f.id ? 'active' : ''}`}
-              onClick={() => setFilter(f.id)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {showLinkForm && (
+      {mode === 'mine' && showLinkForm && (
         <form className="archive-link-form" onSubmit={handleLink}>
           <input
             className="archive-link-url"
@@ -388,13 +479,23 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
             // meaningful. Desktop only (CSS-hidden below 1024px) — on a
             // phone/tablet the One-offs chip is the only way to isolate
             // them, since the grid is too cramped for a divider to read.
-            const showDivider = filter === 'all' && g.is_one_off && (i === 0 || !filteredGifs[i - 1].is_one_off)
+            const showDivider =
+              mode === 'mine' && filter === 'all' && g.is_one_off && (i === 0 || !filteredGifs[i - 1].is_one_off)
             return (
               <div key={g.id} className="archive-grid-item">
                 {showDivider && <div className="archive-grid-divider">One-offs</div>}
-                <button
+                {/* A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a
+                    real `<button>` heart inside for the favourite toggle,
+                    and a button-inside-a-button is invalid HTML that gets
+                    silently hoisted out by the parser, breaking layout. */}
+                <div
                   className={`archive-thumb ${g.id === selectedId ? 'selected' : ''}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedId(g.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') setSelectedId(g.id)
+                  }}
                   aria-label={g.name}
                 >
                   {g.gif_url && <img src={g.gif_url} alt={g.name} />}
@@ -412,13 +513,34 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                       <LinkIcon size={14} />
                     </span>
                   )}
-                </button>
+                  <button
+                    type="button"
+                    className={`archive-heart-btn ${g.is_favourited ? 'favourited' : ''}`}
+                    aria-label={g.is_favourited ? 'Remove from Saved' : 'Save'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleFavourite(g.id, g.is_favourited)
+                    }}
+                  >
+                    <HeartIcon size={14} filled={g.is_favourited} />
+                  </button>
+                </div>
               </div>
             )
           })}
-          {!loading && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
-          {!loading && gifs.length > 0 && filteredGifs.length === 0 && (
+          {!loading && mode === 'mine' && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
+          {!loading && mode === 'mine' && gifs.length > 0 && filteredGifs.length === 0 && (
             <p className="va-hint">No GIFs match this filter.</p>
+          )}
+          {!loading && mode === 'saved' && gifs.length === 0 && (
+            <div className="archive-saved-empty">
+              <HeartIcon size={32} />
+              <h3>No saved GIFs yet</h3>
+              <p className="va-hint">Hit the heart on any GIF in the Global Library to keep it here for later.</p>
+              <Link className="btn btn-primary" to="/explore">
+                Browse Global Library
+              </Link>
+            </div>
           )}
         </div>
 
@@ -457,17 +579,28 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                 alt={`${selected.name} preview`}
               />
               <div className="archive-panel-header">
-                <input
-                  className="archive-panel-name"
-                  aria-label="GIF name"
-                  defaultValue={selected.name}
-                  key={`name-${selected.id}`}
-                  onBlur={(e) => rename(e.target.value)}
-                />
+                {isOwnGif ? (
+                  <input
+                    className="archive-panel-name"
+                    aria-label="GIF name"
+                    defaultValue={selected.name}
+                    key={`name-${selected.id}`}
+                    onBlur={(e) => rename(e.target.value)}
+                  />
+                ) : (
+                  <p className="archive-panel-title-text">{selected.name}</p>
+                )}
                 <span className={`archive-visibility-pill ${selected.is_public ? 'public' : 'private'}`}>
                   {selected.is_public ? 'Public' : 'Private'}
                 </span>
               </div>
+              {/* SPEC-CLOUD.md §14: only present in Saved mode, and only
+                  meaningful there — Saved can hold other users' gifs. */}
+              {selected.owner_handle && selected.owner_slug && (
+                <Link className="archive-owner-link" to={profileUrl(selected.owner_slug)}>
+                  {selected.owner_handle}
+                </Link>
+              )}
               {selected.caption_text && <p className="archive-panel-caption">{selected.caption_text}</p>}
               <p className="archive-panel-meta">
                 <span>{new Date(selected.created_at).toLocaleString()}</span>
@@ -481,9 +614,19 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
               )}
 
               {canEdit && (
-                <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
-                  <LinkIcon /> Copy link
-                </button>
+                <div className="archive-panel-primary-row">
+                  <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                    <LinkIcon /> Copy link
+                  </button>
+                  <button
+                    type="button"
+                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                  >
+                    <HeartIcon filled={selected.is_favourited} />
+                  </button>
+                </div>
               )}
 
               <div className="archive-panel-secondary-row">
@@ -509,7 +652,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                     <DownloadIcon /> Download
                   </a>
                 )}
-                {canEdit && selected.video_id && (
+                {canEdit && selected.video_id && isOwnGif && (
                   <Link className="btn btn-secondary" to={`/edit/${selected.video_id}`}>
                     Remix
                   </Link>
@@ -530,47 +673,59 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                       <LinkIcon /> Copy link
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                  >
+                    <HeartIcon filled={selected.is_favourited} />
+                  </button>
                 </div>
               )}
 
-              <div className="archive-settings-list">
-                <div className="archive-settings-row">
-                  <div>
-                    <p className="archive-settings-title">Public</p>
-                    <p className="archive-settings-help">Show in the Global Library</p>
+              {isOwnGif && (
+                <div className="archive-settings-list">
+                  <div className="archive-settings-row">
+                    <div>
+                      <p className="archive-settings-title">Public</p>
+                      <p className="archive-settings-help">Show in the Global Library</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={selected.is_public}
+                      aria-label="Public"
+                      className={`archive-switch ${selected.is_public ? 'on' : ''}`}
+                      onClick={togglePublic}
+                    >
+                      <span className="archive-switch-knob" />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={selected.is_public}
-                    aria-label="Public"
-                    className={`archive-switch ${selected.is_public ? 'on' : ''}`}
-                    onClick={togglePublic}
-                  >
-                    <span className="archive-switch-knob" />
-                  </button>
-                </div>
-                <div className="archive-settings-row">
-                  <div>
-                    <p className="archive-settings-title">One-off</p>
-                    <p className="archive-settings-help">Hide from search after use</p>
+                  <div className="archive-settings-row">
+                    <div>
+                      <p className="archive-settings-title">One-off</p>
+                      <p className="archive-settings-help">Hide from search after use</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={selected.is_one_off}
+                      aria-label="One-off"
+                      className={`archive-switch ${selected.is_one_off ? 'on' : ''}`}
+                      onClick={toggleOneOff}
+                    >
+                      <span className="archive-switch-knob" />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={selected.is_one_off}
-                    aria-label="One-off"
-                    className={`archive-switch ${selected.is_one_off ? 'on' : ''}`}
-                    onClick={toggleOneOff}
-                  >
-                    <span className="archive-switch-knob" />
-                  </button>
                 </div>
-              </div>
+              )}
 
-              <button className="btn btn-danger" onClick={remove} disabled={deleting}>
-                <TrashIcon /> {deleting ? 'Deleting…' : 'Delete GIF'}
-              </button>
+              {isOwnGif && (
+                <button className="btn btn-danger" onClick={remove} disabled={deleting}>
+                  <TrashIcon /> {deleting ? 'Deleting…' : 'Delete GIF'}
+                </button>
+              )}
             </>
           )}
         </div>

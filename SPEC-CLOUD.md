@@ -257,6 +257,48 @@ This applies to any code produced along the way too — e.g. throwaway or semi-t
 
 ---
 
+## 14. Favourites & personal saved library
+
+Extends §8 (Global library) and §9 (Frontend navigation). Lets a user save someone else's gif to a personal list, browse it, and remove items from it, without editing or remixing the underlying gif (opening a saved gif in the caption editor to fork it is a separate, larger feature involving derived-content ownership/attribution, and is explicitly out of scope for this destination).
+
+**What's favouritable**: a gif opted into the global library (`is_public`), or a gif the caller owns themselves — public or private. The only thing that stays off-limits is another user's *private* gif. Favouriting your own gif is a little redundant with it already living in My Library, but it's allowed for consistency — one heart component and one rule everywhere a gif card renders, rather than special-casing "this is your own gif."
+
+**Where it lives in the UI**: no new top-level nav tab — §9's three flat tabs (My Library / Global Library / Admin) are unchanged. Instead, **My Library** gains a segmented mode toggle at the top of the page: **My GIFs** (today's owner-scoped view, unchanged) and **Saved**. Switching modes swaps the whole dataset and toolbar rather than filtering client-side — unlike the existing All/Public/Private/One-offs chips, which filter one already-fetched list of the caller's own gifs, "Saved" pulls a different dataset (other users' public gifs, plus any of the caller's own gifs they've favourited) via its own endpoint (below).
+
+- A heart icon renders on every gif card, everywhere one appears: Global Library, My Library (both "My GIFs" and "Saved" modes), and public profile pages (`/u/:handle`, §5) — one control, no per-surface variation.
+  - On a grid thumbnail: a small circular button in the corner, grey outline when not saved, filled pink when saved.
+  - In the detail panel: a small square icon-button next to the existing "Copy link" primary action (not replacing it, and not full-width) — always pink-toned, outline when not saved, filled when saved. Embed/Download stay as the unchanged secondary row below.
+  - Toggling from either surface (grid or detail panel) updates both immediately — they render off one shared per-viewer state, never drift independently.
+- **Saved empty state**: an outline heart icon, "No saved GIFs yet," a line pointing at the Global Library's heart action, and a "Browse Global Library" link.
+- **Saved sort**: newest-favourited first only (ordered by when it was saved, not the gif's own creation date) — no secondary "Most used"-style sort yet, matching the presence/absence-only data model below. Revisit if a richer Saved view (sort, filter, search) turns out to be missed; not designed now.
+
+**Un-publishing is not the same as deleting.** If the owner of a gif you've saved later makes it private again, it disappears from your Saved view — but the favourite row itself isn't touched. If they re-publish it later, it silently reappears. Only an actual gif deletion removes the favourite row for good (see Data model).
+
+### Data model
+
+`favourites` (new table)
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | TEXT | FK → `users.id`, `ON DELETE CASCADE` |
+| `gif_id` | TEXT | FK → `gifs.id`, `ON DELETE CASCADE` |
+| `created_at` | TEXT | ISO8601 — when the gif was saved; drives Saved's sort order |
+| | | PK on `(user_id, gif_id)` |
+
+Deleting a user or a gif cascades away their favourite rows — no tombstones. Un-publishing a gif (`is_public` flipping to `false`) does **not** touch its favourite rows; visibility is enforced at read time instead (below), which is what makes the reappear-on-republish behavior fall out for free.
+
+### API surface
+
+- `POST /api/gifs/{id}/favourite` — save, idempotent (saving twice is a no-op). `DELETE /api/gifs/{id}/favourite` — remove, idempotent. Both mirror the existing `POST /api/gifs/{id}/use` pattern (§8): they return the updated gif view so the frontend can sync local state without a re-fetch. Both enforce the favouritable-scope rule above server-side — a request against a gif that's neither public nor owned by the caller gets `404 Not Found`, the same treatment `db::get_gif`'s owner-scoped lookup already gives an invisible resource, so as not to confirm a private gif's existence.
+- `GET /api/favourites` (new, auth required) — the caller's saved gifs, in the same attributed row shape `GET /api/library` already returns (a saved gif may be the caller's own or someone else's), filtered to gifs currently visible to the caller and sorted newest-favourited-first.
+- Every gif-card response gains a per-viewer `isFavourited: bool`, computed per-request from the caller's set of favourited gif ids:
+  - `GET /api/gifs` (My Library) — already authenticated, no change to its auth requirement.
+  - `GET /api/library` (Global Library) and `GET /api/profiles/{slug}` (public profiles) — both switch from fully anonymous to the `OptionalCurrentUser` extractor (already defined in the auth module, previously only used by `/auth/me`): a logged-out viewer still browses freely and just gets `isFavourited: false` on every item.
+
+---
+
 ## Appendix: process record
 
 This spec was assembled from a structured decision process on this repo's issue tracker: **Map: Gifiac multi-tenant AWS launch** ([issue #1](https://github.com/aussieveen/gifiac/issues/1)) and its 23 resolved child tickets (issues #2–#24), each holding the full question, reasoning, and resolution behind one decision above. `SPEC.md` itself was not edited by this effort — only referenced; reconciling/merging the two documents is a follow-up outside this effort's scope.
+
+§14 (Favourites & personal saved library) was assembled from a second, later decision process on the same tracker: **Map: Favourite GIFs and personal saved library** ([issue #26](https://github.com/aussieveen/gifiac/issues/26)), itself charted from a feature request ([issue #25](https://github.com/aussieveen/gifiac/issues/25)), and its three resolved child tickets ([#27](https://github.com/aussieveen/gifiac/issues/27), [#28](https://github.com/aussieveen/gifiac/issues/28), [#29](https://github.com/aussieveen/gifiac/issues/29)).

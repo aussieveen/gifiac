@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::{Path as AxPath, State};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, OptionalCurrentUser};
 use crate::db;
 use crate::error::AppError;
 use crate::handle;
@@ -62,18 +62,29 @@ pub struct ProfileResponse {
 /// `GET /api/profiles/{slug}` — public, no auth required. Only a user's
 /// public gifs show here (SPEC-CLOUD.md §5) — templates join once
 /// they're servable independently of video ownership (M5d).
+///
+/// Auth-optional (SPEC-CLOUD.md §14), same as `list_library`: a logged-out
+/// visitor still sees the profile, just with `is_favourited: false` on
+/// every gif.
 pub async fn get_profile(
     State(state): State<Arc<AppState>>,
+    OptionalCurrentUser(viewer): OptionalCurrentUser,
     AxPath(slug): AxPath<String>,
 ) -> Result<Json<ProfileResponse>, AppError> {
     let user = db::get_user_by_slug(&state.pool, &slug)
         .await?
         .ok_or(AppError::NotFound)?;
 
+    let viewer_id = viewer.as_ref().map(|CurrentUser(viewer)| viewer.id.as_str());
+    let favourited = db::favourited_ids_for_viewer(&state.pool, viewer_id).await?;
+
     let gifs = db::list_public_gifs_by_user(&state.pool, &user.id)
         .await?
         .into_iter()
-        .map(|gif| with_urls(gif, &state.storage))
+        .map(|gif| {
+            let is_favourited = favourited.contains(&gif.id);
+            with_urls(gif, &state.storage, is_favourited)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(ProfileResponse {

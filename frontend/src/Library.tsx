@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { adminDeleteGif, listLibrary, recordGifUse } from './api'
+import { adminDeleteGif, favouriteGif, listLibrary, recordGifUse, unfavouriteGif } from './api'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
@@ -8,6 +8,7 @@ import {
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  HeartIcon,
   LinkIcon,
   SearchIcon,
   ShareIcon,
@@ -94,6 +95,17 @@ export function Library() {
     recordGifUse(id)
       .then((updated) => setItems((its) => its.map((it) => (it.id === updated.id ? { ...it, ...updated } : it))))
       .catch(() => {})
+  }
+
+  // SPEC-CLOUD.md §14: toggles the heart from either a grid thumbnail or
+  // the detail panel — both funnel through here so the two stay in sync.
+  async function toggleFavourite(id: string, isFavourited: boolean) {
+    try {
+      const updated = isFavourited ? await unfavouriteGif(id) : await favouriteGif(id)
+      setItems((its) => its.map((it) => (it.id === updated.id ? { ...it, ...updated } : it)))
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
   }
 
   // SPEC-CLOUD.md §8: the library's primary action on a gif is "copy
@@ -193,10 +205,19 @@ export function Library() {
       <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div className="archive-grid">
           {items.map((item) => (
-            <button
+            // A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a real
+            // `<button>` heart inside for the favourite toggle, and a
+            // button-inside-a-button is invalid HTML the parser silently
+            // hoists out, breaking layout.
+            <div
               key={item.id}
               className={`archive-thumb ${item.id === selectedId ? 'selected' : ''}`}
+              role="button"
+              tabIndex={0}
               onClick={() => setSelectedId(item.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') setSelectedId(item.id)
+              }}
               aria-label={item.name}
             >
               {item.gif_url && <img src={item.gif_url} alt={item.name} />}
@@ -205,7 +226,18 @@ export function Library() {
                   <LinkIcon size={14} />
                 </span>
               )}
-            </button>
+              <button
+                type="button"
+                className={`archive-heart-btn ${item.is_favourited ? 'favourited' : ''}`}
+                aria-label={item.is_favourited ? 'Remove from Saved' : 'Save'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleFavourite(item.id, item.is_favourited)
+                }}
+              >
+                <HeartIcon size={14} filled={item.is_favourited} />
+              </button>
+            </div>
           ))}
           {!loading && items.length === 0 && <p className="va-hint">No public GIFs yet.</p>}
         </div>
@@ -251,9 +283,19 @@ export function Library() {
               </p>
 
               {canEdit && (
-                <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
-                  <LinkIcon /> Copy link
-                </button>
+                <div className="archive-panel-primary-row">
+                  <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                    <LinkIcon /> Copy link
+                  </button>
+                  <button
+                    type="button"
+                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                  >
+                    <HeartIcon filled={selected.is_favourited} />
+                  </button>
+                </div>
               )}
 
               <div className="archive-panel-secondary-row">
@@ -292,6 +334,14 @@ export function Library() {
                       <LinkIcon /> Copy link
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                  >
+                    <HeartIcon filled={selected.is_favourited} />
+                  </button>
                 </div>
               )}
 

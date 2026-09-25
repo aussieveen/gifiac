@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,9 +11,11 @@ vi.mock('./api', () => ({
   recordGifUse: vi.fn(),
   adminDeleteGif: vi.fn(),
   getCurrentUser: vi.fn(),
+  favouriteGif: vi.fn(),
+  unfavouriteGif: vi.fn(),
 }))
 
-import { adminDeleteGif, getCurrentUser, listLibrary, recordGifUse } from './api'
+import { adminDeleteGif, favouriteGif, getCurrentUser, listLibrary, recordGifUse, unfavouriteGif } from './api'
 
 const entryA: LibraryEntry = {
   id: 'g1',
@@ -30,6 +32,7 @@ const entryA: LibraryEntry = {
   is_one_off: false,
   is_public: true,
   use_count: 0,
+  is_favourited: false,
   gif_url: 'http://example.com/g1.gif',
   owner_handle: 'simon',
   owner_slug: 'simon',
@@ -52,6 +55,8 @@ beforeEach(() => {
   // component's own `.catch(() => {})` swallows.
   vi.mocked(recordGifUse).mockRejectedValue(new Error('not mocked'))
   vi.mocked(adminDeleteGif).mockReset()
+  vi.mocked(favouriteGif).mockReset()
+  vi.mocked(unfavouriteGif).mockReset()
   // Library.tsx uses useCurrentUser() itself (only to gate the admin-only
   // Delete button) — default to a plain signed-in user; individual tests
   // override this to check the admin case.
@@ -226,5 +231,36 @@ describe('Library', () => {
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(document.querySelector('.archive-mobile-action-bar')).not.toBeNull()
+  })
+})
+
+// SPEC-CLOUD.md §14.
+describe('Library favourites', () => {
+  it('clicking a thumbnail heart favourites it without opening the detail panel', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(favouriteGif).mockResolvedValue({ ...entryA, is_favourited: true })
+    const user = userEvent.setup()
+
+    renderLibrary()
+    await user.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(favouriteGif).toHaveBeenCalledWith('g1')
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+    const grid = document.querySelector('.archive-grid') as HTMLElement
+    expect(await within(grid).findByRole('button', { name: 'Remove from Saved' })).toBeInTheDocument()
+  })
+
+  it('the detail panel favourite button unfavourites an already-saved gif', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([{ ...entryA, is_favourited: true }])
+    vi.mocked(unfavouriteGif).mockResolvedValue({ ...entryA, is_favourited: false })
+    const user = userEvent.setup()
+
+    renderLibrary()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    const panel = document.querySelector('.archive-panel') as HTMLElement
+    await user.click(within(panel).getByRole('button', { name: 'Remove from Saved' }))
+
+    expect(unfavouriteGif).toHaveBeenCalledWith('g1')
+    expect(await within(panel).findByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 })

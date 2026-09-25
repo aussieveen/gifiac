@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
@@ -492,7 +494,11 @@ pub async fn admin_list_templates_by_user(pool: &PgPool, user_id: &str) -> Resul
 }
 
 /// Like `get_gif`, but admin-scoped — no owner filter (SPEC-CLOUD.md §7:
-/// "delete/unpublish any gif").
+/// "delete/unpublish any gif"). Also reused by `routes::gifs::unfavourite_gif`
+/// (SPEC-CLOUD.md §14) for a non-admin caller — but only once they've
+/// proven legitimate prior knowledge of the gif (an existing favourite
+/// row); never call this for an id a caller hasn't already earned access
+/// to some other way.
 pub async fn admin_get_gif(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
     let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = $1");
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
@@ -630,6 +636,100 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort)
                 .map_err(Into::into)
         }
     }
+}
+
+pub async fn is_favourited(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<bool> {
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM favourites WHERE user_id = $1 AND gif_id = $2")
+        .bind(user_id)
+        .bind(gif_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(exists.is_some())
+}
+
+pub async fn list_favourite_gif_ids(pool: &PgPool, user_id: &str) -> Result<HashSet<String>> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT gif_id FROM favourites WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids.into_iter().collect())
+}
+
+/// Shared by every auth-optional list endpoint (`list_library`,
+/// `get_profile` — SPEC-CLOUD.md §14): an anonymous viewer gets an empty
+/// set (everything reads as not-favourited) without a wasted query.
+pub async fn favourited_ids_for_viewer(pool: &PgPool, viewer_id: Option<&str>) -> Result<HashSet<String>> {
+    match viewer_id {
+        Some(id) => list_favourite_gif_ids(pool, id).await,
+        None => Ok(HashSet::new()),
+    }
+}
+
+/// A gif eligible to be favourited by `viewer_id` (SPEC-CLOUD.md §14):
+/// opted into the global library, or owned by the viewer themselves
+/// (public or private) — the only thing excluded is another user's
+/// private gif.
+pub async fn get_favouritable_gif(pool: &PgPool, id: &str, viewer_id: &str) -> Result<Option<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = $1 AND (is_public = true OR user_id = $2)");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(viewer_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Idempotent — saving an already-favourited gif again leaves its
+/// original `created_at` untouched rather than bumping it back to the top
+/// of Saved.
+pub async fn add_favourite(pool: &PgPool, user_id: &str, gif_id: &str, created_at: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO favourites (user_id, gif_id, created_at) VALUES ($1, $2, $3) \
+         ON CONFLICT (user_id, gif_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(gif_id)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Idempotent — removing a favourite that was never saved (or already
+/// removed) is a no-op, not an error. Doesn't check the gif's current
+/// visibility: unfavouriting your own bookmark is always allowed, even
+/// for a gif its owner has since made private (SPEC-CLOUD.md §14).
+pub async fn remove_favourite(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM favourites WHERE user_id = $1 AND gif_id = $2")
+        .bind(user_id)
+        .bind(gif_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The caller's saved gifs (SPEC-CLOUD.md §14, `GET /api/favourites`),
+/// newest-favourited first — ordered by `favourites.created_at`, not the
+/// gif's own, so re-favouriting an old gif bumps it back to the top.
+/// Filtered to gifs still visible to the viewer (public, or owned by
+/// them): un-publishing a gif doesn't delete its favourite row (see
+/// migration 0013), so this filter is what makes it disappear from Saved
+/// and reappear if it's re-published later.
+pub async fn list_favourite_gifs(pool: &PgPool, user_id: &str) -> Result<Vec<PublicGif>> {
+    let sql = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
+         gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle, \
+         users.slug AS owner_slug \
+         FROM favourites \
+         JOIN gifs ON gifs.id = favourites.gif_id \
+         JOIN users ON users.id = gifs.user_id \
+         WHERE favourites.user_id = $1 AND (gifs.is_public = true OR gifs.user_id = $1) \
+         ORDER BY favourites.created_at DESC";
+    sqlx::query_as::<_, PublicGif>(sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn create_session(pool: &PgPool, id: &str, user_id: &str, now: &str) -> Result<()> {

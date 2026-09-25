@@ -14,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::ass::generate_ass;
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, OptionalCurrentUser};
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{ExportEvent, transcode_and_upload};
@@ -35,14 +35,19 @@ pub struct GifResponse {
     gif_url: String,
     mp4_url: Option<String>,
     webm_url: Option<String>,
+    /// SPEC-CLOUD.md §14: per-viewer, not a property of the gif row itself
+    /// — the caller supplies it rather than `with_urls` computing it, so
+    /// every call site stays explicit about whose favourite state this is.
+    is_favourited: bool,
 }
 
-pub(crate) fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppError> {
+pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Result<GifResponse, AppError> {
     if let Some(external_url) = gif.external_url.clone() {
         return Ok(GifResponse {
             gif_url: external_url,
             mp4_url: None,
             webm_url: None,
+            is_favourited,
             gif,
         });
     }
@@ -51,8 +56,18 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage) -> Result<GifResponse, AppE
         gif_url: storage.public_url(&paths::gif_object_key(&uuid)),
         mp4_url: Some(storage.public_url(&paths::mp4_object_key(&uuid))),
         webm_url: Some(storage.public_url(&paths::webm_object_key(&uuid))),
+        is_favourited,
         gif,
     })
+}
+
+/// `with_urls`, plus a fresh per-viewer favourite-status lookup — the
+/// common shape behind every single-gif response that doesn't already
+/// know the answer up front (unlike `favourite_gif`/`unfavourite_gif`,
+/// which just toggled it and know the result without a query).
+async fn viewer_response(state: &AppState, viewer_id: &str, gif: Gif) -> Result<GifResponse, AppError> {
+    let is_favourited = db::is_favourited(&state.pool, viewer_id, &gif.id).await?;
+    with_urls(gif, &state.storage, is_favourited)
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,9 +86,13 @@ pub async fn list_gifs(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<GifResponse>>, AppError> {
     let gifs = db::list_gifs(&state.pool, &user.id, query.q.as_deref()).await?;
+    let favourited = db::list_favourite_gif_ids(&state.pool, &user.id).await?;
     let responses = gifs
         .into_iter()
-        .map(|gif| with_urls(gif, &state.storage))
+        .map(|gif| {
+            let is_favourited = favourited.contains(&gif.id);
+            with_urls(gif, &state.storage, is_favourited)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(responses))
 }
@@ -84,7 +103,7 @@ pub async fn get_gif(
     AxPath(id): AxPath<String>,
 ) -> Result<Json<GifResponse>, AppError> {
     let gif = db::get_gif(&state.pool, &id, &user.id).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(with_urls(gif, &state.storage)?))
+    Ok(Json(viewer_response(&state, &user.id, gif).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,7 +154,7 @@ pub async fn rename_gif(
             .ok_or(AppError::NotFound)?;
     }
 
-    Ok(Json(with_urls(gif, &state.storage)?))
+    Ok(Json(viewer_response(&state, &user.id, gif).await?))
 }
 
 /// `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8): copy-link, copy-embed, and
@@ -145,11 +164,75 @@ pub async fn rename_gif(
 /// separate re-fetch.
 pub async fn use_gif(
     State(state): State<Arc<AppState>>,
-    CurrentUser(_user): CurrentUser,
+    CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Json<GifResponse>, AppError> {
     let gif = db::increment_gif_use_count(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(with_urls(gif, &state.storage)?))
+    Ok(Json(viewer_response(&state, &user.id, gif).await?))
+}
+
+/// `POST /api/gifs/{id}/favourite` (SPEC-CLOUD.md §14) — idempotent save.
+/// Enforced server-side, not just a hidden client-side heart: a gif that's
+/// neither public nor owned by the caller 404s, the same treatment
+/// `db::get_gif`'s owner-scoped lookup already gives an invisible
+/// resource, so as not to confirm a private gif's existence.
+pub async fn favourite_gif(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<GifResponse>, AppError> {
+    let gif = db::get_favouritable_gif(&state.pool, &id, &user.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    db::add_favourite(&state.pool, &user.id, &id, &Utc::now().to_rfc3339()).await?;
+    Ok(Json(with_urls(gif, &state.storage, true)?))
+}
+
+/// `DELETE /api/gifs/{id}/favourite` (SPEC-CLOUD.md §14) — idempotent
+/// remove. Visibility is conditional, not skipped: if the caller already
+/// has a favourite row for this id, they've proven prior legitimate
+/// knowledge of it, so the lookup goes unscoped (`admin_get_gif`) — that's
+/// what lets removing your own bookmark keep working even for a gif its
+/// owner has since made private. Otherwise (nothing to remove) it falls
+/// back to the same visibility rule `favourite_gif` enforces, so a no-op
+/// unfavourite can't be used to probe an arbitrary private gif's
+/// existence/details.
+pub async fn unfavourite_gif(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<GifResponse>, AppError> {
+    let gif = if db::is_favourited(&state.pool, &user.id, &id).await? {
+        db::admin_get_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?
+    } else {
+        db::get_favouritable_gif(&state.pool, &id, &user.id)
+            .await?
+            .ok_or(AppError::NotFound)?
+    };
+    db::remove_favourite(&state.pool, &user.id, &id).await?;
+    Ok(Json(with_urls(gif, &state.storage, false)?))
+}
+
+/// `GET /api/favourites` (SPEC-CLOUD.md §14) — the caller's saved gifs, in
+/// the same attributed shape `GET /api/library` returns (a saved gif may
+/// be the caller's own or someone else's).
+pub async fn list_favourites(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Json<Vec<LibraryEntry>>, AppError> {
+    let gifs = db::list_favourite_gifs(&state.pool, &user.id).await?;
+    let entries = gifs
+        .into_iter()
+        .map(|public_gif| {
+            let owner_handle = public_gif.owner_handle.clone();
+            let owner_slug = public_gif.owner_slug.clone();
+            // Every row here is, by definition, one of the caller's own
+            // favourites — no lookup needed, unlike list_library's mixed
+            // viewer-relative state.
+            with_urls(public_gif.into(), &state.storage, true).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(entries))
 }
 
 /// `GET /api/library` (SPEC-CLOUD.md §8) — the global library, no auth
@@ -165,17 +248,25 @@ pub struct LibraryEntry {
     owner_slug: Option<String>,
 }
 
+/// Auth-optional (SPEC-CLOUD.md §14): a logged-out visitor still browses
+/// the library freely, they just get `is_favourited: false` on every
+/// item — favouriting itself still requires signing in, enforced by
+/// `favourite_gif` requiring a real `CurrentUser`.
 pub async fn list_library(
     State(state): State<Arc<AppState>>,
+    OptionalCurrentUser(viewer): OptionalCurrentUser,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<LibraryEntry>>, AppError> {
+    let viewer_id = viewer.as_ref().map(|CurrentUser(user)| user.id.as_str());
+    let favourited = db::favourited_ids_for_viewer(&state.pool, viewer_id).await?;
     let gifs = db::list_public_gifs(&state.pool, query.q.as_deref(), query.sort).await?;
     let entries = gifs
         .into_iter()
         .map(|public_gif| {
             let owner_handle = public_gif.owner_handle.clone();
             let owner_slug = public_gif.owner_slug.clone();
-            with_urls(public_gif.into(), &state.storage).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
+            let is_favourited = favourited.contains(&public_gif.id);
+            with_urls(public_gif.into(), &state.storage, is_favourited).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(entries))
@@ -254,7 +345,7 @@ pub async fn link_gif(
         user_id: user.id,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
-    Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage)?)))
+    Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage, false)?)))
 }
 
 /// Bulk import (SPEC.md §7): each multipart field is one file, run through
@@ -350,7 +441,7 @@ pub async fn import_gifs(
             user_id: user.id.clone(),
         };
         let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
-        created.push(with_urls(gif, &state.storage)?);
+        created.push(with_urls(gif, &state.storage, false)?);
     }
 
     if created.is_empty() {

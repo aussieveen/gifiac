@@ -42,6 +42,7 @@
   --trim-bg: #1d2a3d;
   --trim-text: #9cc2ff;
   --danger: #ff7b6b;
+  --favourite: #ff6b9d; /* the favourite/save heart (SPEC-CLOUD.md §14) — distinct from --accent (reserved for primary actions/selection) and --danger (destructive) */
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -1820,6 +1821,64 @@ button {
   border-color: var(--text);
 }
 
+/* SPEC-CLOUD.md §14: My Library's "My GIFs" / "Saved" mode toggle —
+   swaps the whole dataset/toolbar below it, so it's a segmented control,
+   not another filter chip alongside .archive-chips (those filter one
+   already-fetched list; this one changes which list is fetched). */
+.mode-toggle {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  padding: 4px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mode-toggle button {
+  height: 36px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.mode-toggle button.active {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.archive-saved-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 64px 20px;
+  text-align: center;
+  color: var(--text-subtle);
+}
+
+.archive-saved-empty svg {
+  color: var(--border);
+  margin-bottom: 16px;
+}
+
+.archive-saved-empty h3 {
+  color: var(--text);
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.archive-saved-empty p {
+  margin: 0 0 20px;
+  max-width: 320px;
+}
+
 .archive-link-form {
   display: flex;
   gap: 10px;
@@ -1872,6 +1931,13 @@ button {
   width: 48px;
   height: 48px;
   border-radius: 50%;
+}
+
+/* SPEC-CLOUD.md §14: gives .archive-heart-btn's absolute positioning
+   something to anchor to — the tile itself is a plain `<img>`, which can't
+   host an overlaid child. */
+.profile-gif-tile-wrap {
+  position: relative;
 }
 
 .profile-gif-tile {
@@ -1986,6 +2052,38 @@ button {
   aspect-ratio: 16 / 10;
   outline: 3px solid transparent;
   outline-offset: 2px;
+  cursor: pointer;
+}
+
+/* SPEC-CLOUD.md §14: the favourite/save toggle. Same "circle badge in a
+   thumbnail corner" treatment as .archive-badge-lock/-external, but a real
+   button (those two are inert badges) — always pink-toned per the design
+   review, outline when not saved, filled when saved, on both a grid
+   thumbnail and the detail panel's icon-button variant below. */
+.archive-heart-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(12, 12, 15, 0.75);
+  color: var(--favourite);
+}
+
+.archive-heart-btn:hover {
+  background: rgba(12, 12, 15, 0.9);
+}
+
+/* A linked-gif badge (.archive-badge-external) already claims the
+   thumbnail's top-right corner — nudge the heart left so the two don't
+   overlap. */
+.archive-badge-external ~ .archive-heart-btn {
+  right: 38px;
 }
 
 .archive-badge-lock,
@@ -2196,6 +2294,43 @@ button {
 .archive-copy-link-btn {
   width: 100%;
   height: 52px;
+}
+
+/* SPEC-CLOUD.md §14: houses Copy link (still the full-width primary
+   action) plus the small square favourite icon-button beside it — the
+   heart doesn't get its own full-width row, and it doesn't replace Copy
+   link. */
+.archive-panel-primary-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.archive-panel-primary-row .archive-copy-link-btn {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* The detail-panel and mobile-action-bar favourite toggle — always
+   pink-toned (unlike .btn-secondary's neutral border), outline when not
+   saved, filled when saved. Square rather than the grid thumbnail's
+   circular badge, matching this panel's other icon buttons. */
+.archive-favourite-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--favourite);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--favourite);
+}
+
+.archive-favourite-btn.on {
+  background: var(--favourite);
+  color: #1a0510;
 }
 
 .archive-panel-secondary-row {
@@ -2417,6 +2552,7 @@ button {
 
   .archive-mobile-action-bar {
     display: flex;
+    gap: 8px;
     position: fixed;
     left: 0;
     right: 0;
@@ -2428,7 +2564,12 @@ button {
   }
 
   .archive-mobile-action-bar .btn {
-    width: 100%;
+    flex: 1;
+    width: auto;
+    height: 48px;
+  }
+
+  .archive-mobile-action-bar .archive-favourite-btn {
     height: 48px;
   }
 

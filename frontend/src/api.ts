@@ -220,6 +220,23 @@ export async function deleteGif(id: string): Promise<void> {
   await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
 }
 
+// SPEC-CLOUD.md §14: both idempotent, both return the updated gif so
+// callers can sync local state without a separate re-fetch — same pattern
+// as `recordGifUse`.
+export function favouriteGif(id: string): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}/favourite`, { method: 'POST' })
+}
+
+export function unfavouriteGif(id: string): Promise<Gif> {
+  return request<Gif>(`/api/gifs/${id}/favourite`, { method: 'DELETE' })
+}
+
+// SPEC-CLOUD.md §14: the caller's saved gifs, newest-favourited first, in
+// the same attributed shape as `listLibrary`.
+export function listFavourites(): Promise<LibraryEntry[]> {
+  return request<LibraryEntry[]>('/api/favourites')
+}
+
 // Bulk import per SPEC.md §7 — multiple files in one multipart request,
 // each field named "files" (reusing the video-upload multipart pattern,
 // extended to multi-file), returning the array of created gif rows.

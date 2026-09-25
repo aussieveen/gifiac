@@ -68,7 +68,7 @@ pub async fn list_user_gifs(
     let gifs = db::admin_list_gifs_by_user(&state.pool, &user_id).await?;
     let responses = gifs
         .into_iter()
-        .map(|gif| with_urls(gif, &state.storage))
+        .map(|gif| with_urls(gif, &state.storage, false))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(responses))
 }
@@ -115,7 +115,7 @@ pub async fn unpublish_gif(
     AxPath(id): AxPath<String>,
 ) -> Result<Json<GifResponse>, AppError> {
     let gif = db::admin_unpublish_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(with_urls(gif, &state.storage)?))
+    Ok(Json(with_urls(gif, &state.storage, false)?))
 }
 
 /// Admin-scoped equivalent of `routes::videos::delete_template`'s cleanup —

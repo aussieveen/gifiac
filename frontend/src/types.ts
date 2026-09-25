@@ -111,6 +111,10 @@ export interface Gif {
   // Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
   // copy-link/copy-embed/download action fires — no dedup, auth only.
   use_count: number
+  // Per-viewer, not a property of the gif itself (SPEC-CLOUD.md §14) —
+  // whether the signed-in caller has saved this gif. `false` for every
+  // gif when the caller is logged out.
+  is_favourited: boolean
   gif_url?: string
   // `null` (not just absent) for a linked GIF — see GifResponse in the
   // backend, which always includes these keys, `null` or not.
