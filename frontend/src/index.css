@@ -2311,6 +2311,10 @@ button {
   margin-bottom: 0;
 }
 
+.archive-panel-primary-row .archive-favourite-btn {
+  height: 52px;
+}
+
 /* The detail-panel and mobile-action-bar favourite toggle — always
    pink-toned (unlike .btn-secondary's neutral border), outline when not
    saved, filled when saved. Square rather than the grid thumbnail's
