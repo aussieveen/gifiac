@@ -261,18 +261,18 @@ This applies to any code produced along the way too — e.g. throwaway or semi-t
 
 Extends §8 (Global library) and §9 (Frontend navigation). Lets a user save someone else's gif to a personal list, browse it, and remove items from it, without editing or remixing the underlying gif (opening a saved gif in the caption editor to fork it is a separate, larger feature involving derived-content ownership/attribution, and is explicitly out of scope for this destination).
 
-**What's favouritable**: a gif opted into the global library (`is_public`), or a gif the caller owns themselves — public or private. The only thing that stays off-limits is another user's *private* gif. Favouriting your own gif is a little redundant with it already living in My Library, but it's allowed for consistency — one heart component and one rule everywhere a gif card renders, rather than special-casing "this is your own gif."
+**What's favouritable**: a gif opted into the global library (`is_public`), or a gif the caller owns themselves — public or private. The only thing that stays off-limits is another user's *private* gif. Favouriting your own gif is a little redundant with it already living in My Library, but it's allowed for consistency — one star component and one rule everywhere a gif card renders, rather than special-casing "this is your own gif."
 
-**Where it lives in the UI**: no new top-level nav tab — §9's three flat tabs (My Library / Global Library / Admin) are unchanged. Instead, **My Library** gains a segmented mode toggle at the top of the page: **My GIFs** (today's owner-scoped view, unchanged) and **Saved**. Switching modes swaps the whole dataset and toolbar rather than filtering client-side — unlike the existing All/Public/Private/One-offs chips, which filter one already-fetched list of the caller's own gifs, "Saved" pulls a different dataset (other users' public gifs, plus any of the caller's own gifs they've favourited) via its own endpoint (below).
+**Where it lives in the UI**: no new top-level nav tab — §9's three flat tabs (My Library / Global Library / Admin) are unchanged. Instead, **My Library** gains a segmented mode toggle at the top of the page: **My GIFs** (today's owner-scoped view, unchanged) and **Favourites**. Switching modes swaps the whole dataset and toolbar rather than filtering client-side — unlike the existing All/Public/Private/One-offs chips, which filter one already-fetched list of the caller's own gifs, "Favourites" pulls a different dataset (other users' public gifs, plus any of the caller's own gifs they've favourited) via its own endpoint (below). There's deliberately no "Favourites" entry among the All/Public/Private/One-offs chips within "My GIFs" — favouriting one of your own gifs surfaces it in the Favourites mode, not as a further filter on the mode you're already in.
 
-- A heart icon renders on every gif card, everywhere one appears: Global Library, My Library (both "My GIFs" and "Saved" modes), and public profile pages (`/u/:handle`, §5) — one control, no per-surface variation.
-  - On a grid thumbnail: a small circular button in the corner, grey outline when not saved, filled pink when saved.
-  - In the detail panel: a small square icon-button next to the existing "Copy link" primary action (not replacing it, and not full-width) — always pink-toned, outline when not saved, filled when saved. Embed/Download stay as the unchanged secondary row below.
+- A star icon renders on every gif card, everywhere one appears: Global Library, My Library (both "My GIFs" and "Favourites" modes), and public profile pages (`/u/:handle`, §5) — one control, no per-surface variation.
+  - On a grid thumbnail: a small circular badge in the corner, hidden unless the gif is favourited (filled) or, on desktop, the card is hovered/focused (a muted outline reveal, so the star can be toggled straight from the grid).
+  - In the detail panel: a small square icon-button next to the existing "Copy link" primary action (not replacing it, and not full-width), styled like the app's other secondary buttons (neutral border) — an outline star when not favourited, filled in the app's accent color when favourited. Embed/Download stay as the unchanged secondary row below.
   - Toggling from either surface (grid or detail panel) updates both immediately — they render off one shared per-viewer state, never drift independently.
-- **Saved empty state**: an outline heart icon, "No saved GIFs yet," a line pointing at the Global Library's heart action, and a "Browse Global Library" link.
-- **Saved sort**: newest-favourited first only (ordered by when it was saved, not the gif's own creation date) — no secondary "Most used"-style sort yet, matching the presence/absence-only data model below. Revisit if a richer Saved view (sort, filter, search) turns out to be missed; not designed now.
+- **Favourites empty state**: an outline star icon, "No favourites yet," a line pointing at the Global Library's star action, and a "Browse Global Library" link.
+- **Favourites sort**: newest-favourited first only (ordered by when it was favourited, not the gif's own creation date) — no secondary "Most used"-style sort yet, matching the presence/absence-only data model below. Revisit if a richer Favourites view (sort, filter, search) turns out to be missed; not designed now.
 
-**Un-publishing is not the same as deleting.** If the owner of a gif you've saved later makes it private again, it disappears from your Saved view — but the favourite row itself isn't touched. If they re-publish it later, it silently reappears. Only an actual gif deletion removes the favourite row for good (see Data model).
+**Un-publishing is not the same as deleting.** If the owner of a gif you've favourited later makes it private again, it disappears from your Favourites view — but the favourite row itself isn't touched. If they re-publish it later, it silently reappears. Only an actual gif deletion removes the favourite row for good (see Data model).
 
 ### Data model
 
@@ -282,7 +282,7 @@ Extends §8 (Global library) and §9 (Frontend navigation). Lets a user save som
 |---|---|---|
 | `user_id` | TEXT | FK → `users.id`, `ON DELETE CASCADE` |
 | `gif_id` | TEXT | FK → `gifs.id`, `ON DELETE CASCADE` |
-| `created_at` | TEXT | ISO8601 — when the gif was saved; drives Saved's sort order |
+| `created_at` | TEXT | ISO8601 — when the gif was favourited; drives Favourites' sort order |
 | | | PK on `(user_id, gif_id)` |
 
 Deleting a user or a gif cascades away their favourite rows — no tombstones. Un-publishing a gif (`is_public` flipping to `false`) does **not** touch its favourite rows; visibility is enforced at read time instead (below), which is what makes the reappear-on-republish behavior fall out for free.

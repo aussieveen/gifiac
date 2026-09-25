@@ -35,7 +35,7 @@ import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
 
-// SPEC-CLOUD.md §14: a Saved-mode row is `LibraryEntry`-shaped (owner
+// SPEC-CLOUD.md §14: a Favourites-mode row is `LibraryEntry`-shaped (owner
 // attribution included); a My-GIFs-mode row is a plain `Gif` (no
 // attribution — reusing `LibraryEntry`'s own field types keeps the two
 // owner fields' shape in one place rather than re-declared here). One
@@ -43,7 +43,7 @@ import { useToast } from './useToast'
 // arrays.
 type ArchiveItem = Gif & Partial<Pick<LibraryEntry, 'owner_handle' | 'owner_slug'>>
 
-type Mode = 'mine' | 'saved'
+type Mode = 'mine' | 'favourites'
 
 /** `navigator.clipboard` only exists in secure contexts (HTTPS, or
  * localhost) — StrewthGif is a self-hosted LAN tool typically served over plain
@@ -76,11 +76,10 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-type Filter = 'all' | 'favourites' | 'public' | 'private' | 'one-offs'
+type Filter = 'all' | 'public' | 'private' | 'one-offs'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
-  { id: 'favourites', label: 'Favourites' },
   { id: 'public', label: 'Public' },
   { id: 'private', label: 'Private' },
   { id: 'one-offs', label: 'One-offs' },
@@ -134,16 +133,16 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   // public/private/one-off chips are a second, client-side filter layered
   // on top of that same result set.
   //
-  // SPEC-CLOUD.md §14: Saved mode swaps the whole dataset via its own
+  // SPEC-CLOUD.md §14: Favourites mode swaps the whole dataset via its own
   // endpoint rather than filtering this one — it isn't a compatible
-  // client-side filter over "my gifs" the way the chips are, since Saved
+  // client-side filter over "my gifs" the way the chips are, since Favourites
   // can include other users' gifs. `query` has no effect there (no
-  // search/sort for Saved yet — see the map's "Not yet specified").
+  // search/sort for Favourites yet — see the map's "Not yet specified").
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setLoadError(null)
-    const request = mode === 'saved' ? listFavourites() : listGifs(query)
+    const request = mode === 'favourites' ? listFavourites() : listGifs(query)
     request
       .then((gs) => {
         if (!cancelled) setGifs(gs)
@@ -160,8 +159,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   }, [query, mode])
 
   const filteredGifs = gifs.filter((g) => {
-    if (mode === 'saved') return true
-    if (filter === 'favourites') return g.is_favourited
+    if (mode === 'favourites') return true
     if (filter === 'public') return g.is_public
     if (filter === 'private') return !g.is_public
     if (filter === 'one-offs') return g.is_one_off
@@ -169,7 +167,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   })
 
   const selected = gifs.find((g) => g.id === selectedId) ?? null
-  // SPEC-CLOUD.md §14: Saved can hold someone else's gif — owner-only
+  // SPEC-CLOUD.md §14: Favourites can hold someone else's gif — owner-only
   // controls (rename, Public/One-off, Delete, Remix) below all gate on
   // this, matching the map's "Remix scope" decision that remixing another
   // user's gif is out of scope, and the backend's own ownership-scoped
@@ -262,13 +260,13 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
 
   // SPEC-CLOUD.md §14: toggles the star from either a grid thumbnail or
   // the detail panel — both funnel through here so the two stay in sync.
-  // In Saved mode, un-favouriting a gif removes it from view entirely
-  // (Saved only ever shows gifs you've favourited), clearing the
+  // In Favourites mode, un-favouriting a gif removes it from view entirely
+  // (Favourites only ever shows gifs you've favourited), clearing the
   // selection if that was the open one; elsewhere it's an in-place update.
   async function toggleFavourite(id: string, isFavourited: boolean) {
     try {
       const updated = isFavourited ? await unfavouriteGif(id) : await favouriteGif(id)
-      if (mode === 'saved' && !updated.is_favourited) {
+      if (mode === 'favourites' && !updated.is_favourited) {
         setGifs((gs) => gs.filter((g) => g.id !== updated.id))
         if (selectedId === updated.id) setSelectedId(null)
       } else {
@@ -341,7 +339,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
         </div>
         {/* SPEC-CLOUD.md §14: importing/linking only makes sense for gifs
-            you're creating, not the Saved view of gifs you've favourited. */}
+            you're creating, not the Favourites view of gifs you've favourited. */}
         {mode === 'mine' && (
           <div className="archive-import-menu" ref={importMenuRef}>
             <button
@@ -405,13 +403,13 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
         </button>
         <button
           type="button"
-          className={mode === 'saved' ? 'active' : ''}
+          className={mode === 'favourites' ? 'active' : ''}
           onClick={() => {
-            setMode('saved')
+            setMode('favourites')
             setSelectedId(null)
           }}
         >
-          Saved
+          Favourites
         </button>
       </div>
 
@@ -535,10 +533,10 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           {!loading && mode === 'mine' && gifs.length > 0 && filteredGifs.length === 0 && (
             <p className="va-hint">No GIFs match this filter.</p>
           )}
-          {!loading && mode === 'saved' && gifs.length === 0 && (
-            <div className="archive-saved-empty">
+          {!loading && mode === 'favourites' && gifs.length === 0 && (
+            <div className="archive-favourites-empty">
               <StarIcon size={32} />
-              <h3>No saved GIFs yet</h3>
+              <h3>No favourites yet</h3>
               <p className="va-hint">Hit the star on any GIF in the Global Library to keep it here for later.</p>
               <Link className="btn btn-primary" to="/explore">
                 Browse Global Library
@@ -597,8 +595,8 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   {selected.is_public ? 'Public' : 'Private'}
                 </span>
               </div>
-              {/* SPEC-CLOUD.md §14: only present in Saved mode, and only
-                  meaningful there — Saved can hold other users' gifs. */}
+              {/* SPEC-CLOUD.md §14: only present in Favourites mode, and only
+                  meaningful there — Favourites can hold other users' gifs. */}
               {selected.owner_handle && selected.owner_slug && (
                 <Link className="archive-owner-link" to={profileUrl(selected.owner_slug)}>
                   {selected.owner_handle}

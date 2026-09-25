@@ -1820,7 +1820,7 @@ button {
   border-color: var(--text);
 }
 
-/* SPEC-CLOUD.md §14: My Library's "My GIFs" / "Saved" mode toggle —
+/* SPEC-CLOUD.md §14: My Library's "My GIFs" / "Favourites" mode toggle —
    swaps the whole dataset/toolbar below it, so it's a segmented control,
    not another filter chip alongside .archive-chips (those filter one
    already-fetched list; this one changes which list is fetched). */
@@ -1852,7 +1852,7 @@ button {
   color: var(--text);
 }
 
-.archive-saved-empty {
+.archive-favourites-empty {
   grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
@@ -1862,18 +1862,18 @@ button {
   color: var(--text-subtle);
 }
 
-.archive-saved-empty svg {
+.archive-favourites-empty svg {
   color: var(--border);
   margin-bottom: 16px;
 }
 
-.archive-saved-empty h3 {
+.archive-favourites-empty h3 {
   color: var(--text);
   font-size: 18px;
   margin: 0 0 6px;
 }
 
-.archive-saved-empty p {
+.archive-favourites-empty p {
   margin: 0 0 20px;
   max-width: 320px;
 }

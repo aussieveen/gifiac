@@ -128,7 +128,7 @@ beforeEach(() => {
   vi.mocked(favouriteGif).mockReset()
   vi.mocked(unfavouriteGif).mockReset()
   // Archive now uses useCurrentUser() itself (SPEC-CLOUD.md §14, to gate
-  // owner-only controls in Saved mode) — default to a plain signed-in
+  // owner-only controls in Favourites mode) — default to a plain signed-in
   // user matching gifA/gifB's implicit ownership.
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(plainUser)
   // Fire-and-forget by design (see recordUse in Archive.tsx) — most tests
@@ -531,20 +531,6 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
   })
 
-  it('the Favourites chip narrows the grid to favourited gifs only', async () => {
-    const favourited = { ...gifA, is_favourited: true }
-    const notFavourited = { ...gifB, is_favourited: false }
-    vi.mocked(listGifs).mockResolvedValue([favourited, notFavourited])
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
-    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
-  })
-
   it('importing files calls the API and prepends the created gifs to the grid', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(importGifs).mockResolvedValue([gifB])
@@ -746,7 +732,7 @@ describe('Archive favourites', () => {
     expect(await within(panel).findByRole('button', { name: 'Favourite', pressed: false })).toBeInTheDocument()
   })
 
-  it('switching to Saved mode fetches and renders the caller\'s favourites, not "My GIFs"', async () => {
+  it('switching to Favourites mode fetches and renders the caller\'s favourites, not "My GIFs"', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifB, owner_handle: 'jess', owner_slug: 'jess' }])
     const user = userEvent.setup()
@@ -754,26 +740,26 @@ describe('Archive favourites', () => {
     renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
 
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
 
     expect(await screen.findByRole('button', { name: 'dog running' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
   })
 
-  it('shows an empty state with a link to the Global Library when Saved has nothing', async () => {
+  it('shows an empty state with a link to the Global Library when Favourites has nothing', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(listFavourites).mockResolvedValue([])
     const user = userEvent.setup()
 
     renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
 
-    expect(await screen.findByText(/no saved gifs yet/i)).toBeInTheDocument()
+    expect(await screen.findByText(/no favourites yet/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /browse global library/i })).toHaveAttribute('href', '/explore')
   })
 
-  it('unfavouriting a gif in Saved mode removes it from view and closes its detail panel', async () => {
+  it('unfavouriting a gif in Favourites mode removes it from view and closes its detail panel', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifA, is_favourited: true, owner_handle: null, owner_slug: null }])
     vi.mocked(unfavouriteGif).mockResolvedValue({ ...gifA, is_favourited: false })
@@ -781,7 +767,7 @@ describe('Archive favourites', () => {
 
     renderArchive()
     await user.click(screen.getByRole('button', { name: 'My GIFs' })) // ensure default mode's fetch settles first
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const panel = document.querySelector('.archive-panel') as HTMLElement
@@ -791,19 +777,19 @@ describe('Archive favourites', () => {
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
   })
 
-  it('shows owner attribution in Saved mode for someone else\'s gif', async () => {
+  it('shows owner attribution in Favourites mode for someone else\'s gif', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifA, is_favourited: true, owner_handle: 'jess', owner_slug: 'jess' }])
     const user = userEvent.setup()
 
     renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByRole('link', { name: 'jess' })).toHaveAttribute('href', '/u/jess')
   })
 
-  it('hides owner-only controls (rename, Public/One-off, Delete, Remix) for someone else\'s gif in Saved mode', async () => {
+  it('hides owner-only controls (rename, Public/One-off, Delete, Remix) for someone else\'s gif in Favourites mode', async () => {
     // The backend's own rename/publish/delete/remix-source endpoints are
     // ownership-scoped and 404 for a non-owner — this is the frontend
     // half: don't even offer controls that would just fail.
@@ -814,7 +800,7 @@ describe('Archive favourites', () => {
     const user = userEvent.setup()
 
     renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
@@ -825,7 +811,7 @@ describe('Archive favourites', () => {
     expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
   })
 
-  it('still shows owner-only controls for your own gif favourited via Saved mode', async () => {
+  it('still shows owner-only controls for your own gif favourited via Favourites mode', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listFavourites).mockResolvedValue([
       { ...gifA, is_favourited: true, owner_handle: 'simon', owner_slug: 'simon' },
@@ -833,7 +819,7 @@ describe('Archive favourites', () => {
     const user = userEvent.setup()
 
     renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Saved' }))
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
