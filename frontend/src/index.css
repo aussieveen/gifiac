@@ -2312,6 +2312,7 @@ button {
 }
 
 .archive-panel-primary-row .archive-favourite-btn {
+  width: 52px;
   height: 52px;
 }
 
