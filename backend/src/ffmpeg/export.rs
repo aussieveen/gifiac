@@ -10,11 +10,15 @@ use super::{FfmpegCliError, run_ffmpeg_with_progress};
 /// shared with the film-strip sprite so both agree on frame geometry.
 pub const EXPORT_FPS: u32 = 15;
 
-/// `scale='min(iw,W)':-2` scales down to `MAX_WIDTH` but never up
-/// (`min(iw, W)`), and `-2` keeps the height even (required by libx264 /
-/// libvpx-vp9) while preserving aspect ratio.
+/// `scale='trunc(min(iw,W)/2)*2':-2` scales down to `MAX_WIDTH` but never up
+/// (`min(iw, W)`), and truncates both width and height to even (required by
+/// libx264 / libvpx-vp9) while preserving aspect ratio. `MAX_WIDTH` itself
+/// is even, so the `trunc(.../2)*2` only ever matters for a source narrower
+/// than `MAX_WIDTH` with an odd native width — found via a real upload
+/// (245px wide) whose mp4/webm passes failed with "width not divisible by
+/// 2" while the plain `-2`-only height rounding let it through unnoticed.
 fn scale_filter() -> String {
-    format!("scale='min(iw\\,{MAX_WIDTH})':-2:flags=lanczos")
+    format!("scale='trunc(min(iw\\,{MAX_WIDTH})/2)*2':-2:flags=lanczos")
 }
 
 /// The `-vf`/`-lavfi` prefix shared by every output format: scale first,
@@ -213,7 +217,7 @@ mod tests {
     #[test]
     fn scale_filter_caps_width_without_upscaling() {
         let filter = scale_filter();
-        assert!(filter.contains("min(iw\\,480)"));
+        assert!(filter.contains("trunc(min(iw\\,480)/2)*2"));
         assert!(filter.contains(":-2:"));
     }
 }

@@ -24,8 +24,14 @@ pub fn scaled_dimensions(source_width: i64, source_height: i64) -> (i64, i64) {
         return (width, round_to_even_ffmpeg_style(width as f64 * 9.0 / 16.0));
     }
 
-    let width = source_width.min(i64::from(MAX_WIDTH));
-    let raw_height = source_height as f64 * width as f64 / source_width as f64;
+    let capped_width = source_width.min(i64::from(MAX_WIDTH));
+    let raw_height = source_height as f64 * capped_width as f64 / source_width as f64;
+    // Truncate (not round) to even, matching the ffmpeg filter's
+    // `trunc(min(iw,W)/2)*2` — MAX_WIDTH itself is even, so this only ever
+    // changes anything for a source narrower than MAX_WIDTH with an odd
+    // native width (e.g. 245px), which otherwise passed straight through
+    // un-evened and made libx264/libvpx-vp9 reject the frame size.
+    let width = (capped_width / 2) * 2;
     (width, round_to_even_ffmpeg_style(raw_height))
 }
 
@@ -70,6 +76,21 @@ mod tests {
                 height % 2,
                 0,
                 "scaled_dimensions({w}, {h}) produced odd height {height}"
+            );
+        }
+    }
+
+    #[test]
+    fn width_is_always_even() {
+        // 245 reproduces a real upload ("tempting fate.gif") whose odd
+        // native width, left un-truncated, made libx264 reject the mp4
+        // encode with "width not divisible by 2".
+        for (w, h) in [(245, 176), (1920, 1081), (333, 217), (479, 100)] {
+            let (width, _) = scaled_dimensions(w, h);
+            assert_eq!(
+                width % 2,
+                0,
+                "scaled_dimensions({w}, {h}) produced odd width {width}"
             );
         }
     }

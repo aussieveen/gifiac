@@ -1745,11 +1745,14 @@ button {
 }
 
 /* The import dropdown reuses .account-dropdown's look (same "small menu"
-   pattern as the header's account pill) — just anchored to the left edge
-   instead of the right. */
+   pattern as the header's account pill), anchored to the right edge like
+   the default — grows leftward off the right-aligned trigger button so it
+   never extends past the viewport's right edge on narrow screens (left:0
+   off a shrunken mobile icon button used to push it well past the edge,
+   causing page-wide horizontal scroll). */
 .archive-import-dropdown {
-  right: auto;
-  left: 0;
+  right: 0;
+  left: auto;
 }
 
 .archive-toolbar {
