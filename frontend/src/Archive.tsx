@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deleteGif, importGifs, linkGif, listGifs, recordGifUse, renameGif, setGifOneOff, setGifPublic } from './api'
 import {
+  ArrowLeftIcon,
   CheckIcon,
   ChevronDownIcon,
   CodeIcon,
@@ -10,9 +11,12 @@ import {
   LinkIcon,
   LockIcon,
   SearchIcon,
+  ShareIcon,
   TrashIcon,
+  UploadIcon,
 } from './icons'
 import type { Gif } from './types'
+import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useToast } from './useToast'
 
@@ -80,6 +84,8 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     setSelectedIdState(id)
     onSelectGif?.(id)
   }
+  const canEdit = useCanEdit()
+  const canShare = typeof navigator.share === 'function'
   const [deleting, setDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
@@ -156,6 +162,16 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
       toast.show('Link copied')
     } catch {
       toast.show('Copy failed')
+    }
+  }
+
+  async function share() {
+    if (!selected?.gif_url) return
+    try {
+      await navigator.share({ title: selected.name, url: selected.gif_url })
+      recordUse(selected.id)
+    } catch {
+      // AbortError on user-cancelled shares is expected, not an app error.
     }
   }
 
@@ -265,13 +281,15 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
         <div className="archive-import-menu" ref={importMenuRef}>
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary archive-import-btn"
             onClick={() => setShowImportMenu((o) => !o)}
             aria-haspopup="true"
             aria-expanded={showImportMenu}
+            aria-label="Import GIFs"
           >
-            Import
-            <ChevronDownIcon size={14} />
+            <UploadIcon size={16} className="archive-import-btn-icon" />
+            <span className="archive-import-btn-label">Import</span>
+            <ChevronDownIcon size={14} className="archive-import-btn-label" />
           </button>
           {showImportMenu && (
             <div className="account-dropdown archive-import-dropdown" role="menu">
@@ -358,7 +376,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
       {importError && <p className="export-error">{importError}</p>}
       {linkError && <p className="export-error">{linkError}</p>}
 
-      <div className="archive-layout">
+      <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div className="archive-grid">
           {filteredGifs.map((g, i) => {
             // SPEC.md §8: the backend already sorts reusable GIFs before
@@ -367,7 +385,9 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
             // ordered list. Only shown for the "All" chip — once a chip
             // narrows the grid to a single group (or filters across both
             // groups by visibility), a divider inside it stops being
-            // meaningful.
+            // meaningful. Desktop only (CSS-hidden below 1024px) — on a
+            // phone/tablet the One-offs chip is the only way to isolate
+            // them, since the grid is too cramped for a divider to read.
             const showDivider = filter === 'all' && g.is_one_off && (i === 0 || !filteredGifs[i - 1].is_one_off)
             return (
               <div key={g.id} className="archive-grid-item">
@@ -409,6 +429,24 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
             </div>
           ) : (
             <>
+              {/* Below the editor's own breakpoint (<1024px, same as
+                  useCanEdit) the panel becomes a full-screen view — same
+                  markup as the desktop side panel via CSS, plus this top
+                  bar, which desktop doesn't need since the grid alongside
+                  the panel is already a visible "back" affordance. */}
+              {!canEdit && (
+                <div className="archive-panel-mobile-topbar">
+                  <button
+                    type="button"
+                    className="archive-panel-back"
+                    aria-label="Back to library"
+                    onClick={() => setSelectedId(null)}
+                  >
+                    <ArrowLeftIcon />
+                  </button>
+                  <span className="archive-panel-mobile-title">{selected.name}</span>
+                </div>
+              )}
               {/* `key` forces a fresh <img> per selection, so the GIF's
                   animation restarts from frame one every time — no manual
                   play/pause bookkeeping needed. */}
@@ -442,11 +480,18 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                 </p>
               )}
 
-              <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
-                <LinkIcon /> Copy link
-              </button>
+              {canEdit && (
+                <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                  <LinkIcon /> Copy link
+                </button>
+              )}
 
               <div className="archive-panel-secondary-row">
+                {!canEdit && canShare && (
+                  <button className="btn btn-secondary" onClick={copyLink}>
+                    <LinkIcon /> Copy link
+                  </button>
+                )}
                 <button className="btn btn-secondary" onClick={copyEmbed}>
                   <CodeIcon /> Embed
                 </button>
@@ -464,12 +509,29 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                     <DownloadIcon /> Download
                   </a>
                 )}
-                {selected.video_id && (
+                {canEdit && selected.video_id && (
                   <Link className="btn btn-secondary" to={`/edit/${selected.video_id}`}>
                     Remix
                   </Link>
                 )}
               </div>
+
+              {/* Pinned bottom bar, below the editor breakpoint only —
+                  Share if available, else Copy link. Desktop keeps the
+                  single Copy-link button above instead. */}
+              {!canEdit && (
+                <div className="archive-mobile-action-bar">
+                  {canShare ? (
+                    <button className="btn btn-primary" onClick={share}>
+                      <ShareIcon /> Share
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary" onClick={copyLink}>
+                      <LinkIcon /> Copy link
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="archive-settings-list">
                 <div className="archive-settings-row">

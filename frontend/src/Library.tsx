@@ -2,8 +2,19 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminDeleteGif, listLibrary, recordGifUse } from './api'
 import { profileUrl } from './handles'
-import { CheckIcon, CodeIcon, DownloadIcon, ExternalLinkIcon, LinkIcon, SearchIcon, TrashIcon } from './icons'
+import {
+  ArrowLeftIcon,
+  CheckIcon,
+  CodeIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  LinkIcon,
+  SearchIcon,
+  ShareIcon,
+  TrashIcon,
+} from './icons'
 import type { LibraryEntry, LibrarySort } from './types'
+import { useCanEdit } from './useCanEdit'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
 
@@ -55,6 +66,8 @@ export function Library() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const toast = useToast()
+  const canEdit = useCanEdit()
+  const canShare = typeof navigator.share === 'function'
 
   useEffect(() => {
     let cancelled = false
@@ -93,6 +106,16 @@ export function Library() {
       toast.show('Link copied')
     } catch {
       toast.show('Copy failed')
+    }
+  }
+
+  async function share() {
+    if (!selected?.gif_url) return
+    try {
+      await navigator.share({ title: selected.name, url: selected.gif_url })
+      recordUse(selected.id)
+    } catch {
+      // AbortError on user-cancelled shares is expected, not an app error.
     }
   }
 
@@ -167,7 +190,7 @@ export function Library() {
       {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
 
-      <div className="archive-layout">
+      <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div className="archive-grid">
           {items.map((item) => (
             <button
@@ -194,6 +217,19 @@ export function Library() {
             </div>
           ) : (
             <>
+              {!canEdit && (
+                <div className="archive-panel-mobile-topbar">
+                  <button
+                    type="button"
+                    className="archive-panel-back"
+                    aria-label="Back to library"
+                    onClick={() => setSelectedId(null)}
+                  >
+                    <ArrowLeftIcon />
+                  </button>
+                  <span className="archive-panel-mobile-title">{selected.name}</span>
+                </div>
+              )}
               <img
                 key={selected.id}
                 className="archive-panel-preview"
@@ -214,11 +250,18 @@ export function Library() {
                 <span>{formatUseCount(selected.use_count)}</span>
               </p>
 
-              <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
-                <LinkIcon /> Copy link
-              </button>
+              {canEdit && (
+                <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
+                  <LinkIcon /> Copy link
+                </button>
+              )}
 
               <div className="archive-panel-secondary-row">
+                {!canEdit && canShare && (
+                  <button className="btn btn-secondary" onClick={copyLink}>
+                    <LinkIcon /> Copy link
+                  </button>
+                )}
                 <button className="btn btn-secondary" onClick={copyEmbed}>
                   <CodeIcon /> Embed
                 </button>
@@ -237,6 +280,20 @@ export function Library() {
                   </a>
                 )}
               </div>
+
+              {!canEdit && (
+                <div className="archive-mobile-action-bar">
+                  {canShare ? (
+                    <button className="btn btn-primary" onClick={share}>
+                      <ShareIcon /> Share
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary" onClick={copyLink}>
+                      <LinkIcon /> Copy link
+                    </button>
+                  )}
+                </div>
+              )}
 
               {user?.role === 'admin' && (
                 <button className="btn btn-danger" onClick={remove} disabled={deleting}>

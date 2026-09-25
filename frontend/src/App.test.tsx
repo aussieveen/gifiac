@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { resizeTo } from './testUtils'
 import type { FilmstripMeta, Video } from './types'
 
 vi.mock('./api', () => ({
@@ -94,6 +95,14 @@ function renderApp() {
   )
 }
 
+function renderAppAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   vi.mocked(listVideos).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
@@ -111,6 +120,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resizeTo(1440)
 })
 
 describe('App', () => {
@@ -340,5 +350,65 @@ describe('App', () => {
     expect(await screen.findByLabelText('GIF name')).toHaveValue('my clip')
     expect(screen.getByRole('link', { name: 'My Library' })).toHaveClass('active')
     expect(screen.getByRole('button', { name: 'my clip' })).toHaveClass('selected')
+  })
+
+  it('shows the New GIF button at desktop width but not at phone width', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+
+    resizeTo(1280)
+    const desktop = renderApp()
+    await screen.findByText(/no gifs yet/i)
+    expect(screen.getByRole('link', { name: 'New GIF' })).toBeInTheDocument()
+    desktop.unmount()
+
+    resizeTo(390)
+    renderApp()
+    await screen.findByText(/no gifs yet/i)
+    expect(screen.queryByRole('link', { name: 'New GIF' })).not.toBeInTheDocument()
+  })
+
+  it('shows the "bigger screen" message instead of the editor at phone width', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(getVideo).mockResolvedValue(video)
+    vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
+
+    resizeTo(390)
+    renderAppAt('/edit/v1')
+
+    await screen.findByText('The editor needs a bigger screen')
+    expect(screen.queryByRole('button', { name: 'Make GIF' })).not.toBeInTheDocument()
+  })
+
+  it('renders the editor immediately once resized above the breakpoint, without a reload', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(getVideo).mockResolvedValue(video)
+    vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
+
+    resizeTo(390)
+    renderAppAt('/edit/v1')
+    await screen.findByText('The editor needs a bigger screen')
+
+    act(() => resizeTo(1280))
+
+    expect(await screen.findByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
+    expect(screen.queryByText('The editor needs a bigger screen')).not.toBeInTheDocument()
+  })
+
+  it('returns a signed-in-from-a-deep-link visitor to the page they started on', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(null as unknown as typeof loggedInUser)
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderAppAt('/library/abc123')
+    const signInLink = await screen.findByRole('link', { name: /sign in with google/i })
+    await user.click(signInLink)
+    expect(sessionStorage.getItem('strewthgif:return_to')).toBe('/library/abc123')
+
+    // Simulate the OAuth round trip landing back on "/" with a now-valid
+    // session — App.tsx should pick the saved path back up from there.
+    vi.mocked(getCurrentUser).mockResolvedValue(loggedInUser)
+    renderAppAt('/')
+
+    await waitFor(() => expect(sessionStorage.getItem('strewthgif:return_to')).toBeNull())
   })
 })

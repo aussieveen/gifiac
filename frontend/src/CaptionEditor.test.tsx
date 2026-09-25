@@ -49,11 +49,36 @@ afterEach(() => {
 })
 
 describe('CaptionEditor', () => {
-  it('starts with no captions and the Make GIF button disabled', () => {
+  it('starts with no captions, and Make GIF stays enabled but explains it needs a name', () => {
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
 
     expect(screen.getByText(/select a caption on the timeline/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Make GIF' })).toBeDisabled()
+    const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
+    expect(makeGifButton).toBeEnabled()
+    expect(makeGifButton).toHaveAttribute('title', 'Name your GIF first')
+  })
+
+  it('clicking Make GIF with an empty name focuses the field and shows an error, without starting an export', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+
+    const nameInput = screen.getByLabelText('GIF name')
+    expect(nameInput).toHaveFocus()
+    expect(screen.getByRole('alert')).toHaveTextContent('Give your GIF a name before making it')
+    expect(createExport).not.toHaveBeenCalled()
+  })
+
+  it('typing a name clears the empty-name error', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('adding a caption selects it and shows it in the style panel', async () => {
@@ -199,17 +224,15 @@ describe('CaptionEditor', () => {
     }
   })
 
-  it('keeps Make GIF disabled until a name is entered, then submits the export payload and subscribes to progress', async () => {
+  it('submits the export payload and subscribes to progress once a name is entered', async () => {
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
     const user = userEvent.setup()
     render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
     const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
-    expect(makeGifButton).toBeDisabled()
-
     await user.type(screen.getByLabelText('GIF name'), '  my clip  ')
-    expect(makeGifButton).toBeEnabled()
+    expect(makeGifButton).not.toHaveAttribute('title')
 
     await user.click(makeGifButton)
 
@@ -690,7 +713,8 @@ describe('CaptionEditor', () => {
 
     expect(pauseSpy).not.toHaveBeenCalled()
     expect(screen.getByLabelText('Caption text')).toHaveValue('New caption')
-    expect(screen.getByText(/3\.00s – 4\.00s/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Set start to playhead' })).toHaveTextContent('3.00s')
+    expect(screen.getByRole('button', { name: 'Set end to playhead' })).toHaveTextContent('4.00s')
     pauseSpy.mockRestore()
   })
 
@@ -733,7 +757,8 @@ describe('CaptionEditor', () => {
     act(() => videoEl.dispatchEvent(new Event('timeupdate')))
     await user.click(screen.getByRole('button', { name: 'Set end to playhead' }))
 
-    expect(screen.getByText(/0\.50s – 6\.00s/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Set start to playhead' })).toHaveTextContent('0.50s')
+    expect(screen.getByRole('button', { name: 'Set end to playhead' })).toHaveTextContent('6.00s')
   })
 
   it('zooms in/out when scrolling the mouse wheel over the timeline, up to zoom in', () => {
@@ -807,7 +832,8 @@ describe('CaptionEditor', () => {
     fireEvent.mouseDown(rightHandle, { clientX: 0 })
     fireEvent.mouseMove(window, { clientX: 175 })
 
-    expect(screen.getByText(/0\.00s – 3\.00s/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Set start to playhead' })).toHaveTextContent('0.00s')
+    expect(screen.getByRole('button', { name: 'Set end to playhead' })).toHaveTextContent('3.00s')
     const guide = document.querySelector('.va-snap-guide') as HTMLElement
     expect(guide).toBeInTheDocument()
     expect(guide).toHaveStyle({ left: '262.5px' })
@@ -830,5 +856,32 @@ describe('CaptionEditor', () => {
     fireEvent.mouseMove(window, { clientX: 350 })
 
     expect(screen.getByText(/Trim 4\.00s → 8\.00s/)).toBeInTheDocument()
+  })
+
+  it('autofocuses the (always-empty-on-open) name field', () => {
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(screen.getByLabelText('GIF name')).toHaveFocus()
+  })
+
+  it('labels the font-size slider "Size", matching "Line height"', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    expect(screen.getByText('Size')).toBeInTheDocument()
+  })
+
+  it('offers a suggested name built from the first caption, and fills the field on click', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor video={video} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+    await user.clear(screen.getByLabelText('Caption text'))
+    await user.type(screen.getByLabelText('Caption text'), 'a bold new gif')
+
+    const suggestion = screen.getByRole('button', { name: /use "a bold new gif"/i })
+    await user.click(suggestion)
+
+    expect(screen.getByLabelText('GIF name')).toHaveValue('A bold new gif')
   })
 })

@@ -6,11 +6,14 @@ import lockup from './assets/brand/strewthgif-lockup-on-dark.svg'
 import { LOGIN_URL, getFilmstripMeta, getVideo, logout } from './api'
 import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
+import { EditorUnavailable } from './EditorUnavailable'
 import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
 import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
 import { Library } from './Library'
+import { consumeReturnTo, saveReturnTo } from './returnTo'
 import type { CurrentUser, FilmstripMeta, Gif, Video } from './types'
+import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { VideoPicker } from './VideoPicker'
@@ -87,6 +90,8 @@ function ArchiveRoute() {
 
 function NewGifRoute() {
   const navigate = useNavigate()
+  const canEdit = useCanEdit()
+  if (!canEdit) return <EditorUnavailable />
   return <VideoPicker onSelect={(video) => navigate(`/edit/${video.id}`)} />
 }
 
@@ -98,6 +103,12 @@ function NewGifRoute() {
 function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
   const { videoId } = useParams<{ videoId: string }>()
   const navigate = useNavigate()
+  const canEdit = useCanEdit()
+  // Once the editor has actually mounted, shrinking the window shouldn't
+  // unmount it and lose in-progress work — CaptionEditor shows a slim
+  // banner instead. Only a direct link opened below the breakpoint (editor
+  // never mounted) shows the full "bigger screen" message.
+  const [hasMountedEditor, setHasMountedEditor] = useState(false)
   const [video, setVideo] = useState<Video | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -126,8 +137,19 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
     }
   }, [videoId])
 
+  useEffect(() => {
+    // Only counts as "mounted" if the editor was actually about to render
+    // (canEdit true) — data quietly finishing a background load while the
+    // "bigger screen" message is showing must not flip this on its own.
+    if (video && filmstrip && canEdit) setHasMountedEditor(true)
+  }, [video, filmstrip, canEdit])
+
   function backToPicker() {
     navigate('/new')
+  }
+
+  if (!canEdit && !hasMountedEditor) {
+    return <EditorUnavailable />
   }
 
   if (loadError) {
@@ -149,7 +171,15 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
     )
   }
 
-  return <CaptionEditor video={video} filmstrip={filmstrip} onBack={backToPicker} onGifCreated={onGifCreated} />
+  return (
+    <CaptionEditor
+      video={video}
+      filmstrip={filmstrip}
+      onBack={backToPicker}
+      onGifCreated={onGifCreated}
+      belowBreakpoint={!canEdit}
+    />
+  )
 }
 
 export default function App() {
@@ -170,15 +200,17 @@ export default function App() {
   if (!user) {
     return (
       <AuthShell>
-        <div className="auth-tiles">
-          <div className="auth-tile auth-tile-left">
-            <span className="caption-text auth-tile-caption">INDEED.</span>
-          </div>
-          <div className="auth-tile auth-tile-center">
-            <span className="caption-text auth-tile-caption auth-tile-caption-accent">WELL. YES.</span>
-          </div>
-          <div className="auth-tile auth-tile-right">
-            <span className="caption-text auth-tile-caption">FAIR.</span>
+        <div className="auth-tiles-wrap">
+          <div className="auth-tiles">
+            <div className="auth-tile auth-tile-left">
+              <span className="caption-text auth-tile-caption">INDEED.</span>
+            </div>
+            <div className="auth-tile auth-tile-center">
+              <span className="caption-text auth-tile-caption auth-tile-caption-accent">WELL. YES.</span>
+            </div>
+            <div className="auth-tile auth-tile-right">
+              <span className="caption-text auth-tile-caption">FAIR.</span>
+            </div>
           </div>
         </div>
         <h1 className="auth-headline">
@@ -186,7 +218,11 @@ export default function App() {
           <span className="caption-text auth-headline-line2">THERE'S A GIF FOR THAT.</span>
         </h1>
         <p className="auth-subline">Clip it, caption it, send it. Sign in to get to your library.</p>
-        <a className="btn btn-primary btn-hero" href={LOGIN_URL}>
+        <a
+          className="btn btn-primary btn-hero"
+          href={LOGIN_URL}
+          onClick={() => saveReturnTo(location.pathname + location.search)}
+        >
           <LogInIcon />
           Sign in with Google
         </a>
@@ -197,6 +233,32 @@ export default function App() {
   if (user.handle === null) {
     return <HandlePicker suggestedHandle={user.suggestedHandle} onHandleSet={setUser} />
   }
+
+  return <AuthenticatedApp user={user} location={location} navigate={navigate} />
+}
+
+/** Split out so the return_to redirect effect only ever runs for an
+ * authenticated user with a handle — the earlier gates above (loading,
+ * signed-out, handle picker) all return before this component exists. */
+function AuthenticatedApp({
+  user,
+  location,
+  navigate,
+}: {
+  user: CurrentUser
+  location: ReturnType<typeof useLocation>
+  navigate: ReturnType<typeof useNavigate>
+}) {
+  const returnToConsumed = useRef(false)
+  useEffect(() => {
+    if (returnToConsumed.current) return
+    returnToConsumed.current = true
+    const returnTo = consumeReturnTo()
+    if (returnTo) navigate(returnTo, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const canEdit = useCanEdit()
 
   // SPEC-CLOUD.md §9 / design brief §2: one fixed header — a wordmark,
   // exactly three flat tabs (Admin only for an admin account), a primary
@@ -217,37 +279,42 @@ export default function App() {
 
   const nav = (
     <header className="app-header">
-      <div className="app-header-left">
+      <div className="app-header-row1">
         <Link to="/library" className="app-header-brand" aria-label="StrewthGif — My Library">
           <img src={lockup} alt="StrewthGif" />
         </Link>
-        <nav className="app-header-tabs" aria-label="Main">
-          <Link className={`app-header-tab ${libraryActive ? 'active' : ''}`} to="/library">
-            My Library
-          </Link>
-          <Link
-            className={`app-header-tab ${location.pathname.startsWith('/explore') ? 'active' : ''}`}
-            to="/explore"
-          >
-            Global Library
-          </Link>
-          {user.role === 'admin' && (
-            <Link
-              className={`app-header-tab ${location.pathname.startsWith('/admin') ? 'active' : ''}`}
-              to="/admin"
-            >
-              Admin
+        <div className="app-header-right">
+          {canEdit && (
+            <Link to="/new" className="btn btn-primary">
+              <PlusIcon />
+              New GIF
             </Link>
           )}
-        </nav>
+          <AccountMenu user={user} />
+        </div>
       </div>
-      <div className="app-header-right">
-        <Link to="/new" className="btn btn-primary">
-          <PlusIcon />
-          New GIF
+      <nav className="app-header-tabs" aria-label="Main">
+        <Link className={`app-header-tab ${libraryActive ? 'active' : ''}`} to="/library">
+          <span className="app-header-tab-full">My Library</span>
+          <span className="app-header-tab-short" aria-hidden="true">
+            Mine
+          </span>
         </Link>
-        <AccountMenu user={user} />
-      </div>
+        <Link className={`app-header-tab ${location.pathname.startsWith('/explore') ? 'active' : ''}`} to="/explore">
+          <span className="app-header-tab-full">Global Library</span>
+          <span className="app-header-tab-short" aria-hidden="true">
+            Global
+          </span>
+        </Link>
+        {user.role === 'admin' && (
+          <Link className={`app-header-tab ${location.pathname.startsWith('/admin') ? 'active' : ''}`} to="/admin">
+            <span className="app-header-tab-full">Admin</span>
+            <span className="app-header-tab-short" aria-hidden="true">
+              Admin
+            </span>
+          </Link>
+        )}
+      </nav>
     </header>
   )
 

@@ -8,11 +8,13 @@ import {
   ArrowLeftIcon,
   MinusIcon,
   PauseIcon,
+  PencilIcon,
   PlayheadIcon,
   PlayIcon,
   PlusIcon,
   XIcon,
 } from './icons'
+import { suggestNameFrom } from './suggestName'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
@@ -116,6 +118,10 @@ interface Props {
    * the new GIF (e.g. in the archive) instead of leaving the user to find
    * it themselves. */
   onGifCreated?: (gif: Gif) => void
+  /** True once the window has shrunk below the editor's minimum width
+   * while this instance stays mounted (see useCanEdit) — shows a slim
+   * banner instead of losing in-progress edits. */
+  belowBreakpoint?: boolean
 }
 
 /** Mirrors the backend's optional ASS outline: `null` renders no border. */
@@ -219,7 +225,7 @@ interface WidthDrag {
   origWidth: number
 }
 
-export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props) {
+export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBreakpoint }: Props) {
   const duration = video.duration_seconds
   // Matches the backend's scale.rs output size — computed server-side,
   // reflected here via the film-strip's own dimensions.
@@ -233,6 +239,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   const [applyToAll, setApplyToAll] = useState(false)
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX)
   const [name, setName] = useState('')
+  const [nameError, setNameError] = useState(false)
+  const nameInputRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
@@ -343,7 +351,23 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
-  const timelineWidth = BASE_TIMELINE_WIDTH * ZOOM_LEVELS[zoomIndex]
+  // The timeline's 1x-zoom width used to be a flat BASE_TIMELINE_WIDTH
+  // constant, which visibly under-filled the editor on any screen wider
+  // than ~half that — measured against the scroll container instead, with
+  // the constant kept only as a floor so nothing shrinks below the old
+  // minimum on a narrower one.
+  const [baseTimelineWidth, setBaseTimelineWidth] = useState(BASE_TIMELINE_WIDTH)
+  useEffect(() => {
+    const el = timelineScrollRef.current
+    if (!el) return
+    const measure = () => setBaseTimelineWidth(Math.max(el.clientWidth, BASE_TIMELINE_WIDTH))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const timelineWidth = baseTimelineWidth * ZOOM_LEVELS[zoomIndex]
 
   // SPEC.md §14: whenever the zoom level changes (buttons or wheel), keep
   // the playhead centered in view instead of leaving it — and its
@@ -718,7 +742,11 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
 
   async function makeGif() {
     const trimmedName = name.trim()
-    if (!trimmedName) return
+    if (!trimmedName) {
+      setNameError(true)
+      nameInputRef.current?.focus()
+      return
+    }
     setSubmitting(true)
     setExportError(null)
     setCompletedGif(null)
@@ -770,9 +798,11 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
   }
 
   const trimmedDuration = gifRange.end - gifRange.start
+  const suggestedName = captions.length > 0 ? suggestNameFrom(captions[0].text) : ''
 
   return (
     <div className="editor-shell">
+      {belowBreakpoint && <div className="editor-shrink-banner">Widen the window to keep editing</div>}
       <header className="editor-header">
         <div className="editor-header-left">
           <button className="btn btn-secondary editor-back-btn" onClick={onBack} aria-label="Back to library">
@@ -781,13 +811,41 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
           <img src={mark} alt="StrewthGif" className="editor-brand" />
           <div className="editor-divider" />
           <div className="editor-title-block">
-            <input
-              className="editor-name-input"
-              placeholder="Untitled GIF"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              aria-label="GIF name"
-            />
+            <div className="editor-name-label-row">
+              <label className="editor-name-label" htmlFor="editor-name-input">
+                GIF name
+              </label>
+              {!name.trim() && <span className="editor-name-required-tag">Required</span>}
+            </div>
+            <div className="editor-name-input-wrap">
+              <input
+                id="editor-name-input"
+                ref={nameInputRef}
+                className={`editor-name-input ${nameError ? 'error' : ''}`}
+                placeholder="Name your GIF"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value)
+                  if (nameError) setNameError(false)
+                }}
+                aria-label="GIF name"
+                aria-invalid={nameError || undefined}
+                // Never pre-filled today (not even for Remix) — this always
+                // autofocuses a freshly opened editor, which is the intent.
+                autoFocus={!name}
+              />
+              <PencilIcon size={14} className="editor-name-input-icon" />
+            </div>
+            {nameError && (
+              <p className="editor-name-error" role="alert">
+                Give your GIF a name before making it
+              </p>
+            )}
+            {!name.trim() && suggestedName && (
+              <button type="button" className="editor-name-suggest" onClick={() => setName(suggestedName)}>
+                Use "{suggestedName}"
+              </button>
+            )}
             <p className="editor-source-info">
               {video.original_filename} · {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
             </p>
@@ -815,7 +873,8 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
           <button
             className="btn btn-primary"
             aria-label="Make GIF"
-            disabled={!name.trim() || submitting}
+            title={!name.trim() ? 'Name your GIF first' : undefined}
+            disabled={submitting}
             onClick={makeGif}
           >
             {submitting ? (
@@ -1005,13 +1064,6 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                     </button>
                   </div>
                 </div>
-                {/* Kept as plain text alongside the in/out buttons above —
-                    several tests assert on this exact "X.XXs – Y.YYs"
-                    range text, so it stays even though the buttons now
-                    also show each edge's time. */}
-                <p className="va-hint">
-                  {selected.startTime.toFixed(2)}s – {selected.endTime.toFixed(2)}s
-                </p>
               </>
             )}
           </div>
@@ -1032,8 +1084,11 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated }: Props)
                       </option>
                     ))}
                   </select>
+                  <label className="field-label" htmlFor="font-size-input">
+                    Size
+                  </label>
                   <input
-                    aria-label="Font size"
+                    id="font-size-input"
                     type="range"
                     min={12}
                     max={64}

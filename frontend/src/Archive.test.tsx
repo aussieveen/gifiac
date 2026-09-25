@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Archive } from './Archive'
+import { resizeTo } from './testUtils'
 import type { Gif } from './types'
 
 vi.mock('./api', () => ({
@@ -104,6 +105,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resizeTo(1440)
 })
 
 describe('Archive', () => {
@@ -618,5 +620,49 @@ describe('Archive', () => {
 
     await screen.findByText(/not an image/)
     expect(screen.queryByRole('button', { name: 'bad link' })).not.toBeInTheDocument()
+  })
+
+  it('marks the layout as having a selection, and the Back button clears it', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.archive-layout')).toHaveClass(
+      'has-selection',
+    )
+    const backButton = screen.getByRole('button', { name: 'Back to library' })
+
+    await user.click(backButton)
+
+    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.archive-layout')).not.toHaveClass(
+      'has-selection',
+    )
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('hides Remix below the editor breakpoint', async () => {
+    const videoGif = { ...gifA, video_id: 'v1' }
+    vi.mocked(listGifs).mockResolvedValue([videoGif])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
+  })
+
+  it('shows a pinned Share/Copy-link bar below the editor breakpoint', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(document.querySelector('.archive-mobile-action-bar')).not.toBeNull()
   })
 })

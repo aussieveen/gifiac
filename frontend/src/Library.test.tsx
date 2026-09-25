@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Library } from './Library'
+import { resizeTo } from './testUtils'
 import type { CurrentUser, LibraryEntry } from './types'
 
 vi.mock('./api', () => ({
@@ -60,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resizeTo(1440)
 })
 
 function renderLibrary() {
@@ -199,5 +201,30 @@ describe('Library', () => {
     await waitFor(() => expect(adminDeleteGif).toHaveBeenCalledWith('g1'))
     expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('shows a mobile top bar with a Back button below the editor breakpoint', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderLibrary()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    const backButton = screen.getByRole('button', { name: 'Back to library' })
+    await user.click(backButton)
+
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('shows a pinned Share/Copy-link bar below the editor breakpoint', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderLibrary()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(document.querySelector('.archive-mobile-action-bar')).not.toBeNull()
   })
 })

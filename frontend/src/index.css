@@ -132,6 +132,14 @@
   padding: 0 28px;
 }
 
+@media (max-width: 767.98px) {
+  .btn-hero {
+    width: 100%;
+    max-width: 360px;
+    height: 52px;
+  }
+}
+
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--border);
@@ -183,15 +191,15 @@ button {
    until its own redesign pass. */
 
 .app-header {
-  height: 72px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  height: 72px;
   padding: 0 48px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.app-header-left {
+.app-header-row1 {
   display: flex;
   align-items: center;
   height: 100%;
@@ -238,10 +246,59 @@ button {
   border-bottom-color: var(--accent);
 }
 
+/* Full label shown from tablet width up; "Mine/Global/Admin" only at
+   phone widths, where the full names don't fit a three-way equal-share row. */
+.app-header-tab-short {
+  display: none;
+}
+
 .app-header-right {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+/* ---------- app header: mobile/tablet (<1024px) ---------- */
+
+@media (max-width: 1023.98px) {
+  .app-header {
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    padding: 0;
+  }
+
+  .app-header-row1 {
+    justify-content: space-between;
+    height: 56px;
+    padding: 0 16px;
+    gap: 12px;
+  }
+
+  .app-header-brand img {
+    height: 28px;
+  }
+
+  .app-header-tabs {
+    height: 44px;
+    gap: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .app-header-tab {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .app-header-tab-full {
+    display: none;
+  }
+
+  .app-header-tab-short {
+    display: inline;
+  }
 }
 
 .account-menu {
@@ -274,6 +331,24 @@ button {
 
 .account-handle {
   font-weight: 500;
+}
+
+@media (max-width: 1023.98px) {
+  .account-pill {
+    border: none;
+    padding: 0;
+    gap: 0;
+  }
+
+  .account-handle,
+  .account-pill svg {
+    display: none;
+  }
+
+  .account-avatar {
+    width: 40px;
+    height: 40px;
+  }
 }
 
 .account-dropdown {
@@ -377,10 +452,39 @@ button {
 /* Decorative stack of three tiles above the sign-in headline. Solid muted
    blocks for now (design brief §3 leaves the door open to real public
    GIFs later). */
+.auth-tiles-wrap {
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+  overflow: visible;
+}
+
 .auth-tiles {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* CSS transform functions take a unitless <number>, so the tile stack's
+   scale can't be driven by a vw-based clamp() directly (mixing a number
+   with a length isn't valid) — stepped by viewport width instead, tuned so
+   the ~600px-wide tile group never clips down to 360px. */
+@media (max-width: 479.98px) {
+  .auth-tiles {
+    transform: scale(0.58);
+  }
+}
+
+@media (min-width: 480px) and (max-width: 639.98px) {
+  .auth-tiles {
+    transform: scale(0.75);
+  }
+}
+
+@media (min-width: 640px) and (max-width: 767.98px) {
+  .auth-tiles {
+    transform: scale(0.95);
+  }
 }
 
 .auth-tile {
@@ -430,14 +534,16 @@ button {
   max-width: 900px;
 }
 
-/* 2:1 ratio held at every width via matching clamp() bounds — no
-   @media breakpoint needed, nothing else in this file uses one. */
 .auth-headline-line1 {
-  font-size: clamp(48px, 12vw, 112px);
+  font-size: clamp(56px, 16vw, 112px);
 }
 
+/* Line 2's text ("THERE'S A GIF FOR THAT.") is much longer than line 1's,
+   so it needs a shallower vw coefficient (not simply half of line 1's) to
+   stay on one line down to 360px instead of wrapping. */
 .auth-headline-line2 {
-  font-size: clamp(24px, 6vw, 56px);
+  font-size: clamp(20px, 6.2vw, 56px);
+  white-space: nowrap;
 }
 
 .auth-headline-accent {
@@ -462,6 +568,9 @@ button {
 
 .auth-footer a {
   color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 .app-nav {
@@ -971,27 +1080,116 @@ button {
   min-width: 0;
 }
 
+.editor-name-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-name-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+}
+
+.editor-name-required-tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.editor-name-input-wrap {
+  position: relative;
+  width: 320px;
+  max-width: 100%;
+}
+
 .editor-name-input {
-  background: transparent;
-  border: 1px solid transparent;
+  width: 100%;
+  height: 40px;
+  background: var(--surface);
+  border: 1px solid var(--border);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 18px;
-  font-weight: 700;
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  margin: -2px 0 -2px -6px;
-  min-width: 200px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: var(--radius);
+  padding: 0 32px 0 12px;
 }
 
 .editor-name-input:hover,
 .editor-name-input:focus {
-  border-color: var(--border);
+  border-color: var(--text-subtle);
+}
+
+.editor-name-input.error {
+  border: 2px solid var(--danger);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .editor-name-input.error {
+    animation: editor-name-shake 0.4s;
+  }
+}
+
+@keyframes editor-name-shake {
+  10%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  80% {
+    transform: translateX(4px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-6px);
+  }
+  40%,
+  60% {
+    transform: translateX(6px);
+  }
 }
 
 .editor-name-input::placeholder {
-  color: var(--text-subtle);
+  color: var(--text-muted);
   font-weight: 500;
+}
+
+.editor-name-input-icon {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  color: var(--text-subtle);
+  pointer-events: none;
+}
+
+.editor-name-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.editor-name-suggest {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-name-suggest:hover {
+  text-decoration: underline;
 }
 
 .editor-source-info {
@@ -1041,6 +1239,67 @@ button {
 .editor-toast-error {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* Shown instead of unmounting the editor when a desktop window shrinks
+   below EDITOR_MIN_WIDTH mid-edit — non-blocking, disappears on its own
+   once the window widens back out. */
+.editor-shrink-banner {
+  background: var(--accent);
+  color: var(--on-accent);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 16px;
+}
+
+/* ---------- editor unavailable (below EDITOR_MIN_WIDTH) ---------- */
+
+.editor-unavailable {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 48px 24px;
+  text-align: center;
+  background: var(--bg);
+}
+
+.editor-unavailable-mark {
+  width: 64px;
+  height: 64px;
+}
+
+.editor-unavailable-heading {
+  font-family: var(--font-display);
+  font-size: 32px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  margin: 0;
+}
+
+.editor-unavailable-body {
+  max-width: 420px;
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 0;
+}
+
+.editor-unavailable-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 320px;
+  margin-top: 8px;
+}
+
+.editor-unavailable-actions .btn {
+  width: 100%;
+  height: 48px;
 }
 
 .editor-main {
@@ -1748,17 +2007,14 @@ button {
   right: 6px;
 }
 
-/* Wraps each grid cell so the "One-offs" divider (below) can be injected
-   immediately before the first one-off thumbnail without breaking the
-   grid's column tracks — a bare <button> per cell couldn't also host a
-   full-width sibling. */
 .archive-grid-item {
   display: contents;
 }
 
 /* Spans every column so the divider reads as a full-width section break
    between the reusable and one-off groups (SPEC.md §8), not just another
-   grid cell. */
+   grid cell. Desktop only — see the <1024px override further down, which
+   hides it in favor of the One-offs filter chip on a cramped grid. */
 .archive-grid-divider {
   grid-column: 1 / -1;
   margin-top: 8px;
@@ -2024,4 +2280,164 @@ button {
 
 .archive-toast svg {
   color: var(--accent);
+}
+
+/* ---------- archive (My Library / Global Library share this CSS): mobile & tablet ---------- */
+
+@media (max-width: 1023.98px) {
+  .archive-title-row {
+    align-items: center;
+  }
+
+  .archive-title-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .archive-title-group .page-title {
+    font-size: 32px;
+  }
+
+  .archive-count {
+    font-size: 13px;
+  }
+
+  .archive-import-btn {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .archive-import-btn-label {
+    display: none;
+  }
+
+  .archive-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .archive-search-wrap {
+    min-width: 0;
+  }
+
+  .archive-search {
+    font-size: 16px; /* prevents iOS Safari zooming in on focus */
+  }
+
+  .archive-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .archive-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .archive-chip {
+    flex-shrink: 0;
+  }
+
+  .archive-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .archive-grid-divider {
+    display: none;
+  }
+
+  /* The panel becomes the full-screen "GIF detail" view purely via CSS —
+     same JSX as the desktop side panel, no separate mobile component. */
+  .archive-panel {
+    display: none;
+    width: 100%;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    border: none;
+    border-radius: 0;
+    max-height: 100vh;
+    padding: 0 16px calc(84px + env(safe-area-inset-bottom));
+    gap: 16px;
+  }
+
+  .archive-layout.has-selection .archive-grid {
+    display: none;
+  }
+
+  .archive-layout.has-selection .archive-panel {
+    display: flex;
+  }
+
+  .archive-panel-mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    flex-shrink: 0;
+    margin: 0 -16px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border-subtle);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .archive-panel-back {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 0;
+  }
+
+  .archive-panel-mobile-title {
+    font-size: 16px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .archive-panel-secondary-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .archive-mobile-action-bar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 21;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .archive-mobile-action-bar .btn {
+    width: 100%;
+    height: 48px;
+  }
+
+  /* Above the pinned bar (48px content + its own top/bottom padding),
+     not behind it. */
+  .archive-toast {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .archive-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
