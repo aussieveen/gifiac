@@ -236,14 +236,14 @@ export function ShareIcon({ size = 16, className }: IconProps) {
   )
 }
 
-/** The favourite/save toggle (SPEC-CLOUD.md §14) — outline when not
- * saved, filled (`fill: currentColor`, the one departure from this file's
- * otherwise always-outline icons) when saved, so the two states read
+/** The favourite toggle (SPEC-CLOUD.md §14) — outline when not favourited,
+ * filled (`fill: currentColor`, the one departure from this file's
+ * otherwise always-outline icons) when favourited, so the two states read
  * apart at a glance on a small grid thumbnail. */
-export function HeartIcon({ size = 16, className, filled = false }: IconProps & { filled?: boolean }) {
+export function StarIcon({ size = 16, className, filled = false }: IconProps & { filled?: boolean }) {
   return (
     <svg {...base} fill={filled ? 'currentColor' : 'none'} width={size} height={size} className={className}>
-      <path d="M12 21s-7.5-4.35-10-9.28C.5 8.5 2.3 5 6 5c2 0 3.3 1 4 2 .7-1 2-2 4-2 3.7 0 5.5 3.5 4 6.72C19.5 16.65 12 21 12 21z" />
+      <path d="M12 2.5l3.09 6.26 6.91 1.01-5 4.87 1.18 6.87L12 18.27l-6.18 3.24L7 14.64l-5-4.87 6.91-1.01L12 2.5z" />
     </svg>
   )
 }

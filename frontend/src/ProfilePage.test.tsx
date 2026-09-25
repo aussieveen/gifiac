@@ -118,10 +118,10 @@ describe('ProfilePage favourites', () => {
     const user = userEvent.setup()
 
     renderAt('simon')
-    await user.click(await screen.findByRole('button', { name: 'Save' }))
+    await user.click(await screen.findByRole('button', { name: 'Favourite', pressed: false }))
 
     expect(favouriteGif).toHaveBeenCalledWith('g1')
-    expect(await screen.findByRole('button', { name: 'Remove from Saved' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Favourite', pressed: true })).toBeInTheDocument()
   })
 
   it('a logged-out visitor gets a sign-in link instead of a favourite button', async () => {
@@ -132,6 +132,6 @@ describe('ProfilePage favourites', () => {
 
     const signIn = await screen.findByRole('link', { name: /sign in to save/i })
     expect(signIn).toHaveAttribute('href', '/api/auth/login')
-    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Favourite' })).not.toBeInTheDocument()
   })
 })

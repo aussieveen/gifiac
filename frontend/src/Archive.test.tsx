@@ -531,6 +531,20 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
   })
 
+  it('the Favourites chip narrows the grid to favourited gifs only', async () => {
+    const favourited = { ...gifA, is_favourited: true }
+    const notFavourited = { ...gifB, is_favourited: false }
+    vi.mocked(listGifs).mockResolvedValue([favourited, notFavourited])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await screen.findByRole('button', { name: 'cat jumping' })
+
+    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+  })
+
   it('importing files calls the API and prepends the created gifs to the grid', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(importGifs).mockResolvedValue([gifB])
@@ -704,18 +718,18 @@ describe('Archive', () => {
 
 // SPEC-CLOUD.md §14.
 describe('Archive favourites', () => {
-  it('clicking a thumbnail heart favourites it without opening the detail panel', async () => {
+  it('clicking a thumbnail star favourites it without opening the detail panel', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(favouriteGif).mockResolvedValue({ ...gifA, is_favourited: true })
     const user = userEvent.setup()
 
     renderArchive()
-    await user.click(await screen.findByRole('button', { name: 'Save' }))
+    await user.click(await screen.findByRole('button', { name: 'Favourite', pressed: false }))
 
     expect(favouriteGif).toHaveBeenCalledWith('g1')
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
     const grid = document.querySelector('.archive-grid') as HTMLElement
-    expect(await within(grid).findByRole('button', { name: 'Remove from Saved' })).toBeInTheDocument()
+    expect(await within(grid).findByRole('button', { name: 'Favourite', pressed: true })).toBeInTheDocument()
   })
 
   it('the detail panel favourite button unfavourites an already-saved gif', async () => {
@@ -726,10 +740,10 @@ describe('Archive favourites', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     const panel = document.querySelector('.archive-panel') as HTMLElement
-    await user.click(within(panel).getByRole('button', { name: 'Remove from Saved' }))
+    await user.click(within(panel).getByRole('button', { name: 'Favourite', pressed: true }))
 
     expect(unfavouriteGif).toHaveBeenCalledWith('g1')
-    expect(await within(panel).findByRole('button', { name: 'Save' })).toBeInTheDocument()
+    expect(await within(panel).findByRole('button', { name: 'Favourite', pressed: false })).toBeInTheDocument()
   })
 
   it('switching to Saved mode fetches and renders the caller\'s favourites, not "My GIFs"', async () => {
@@ -771,7 +785,7 @@ describe('Archive favourites', () => {
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const panel = document.querySelector('.archive-panel') as HTMLElement
-    await user.click(within(panel).getByRole('button', { name: 'Remove from Saved' }))
+    await user.click(within(panel).getByRole('button', { name: 'Favourite', pressed: true }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument())
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()

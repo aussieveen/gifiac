@@ -42,7 +42,6 @@
   --trim-bg: #1d2a3d;
   --trim-text: #9cc2ff;
   --danger: #ff7b6b;
-  --favourite: #ff6b9d; /* the favourite/save heart (SPEC-CLOUD.md §14) — distinct from --accent (reserved for primary actions/selection) and --danger (destructive) */
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -1933,9 +1932,9 @@ button {
   border-radius: 50%;
 }
 
-/* SPEC-CLOUD.md §14: gives .archive-heart-btn's absolute positioning
-   something to anchor to — the tile itself is a plain `<img>`, which can't
-   host an overlaid child. */
+/* SPEC-CLOUD.md §14: gives .archive-favourite-badge's absolute
+   positioning something to anchor to — the tile itself is a plain
+   `<img>`, which can't host an overlaid child. */
 .profile-gif-tile-wrap {
   position: relative;
 }
@@ -2055,12 +2054,13 @@ button {
   cursor: pointer;
 }
 
-/* SPEC-CLOUD.md §14: the favourite/save toggle. Same "circle badge in a
+/* SPEC-CLOUD.md §14: the favourite toggle badge — same "circle badge in a
    thumbnail corner" treatment as .archive-badge-lock/-external, but a real
-   button (those two are inert badges) — always pink-toned per the design
-   review, outline when not saved, filled when saved, on both a grid
-   thumbnail and the detail panel's icon-button variant below. */
-.archive-heart-btn {
+   button (those two are inert badges). Only visible unconditionally once
+   favourited (filled --accent star); otherwise hidden until the thumbnail
+   is hovered/focused, when it reveals as a muted outline star so desktop
+   users can favourite straight from the grid. */
+.archive-favourite-badge {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -2072,17 +2072,40 @@ button {
   border: none;
   border-radius: 50%;
   background: rgba(12, 12, 15, 0.75);
-  color: var(--favourite);
+  color: var(--text-muted);
+  opacity: 0;
 }
 
-.archive-heart-btn:hover {
+.archive-favourite-badge.favourited {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.archive-favourite-badge:hover {
   background: rgba(12, 12, 15, 0.9);
 }
 
+/* `hover: hover` keeps a touch tap from "sticking" the reveal open the
+   way a plain `:hover` rule would on some mobile browsers — mobile relies
+   on the detail panel's own favourite button instead, per the design. */
+@media (hover: hover) {
+  .archive-thumb:hover .archive-favourite-badge,
+  .profile-gif-tile-wrap:hover .archive-favourite-badge {
+    opacity: 1;
+  }
+}
+
+/* Keyboard focus reveals it on every device — tabbing to a hidden control
+   with no visible affordance first would be a real a11y trap. */
+.archive-thumb:focus-within .archive-favourite-badge,
+.profile-gif-tile-wrap:focus-within .archive-favourite-badge {
+  opacity: 1;
+}
+
 /* A linked-gif badge (.archive-badge-external) already claims the
-   thumbnail's top-right corner — nudge the heart left so the two don't
+   thumbnail's top-right corner — nudge the star left so the two don't
    overlap. */
-.archive-badge-external ~ .archive-heart-btn {
+.archive-badge-external ~ .archive-favourite-badge {
   right: 38px;
 }
 
@@ -2298,7 +2321,7 @@ button {
 
 /* SPEC-CLOUD.md §14: houses Copy link (still the full-width primary
    action) plus the small square favourite icon-button beside it — the
-   heart doesn't get its own full-width row, and it doesn't replace Copy
+   star doesn't get its own full-width row, and it doesn't replace Copy
    link. */
 .archive-panel-primary-row {
   display: flex;
@@ -2316,10 +2339,13 @@ button {
   height: 52px;
 }
 
-/* The detail-panel and mobile-action-bar favourite toggle — always
-   pink-toned (unlike .btn-secondary's neutral border), outline when not
-   saved, filled when saved. Square rather than the grid thumbnail's
-   circular badge, matching this panel's other icon buttons. */
+/* The detail-panel and mobile-action-bar favourite toggle — the same
+   neutral-bordered, transparent-background look as .btn-secondary (this
+   just isn't a `.btn`, since it's square rather than pill-shaped). Outline
+   star in --text-muted when not favourited; filled star in --accent when
+   favourited, border staying neutral either way. Square rather than the
+   grid thumbnail's circular badge, matching this panel's other icon
+   buttons. */
 .archive-favourite-btn {
   flex-shrink: 0;
   width: 44px;
@@ -2327,15 +2353,18 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--favourite);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: transparent;
-  color: var(--favourite);
+  color: var(--text-muted);
+}
+
+.archive-favourite-btn:hover {
+  border-color: var(--text-subtle);
 }
 
 .archive-favourite-btn.on {
-  background: var(--favourite);
-  color: #1a0510;
+  color: var(--accent);
 }
 
 .archive-panel-secondary-row {

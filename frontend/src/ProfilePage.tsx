@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { favouriteGif, getProfile, LOGIN_URL, unfavouriteGif } from './api'
-import { HeartIcon } from './icons'
+import { StarIcon } from './icons'
 import { PublicTopBar } from './PublicTopBar'
 import type { Gif, Profile } from './types'
 import { useCurrentUser } from './useCurrentUser'
@@ -54,7 +54,7 @@ export function ProfilePage() {
       setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
     } catch {
       // No toast infrastructure on this standalone public page — a failed
-      // toggle just leaves the heart showing its prior, still-correct state.
+      // toggle just leaves the star showing its prior, still-correct state.
     }
   }
 
@@ -92,7 +92,7 @@ export function ProfilePage() {
           {gifs.map((gif) =>
             // SPEC-CLOUD.md §14: this page is reachable while logged out
             // (main.tsx routes it outside App's auth-gated shell) — an
-            // anonymous visitor's heart is a plain link to sign in, same
+            // anonymous visitor's star is a plain link to sign in, same
             // pattern as every other logged-out call-to-action in this app
             // (About.tsx, App.tsx's own sign-in link), rather than a
             // button that 401s or navigates imperatively.
@@ -101,18 +101,19 @@ export function ProfilePage() {
                 <img src={gif.gif_url ?? ''} alt={gif.name} title={gif.name} className="profile-gif-tile" />
                 <button
                   type="button"
-                  className={`archive-heart-btn ${gif.is_favourited ? 'favourited' : ''}`}
-                  aria-label={gif.is_favourited ? 'Remove from Saved' : 'Save'}
+                  className={`archive-favourite-badge ${gif.is_favourited ? 'favourited' : ''}`}
+                  aria-label="Favourite"
+                  aria-pressed={gif.is_favourited}
                   onClick={() => toggleFavourite(gif.id, gif.is_favourited)}
                 >
-                  <HeartIcon size={14} filled={gif.is_favourited} />
+                  <StarIcon size={14} filled={gif.is_favourited} />
                 </button>
               </div>
             ) : (
               <div key={gif.id} className="profile-gif-tile-wrap">
                 <img src={gif.gif_url ?? ''} alt={gif.name} title={gif.name} className="profile-gif-tile" />
-                <a className="archive-heart-btn" aria-label="Sign in to save" href={LOGIN_URL}>
-                  <HeartIcon size={14} />
+                <a className="archive-favourite-badge" aria-label="Sign in to save" href={LOGIN_URL}>
+                  <StarIcon size={14} />
                 </a>
               </div>
             ),

@@ -21,11 +21,11 @@ import {
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
-  HeartIcon,
   LinkIcon,
   LockIcon,
   SearchIcon,
   ShareIcon,
+  StarIcon,
   TrashIcon,
   UploadIcon,
 } from './icons'
@@ -76,10 +76,11 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-type Filter = 'all' | 'public' | 'private' | 'one-offs'
+type Filter = 'all' | 'favourites' | 'public' | 'private' | 'one-offs'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
+  { id: 'favourites', label: 'Favourites' },
   { id: 'public', label: 'Public' },
   { id: 'private', label: 'Private' },
   { id: 'one-offs', label: 'One-offs' },
@@ -160,6 +161,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
 
   const filteredGifs = gifs.filter((g) => {
     if (mode === 'saved') return true
+    if (filter === 'favourites') return g.is_favourited
     if (filter === 'public') return g.is_public
     if (filter === 'private') return !g.is_public
     if (filter === 'one-offs') return g.is_one_off
@@ -258,7 +260,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     }
   }
 
-  // SPEC-CLOUD.md §14: toggles the heart from either a grid thumbnail or
+  // SPEC-CLOUD.md §14: toggles the star from either a grid thumbnail or
   // the detail panel — both funnel through here so the two stay in sync.
   // In Saved mode, un-favouriting a gif removes it from view entirely
   // (Saved only ever shows gifs you've favourited), clearing the
@@ -485,7 +487,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
               <div key={g.id} className="archive-grid-item">
                 {showDivider && <div className="archive-grid-divider">One-offs</div>}
                 {/* A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a
-                    real `<button>` heart inside for the favourite toggle,
+                    real `<button>` star inside for the favourite toggle,
                     and a button-inside-a-button is invalid HTML that gets
                     silently hoisted out by the parser, breaking layout. */}
                 <div
@@ -515,14 +517,15 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   )}
                   <button
                     type="button"
-                    className={`archive-heart-btn ${g.is_favourited ? 'favourited' : ''}`}
-                    aria-label={g.is_favourited ? 'Remove from Saved' : 'Save'}
+                    className={`archive-favourite-badge ${g.is_favourited ? 'favourited' : ''}`}
+                    aria-label="Favourite"
+                    aria-pressed={g.is_favourited}
                     onClick={(e) => {
                       e.stopPropagation()
                       toggleFavourite(g.id, g.is_favourited)
                     }}
                   >
-                    <HeartIcon size={14} filled={g.is_favourited} />
+                    <StarIcon size={14} filled={g.is_favourited} />
                   </button>
                 </div>
               </div>
@@ -534,9 +537,9 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           )}
           {!loading && mode === 'saved' && gifs.length === 0 && (
             <div className="archive-saved-empty">
-              <HeartIcon size={32} />
+              <StarIcon size={32} />
               <h3>No saved GIFs yet</h3>
-              <p className="va-hint">Hit the heart on any GIF in the Global Library to keep it here for later.</p>
+              <p className="va-hint">Hit the star on any GIF in the Global Library to keep it here for later.</p>
               <Link className="btn btn-primary" to="/explore">
                 Browse Global Library
               </Link>
@@ -621,10 +624,11 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   <button
                     type="button"
                     className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    aria-label="Favourite"
+                    aria-pressed={selected.is_favourited}
                     onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
                   >
-                    <HeartIcon filled={selected.is_favourited} />
+                    <StarIcon filled={selected.is_favourited} />
                   </button>
                 </div>
               )}
@@ -676,10 +680,11 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   <button
                     type="button"
                     className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    aria-label="Favourite"
+                    aria-pressed={selected.is_favourited}
                     onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
                   >
-                    <HeartIcon filled={selected.is_favourited} />
+                    <StarIcon filled={selected.is_favourited} />
                   </button>
                 </div>
               )}

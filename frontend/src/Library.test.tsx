@@ -236,18 +236,18 @@ describe('Library', () => {
 
 // SPEC-CLOUD.md §14.
 describe('Library favourites', () => {
-  it('clicking a thumbnail heart favourites it without opening the detail panel', async () => {
+  it('clicking a thumbnail star favourites it without opening the detail panel', async () => {
     vi.mocked(listLibrary).mockResolvedValue([entryA])
     vi.mocked(favouriteGif).mockResolvedValue({ ...entryA, is_favourited: true })
     const user = userEvent.setup()
 
     renderLibrary()
-    await user.click(await screen.findByRole('button', { name: 'Save' }))
+    await user.click(await screen.findByRole('button', { name: 'Favourite', pressed: false }))
 
     expect(favouriteGif).toHaveBeenCalledWith('g1')
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
     const grid = document.querySelector('.archive-grid') as HTMLElement
-    expect(await within(grid).findByRole('button', { name: 'Remove from Saved' })).toBeInTheDocument()
+    expect(await within(grid).findByRole('button', { name: 'Favourite', pressed: true })).toBeInTheDocument()
   })
 
   it('the detail panel favourite button unfavourites an already-saved gif', async () => {
@@ -258,9 +258,9 @@ describe('Library favourites', () => {
     renderLibrary()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     const panel = document.querySelector('.archive-panel') as HTMLElement
-    await user.click(within(panel).getByRole('button', { name: 'Remove from Saved' }))
+    await user.click(within(panel).getByRole('button', { name: 'Favourite', pressed: true }))
 
     expect(unfavouriteGif).toHaveBeenCalledWith('g1')
-    expect(await within(panel).findByRole('button', { name: 'Save' })).toBeInTheDocument()
+    expect(await within(panel).findByRole('button', { name: 'Favourite', pressed: false })).toBeInTheDocument()
   })
 })

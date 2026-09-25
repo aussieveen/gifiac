@@ -8,10 +8,10 @@ import {
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
-  HeartIcon,
   LinkIcon,
   SearchIcon,
   ShareIcon,
+  StarIcon,
   TrashIcon,
 } from './icons'
 import type { LibraryEntry, LibrarySort } from './types'
@@ -97,7 +97,7 @@ export function Library() {
       .catch(() => {})
   }
 
-  // SPEC-CLOUD.md §14: toggles the heart from either a grid thumbnail or
+  // SPEC-CLOUD.md §14: toggles the star from either a grid thumbnail or
   // the detail panel — both funnel through here so the two stay in sync.
   async function toggleFavourite(id: string, isFavourited: boolean) {
     try {
@@ -206,7 +206,7 @@ export function Library() {
         <div className="archive-grid">
           {items.map((item) => (
             // A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a real
-            // `<button>` heart inside for the favourite toggle, and a
+            // `<button>` star inside for the favourite toggle, and a
             // button-inside-a-button is invalid HTML the parser silently
             // hoists out, breaking layout.
             <div
@@ -228,14 +228,15 @@ export function Library() {
               )}
               <button
                 type="button"
-                className={`archive-heart-btn ${item.is_favourited ? 'favourited' : ''}`}
-                aria-label={item.is_favourited ? 'Remove from Saved' : 'Save'}
+                className={`archive-favourite-badge ${item.is_favourited ? 'favourited' : ''}`}
+                aria-label="Favourite"
+                aria-pressed={item.is_favourited}
                 onClick={(e) => {
                   e.stopPropagation()
                   toggleFavourite(item.id, item.is_favourited)
                 }}
               >
-                <HeartIcon size={14} filled={item.is_favourited} />
+                <StarIcon size={14} filled={item.is_favourited} />
               </button>
             </div>
           ))}
@@ -290,10 +291,11 @@ export function Library() {
                   <button
                     type="button"
                     className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    aria-label="Favourite"
+                    aria-pressed={selected.is_favourited}
                     onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
                   >
-                    <HeartIcon filled={selected.is_favourited} />
+                    <StarIcon filled={selected.is_favourited} />
                   </button>
                 </div>
               )}
@@ -337,10 +339,11 @@ export function Library() {
                   <button
                     type="button"
                     className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label={selected.is_favourited ? 'Remove from Saved' : 'Save'}
+                    aria-label="Favourite"
+                    aria-pressed={selected.is_favourited}
                     onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
                   >
-                    <HeartIcon filled={selected.is_favourited} />
+                    <StarIcon filled={selected.is_favourited} />
                   </button>
                 </div>
               )}
