@@ -58,6 +58,7 @@ const loggedInUser: CurrentUser = {
   role: 'user',
   avatarUrl: null,
   suggestedHandle: null,
+  preferences: { disableGifAutoplay: false },
 }
 const userWithoutAHandle: CurrentUser = { ...loggedInUser, handle: null, suggestedHandle: 'sim-on' }
 

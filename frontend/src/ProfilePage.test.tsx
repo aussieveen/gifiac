@@ -90,6 +90,7 @@ describe('ProfilePage favourites', () => {
     role: 'user',
     avatarUrl: null,
     suggestedHandle: null,
+    preferences: { disableGifAutoplay: false },
   }
 
   const gif: Gif = {

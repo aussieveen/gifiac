@@ -6,6 +6,7 @@ import type {
   Gif,
   LibraryEntry,
   LibrarySort,
+  Preferences,
   Profile,
   TemplatePayload,
   Video,
@@ -48,6 +49,17 @@ export function setHandle(handle: string): Promise<CurrentUser> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ handle }),
+  })
+}
+
+// The Preferences page's one write endpoint — reads come bundled onto
+// `getCurrentUser()`'s response instead (`CurrentUser.preferences`), so
+// there's no separate `getPreferences`.
+export function updatePreferences(patch: Partial<Preferences>): Promise<Preferences> {
+  return request<Preferences>('/api/preferences', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disable_gif_autoplay: patch.disableGifAutoplay }),
   })
 }
 

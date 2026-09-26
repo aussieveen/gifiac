@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminDeleteGif, favouriteGif, listLibrary, recordGifUse, unfavouriteGif } from './api'
+import { GifThumbnail } from './GifThumbnail'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
@@ -13,6 +14,7 @@ import {
   ShareIcon,
   StarIcon,
   TrashIcon,
+  XIcon,
 } from './icons'
 import type { LibraryEntry, LibrarySort } from './types'
 import { useCanEdit } from './useCanEdit'
@@ -69,6 +71,30 @@ export function Library() {
   const toast = useToast()
   const canEdit = useCanEdit()
   const canShare = typeof navigator.share === 'function'
+  // Keyed by gif id so `closeDetail` can return focus to whichever grid
+  // tile was open — see Archive.tsx's identical pattern.
+  const thumbRefs = useRef(new Map<string, HTMLDivElement>())
+  function closeDetail() {
+    const tile = selectedId ? thumbRefs.current.get(selectedId) : null
+    setSelectedId(null)
+    tile?.focus()
+  }
+
+  // Desktop-only (mobile's full-screen panel keeps its own back arrow
+  // instead) — skipped while focus is in a text input (the search box) so
+  // Escape can still do its usual job there.
+  useEffect(() => {
+    if (!selectedId || !canEdit) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+      closeDetail()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, canEdit])
 
   useEffect(() => {
     let cancelled = false
@@ -203,7 +229,12 @@ export function Library() {
       {loadError && <p className="export-error">{loadError}</p>}
 
       <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
-        <div className="archive-grid">
+        <div
+          className="archive-grid"
+          onClick={(e) => {
+            if (canEdit && selectedId && e.target === e.currentTarget) closeDetail()
+          }}
+        >
           {items.map((item) => (
             // A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a real
             // `<button>` star inside for the favourite toggle, and a
@@ -211,16 +242,23 @@ export function Library() {
             // hoists out, breaking layout.
             <div
               key={item.id}
+              ref={(el) => {
+                if (el) thumbRefs.current.set(item.id, el)
+                else thumbRefs.current.delete(item.id)
+              }}
               className={`archive-thumb ${item.id === selectedId ? 'selected' : ''}`}
               role="button"
               tabIndex={0}
-              onClick={() => setSelectedId(item.id)}
+              onClick={() => (item.id === selectedId ? closeDetail() : setSelectedId(item.id))}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') setSelectedId(item.id)
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  item.id === selectedId ? closeDetail() : setSelectedId(item.id)
+                }
               }}
               aria-label={item.name}
             >
-              {item.gif_url && <img src={item.gif_url} alt={item.name} />}
+              <GifThumbnail gif={item} alt={item.name} disableAutoplay={!!user?.preferences.disableGifAutoplay} />
               {item.external_url && (
                 <span className="archive-badge-external" title="Linked — hosted externally, not by StrewthGif">
                   <LinkIcon size={14} />
@@ -263,12 +301,24 @@ export function Library() {
                   <span className="archive-panel-mobile-title">{selected.name}</span>
                 </div>
               )}
-              <img
-                key={selected.id}
-                className="archive-panel-preview"
-                src={selected.gif_url ?? ''}
-                alt={`${selected.name} preview`}
-              />
+              <div className="archive-panel-preview-wrap">
+                <img
+                  key={selected.id}
+                  className="archive-panel-preview"
+                  src={selected.gif_url ?? ''}
+                  alt={`${selected.name} preview`}
+                />
+                {canEdit && (
+                  <button
+                    type="button"
+                    className="archive-panel-close"
+                    aria-label="Close details"
+                    onClick={closeDetail}
+                  >
+                    <XIcon size={16} />
+                  </button>
+                )}
+              </div>
               <div className="archive-panel-header">
                 <p className="archive-panel-title-text">{selected.name}</p>
                 {selected.owner_handle && selected.owner_slug && (

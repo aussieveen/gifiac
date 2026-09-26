@@ -13,6 +13,7 @@ import {
   setGifPublic,
   unfavouriteGif,
 } from './api'
+import { GifThumbnail } from './GifThumbnail'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
@@ -28,6 +29,7 @@ import {
   StarIcon,
   TrashIcon,
   UploadIcon,
+  XIcon,
 } from './icons'
 import type { Gif, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
@@ -110,6 +112,19 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     setSelectedIdState(id)
     onSelectGif?.(id)
   }
+  // Keyed by gif id so `closeDetail` can return focus to whichever grid
+  // tile was open — the tile itself stays mounted (only its `.selected`
+  // class changes) while the panel is open, so the element a ref captured
+  // earlier is still valid to focus after closing.
+  const thumbRefs = useRef(new Map<string, HTMLDivElement>())
+  // Shared by every way of closing the panel (the × button, Escape, and
+  // deselecting a tile by clicking it again or clicking empty grid space)
+  // so all four consistently return focus to the tile that was open.
+  function closeDetail() {
+    const tile = selectedId ? thumbRefs.current.get(selectedId) : null
+    setSelectedId(null)
+    tile?.focus()
+  }
   const canEdit = useCanEdit()
   const { user } = useCurrentUser()
   const canShare = typeof navigator.share === 'function'
@@ -157,6 +172,27 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
       cancelled = true
     }
   }, [query, mode])
+
+  // Desktop-only affordance (mobile's full-screen panel keeps its own back
+  // arrow instead — see the `canEdit` gate on the × button below). Skipped
+  // while focus is in a text input (the rename field, search box, or the
+  // link-import form) or the Import dropdown is open, so Escape can still
+  // do its usual job there (e.g. clearing a native `<input>`'s own state,
+  // or dismissing the dropdown) without also closing the detail panel out
+  // from under it.
+  useEffect(() => {
+    if (!selectedId || !canEdit) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      if (showImportMenu) return
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+      closeDetail()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, canEdit, showImportMenu])
 
   const filteredGifs = gifs.filter((g) => {
     if (mode === 'favourites') return true
@@ -468,7 +504,15 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
       {linkError && <p className="export-error">{linkError}</p>}
 
       <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
-        <div className="archive-grid">
+        <div
+          className="archive-grid"
+          onClick={(e) => {
+            // Only when the click landed on the grid itself, not a child
+            // (tile, divider, favourite badge) that bubbled up — those
+            // all have their own click handling.
+            if (canEdit && selectedId && e.target === e.currentTarget) closeDetail()
+          }}
+        >
           {filteredGifs.map((g, i) => {
             // SPEC.md §8: the backend already sorts reusable GIFs before
             // one-offs (each group newest-first) — the divider goes
@@ -489,16 +533,23 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                     and a button-inside-a-button is invalid HTML that gets
                     silently hoisted out by the parser, breaking layout. */}
                 <div
+                  ref={(el) => {
+                    if (el) thumbRefs.current.set(g.id, el)
+                    else thumbRefs.current.delete(g.id)
+                  }}
                   className={`archive-thumb ${g.id === selectedId ? 'selected' : ''}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setSelectedId(g.id)}
+                  onClick={() => (g.id === selectedId ? closeDetail() : setSelectedId(g.id))}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') setSelectedId(g.id)
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      g.id === selectedId ? closeDetail() : setSelectedId(g.id)
+                    }
                   }}
                   aria-label={g.name}
                 >
-                  {g.gif_url && <img src={g.gif_url} alt={g.name} />}
+                  <GifThumbnail gif={g} alt={g.name} disableAutoplay={!!user?.preferences.disableGifAutoplay} />
                   {!g.is_public && (
                     <span className="archive-badge-lock" title="Private">
                       <LockIcon size={14} />
@@ -570,15 +621,29 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   <span className="archive-panel-mobile-title">{selected.name}</span>
                 </div>
               )}
-              {/* `key` forces a fresh <img> per selection, so the GIF's
-                  animation restarts from frame one every time — no manual
-                  play/pause bookkeeping needed. */}
-              <img
-                key={selected.id}
-                className="archive-panel-preview"
-                src={selected.gif_url}
-                alt={`${selected.name} preview`}
-              />
+              <div className="archive-panel-preview-wrap">
+                {/* `key` forces a fresh <img> per selection, so the GIF's
+                    animation restarts from frame one every time — no manual
+                    play/pause bookkeeping needed. */}
+                <img
+                  key={selected.id}
+                  className="archive-panel-preview"
+                  src={selected.gif_url}
+                  alt={`${selected.name} preview`}
+                />
+                {/* Desktop only — mobile's full-screen panel keeps its own
+                    back arrow (`archive-panel-mobile-topbar` above) instead. */}
+                {canEdit && (
+                  <button
+                    type="button"
+                    className="archive-panel-close"
+                    aria-label="Close details"
+                    onClick={closeDetail}
+                  >
+                    <XIcon size={16} />
+                  </button>
+                )}
+              </div>
               <div className="archive-panel-header">
                 {isOwnGif ? (
                   <input

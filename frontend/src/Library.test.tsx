@@ -45,6 +45,7 @@ const plainUser: CurrentUser = {
   role: 'user',
   avatarUrl: null,
   suggestedHandle: null,
+  preferences: { disableGifAutoplay: false },
 }
 
 beforeEach(() => {
@@ -128,6 +129,84 @@ describe('Library', () => {
 
     const link = screen.getByRole('link', { name: 'Simon_Mc' })
     expect(link).toHaveAttribute('href', '/u/simon_mc2')
+  })
+
+  it('the close button closes the panel and returns focus to the tile', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+    expect(screen.getByText(/simon/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Close details' }))
+
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+    expect(tile).toHaveFocus()
+  })
+
+  it('clicking the already-selected tile closes the panel', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+    await user.click(tile)
+
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('clicking empty grid space closes the panel', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    expect(screen.getByText(/simon/i)).toBeInTheDocument()
+
+    await user.click(document.querySelector('.archive-grid')!)
+
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('Escape closes the panel and returns focus to the tile', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+    expect(tile).toHaveFocus()
+  })
+
+  it('Escape does not close the panel while focus is in the search box', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByLabelText('Search the library'))
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.getByText(/simon/i)).toBeInTheDocument()
+  })
+
+  it('has no close button below the editor breakpoint — the Back arrow is the only way to close', async () => {
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    resizeTo(390)
+    const user = userEvent.setup()
+    renderLibrary()
+
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('button', { name: 'Close details' })).not.toBeInTheDocument()
   })
 
   it('the copy-link button copies the gif url and bumps its use count', async () => {

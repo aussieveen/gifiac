@@ -123,6 +123,13 @@ pub async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> Resul
     Ok((jar, StatusCode::NO_CONTENT))
 }
 
-pub async fn me(OptionalCurrentUser(current_user): OptionalCurrentUser) -> Json<Option<CurrentUserView>> {
-    Json(current_user.map(|CurrentUser(user)| user.into()))
+pub async fn me(
+    State(state): State<Arc<AppState>>,
+    OptionalCurrentUser(current_user): OptionalCurrentUser,
+) -> Result<Json<Option<CurrentUserView>>, AppError> {
+    let Some(CurrentUser(user)) = current_user else {
+        return Ok(Json(None));
+    };
+    let preferences = db::get_preferences(&state.pool, &user.id).await?;
+    Ok(Json(Some(CurrentUserView::from_user_and_preferences(user, preferences))))
 }

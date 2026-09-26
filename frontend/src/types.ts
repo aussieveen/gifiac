@@ -46,6 +46,16 @@ export interface TemplatePayload {
   height: number
 }
 
+// A user's Preferences-page settings (bundled onto `CurrentUser` rather
+// than fetched separately — see `CurrentUser.preferences`). camelCase,
+// matching the backend's `PreferencesView`.
+export interface Preferences {
+  // The Preferences section's first option: stop gifs autoplaying/looping
+  // unsolicited in grid/library views. The detail pane always loops
+  // regardless of this setting.
+  disableGifAutoplay: boolean
+}
+
 // GET /api/auth/me response shape (SPEC-CLOUD.md §2) — camelCase, matching
 // the backend's `CurrentUserView`. `null` overall means logged out.
 export interface CurrentUser {
@@ -61,6 +71,7 @@ export interface CurrentUser {
   // from the Google display name — only meaningful while `handle` is
   // still null, to prefill the handle picker.
   suggestedHandle: string | null
+  preferences: Preferences
 }
 
 // GET /api/profiles/{handle} response shape (SPEC-CLOUD.md §5) —
@@ -120,6 +131,10 @@ export interface Gif {
   // backend, which always includes these keys, `null` or not.
   mp4_url?: string | null
   webm_url?: string | null
+  // A linked gif's generated poster frame — only present once generation
+  // succeeds; `null`/absent while pending, on failure, or for a non-linked
+  // gif (which needs no thumbnail at all, mp4_url/webm_url cover it).
+  thumbnail_url?: string | null
 }
 
 // GET /api/library response shape (SPEC-CLOUD.md §8) — a Gif plus its

@@ -35,6 +35,13 @@ pub struct GifResponse {
     gif_url: String,
     mp4_url: Option<String>,
     webm_url: Option<String>,
+    /// The linked-gif poster frame (SPEC's "disable gif autoplay"
+    /// preference) — only ever `Some` once `gif.thumbnail_status` is
+    /// `"ready"`; still `pending`, `failed`, or absent (a non-linked gif,
+    /// which needs no thumbnail at all — mp4/webm cover it) all read as
+    /// `None` here, and the frontend falls back to showing the live
+    /// animating gif for those.
+    thumbnail_url: Option<String>,
     /// SPEC-CLOUD.md §14: per-viewer, not a property of the gif row itself
     /// — the caller supplies it rather than `with_urls` computing it, so
     /// every call site stays explicit about whose favourite state this is.
@@ -43,10 +50,17 @@ pub struct GifResponse {
 
 pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Result<GifResponse, AppError> {
     if let Some(external_url) = gif.external_url.clone() {
+        let thumbnail_url = if gif.thumbnail_status.as_deref() == Some("ready") {
+            let uuid = Uuid::parse_str(&gif.id)?;
+            Some(storage.public_url(&paths::thumbnail_object_key(&uuid)))
+        } else {
+            None
+        };
         return Ok(GifResponse {
             gif_url: external_url,
             mp4_url: None,
             webm_url: None,
+            thumbnail_url,
             is_favourited,
             gif,
         });
@@ -56,6 +70,7 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Res
         gif_url: storage.public_url(&paths::gif_object_key(&uuid)),
         mp4_url: Some(storage.public_url(&paths::mp4_object_key(&uuid))),
         webm_url: Some(storage.public_url(&paths::webm_object_key(&uuid))),
+        thumbnail_url: None,
         is_favourited,
         gif,
     })
@@ -345,6 +360,20 @@ pub async fn link_gif(
         user_id: user.id,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
+
+    // Fire-and-forget: the gif is already usable (the frontend just shows
+    // the live animating `<img>` until this lands) — see the "disable gif
+    // autoplay" preference design decision not to block gif creation on a
+    // third-party server's reliability/speed.
+    let (pool, storage, http_client) = (state.pool.clone(), state.storage.clone(), state.http_client.clone());
+    let (gif_id, external_url) = (gif.id.clone(), gif.external_url.clone().expect("just-linked gif has external_url"));
+    tokio::spawn(async move {
+        if let Err(err) = crate::thumbnails::generate_and_store(&pool, &storage, &http_client, &gif_id, &external_url).await
+        {
+            tracing::error!(gif_id, error = ?err, "thumbnail generation task failed");
+        }
+    });
+
     Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage, false)?)))
 }
 

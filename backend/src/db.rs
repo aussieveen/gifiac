@@ -6,12 +6,12 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PublicGif, Session, Template, TemplatePayload, User, Video,
-    VideoListItem, VideoTemplate,
+    AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload,
+    UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count, thumbnail_status";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
 /// link) starts out reusable, relying on the schema's `DEFAULT false`
@@ -20,7 +20,7 @@ const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_
 /// here, never part of what's `SELECT`ed back out to a response (SPEC-
 /// CLOUD.md §3's ownership model is enforced in the query, not surfaced
 /// to the frontend).
-const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at";
+const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, thumbnail_status";
 const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, payload_json, saved_at";
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool> {
@@ -115,8 +115,14 @@ pub async fn list_videos(pool: &PgPool, owner_id: &str) -> Result<Vec<VideoListI
 }
 
 pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result<Gif> {
+    // A linked gif (external_url set) starts `pending` — nothing to
+    // transcode server-side, but a thumbnail still needs fetching/
+    // extracting from the third-party URL (see thumbnails.rs). Every other
+    // gif has mp4/webm from the transcode pipeline instead, so there's
+    // nothing to generate here.
+    let thumbnail_status = gif.external_url.is_some().then_some("pending");
     let sql = format!(
-        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -130,10 +136,76 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
         .bind(gif.height)
         .bind(&gif.external_url)
         .bind(created_at)
+        .bind(thumbnail_status)
         .bind(&gif.user_id)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
+}
+
+/// Flips a linked gif's thumbnail pipeline status (see
+/// `0015_gif_thumbnails.sql`) — used by both the background job spawned
+/// from `routes::gifs::link_gif` and the one-off backfill CLI, so the two
+/// share one place that knows how this column is written.
+pub async fn set_thumbnail_status(pool: &PgPool, gif_id: &str, status: &str) -> Result<()> {
+    sqlx::query("UPDATE gifs SET thumbnail_status = $1 WHERE id = $2")
+        .bind(status)
+        .bind(gif_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Every linked gif never attempted by the thumbnail pipeline — what the
+/// backfill CLI processes. Ignores `failed` rows deliberately (SPEC
+/// decision: a permanently broken external link isn't retried
+/// automatically; re-running this CLI against `failed` rows too is a
+/// manual, deliberate choice, not this query's default).
+pub async fn list_gifs_needing_thumbnail(pool: &PgPool) -> Result<Vec<Gif>> {
+    let sql = format!(
+        "SELECT {GIF_COLUMNS} FROM gifs WHERE external_url IS NOT NULL AND thumbnail_status = 'pending' ORDER BY created_at ASC"
+    );
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// A user's saved preferences (Preferences page) — `None` (no
+/// `user_preferences` row yet) reads as every preference defaulting off,
+/// same as `PreferencesView::default()`.
+pub async fn get_preferences(pool: &PgPool, user_id: &str) -> Result<PreferencesView> {
+    let row: Option<PreferencesView> =
+        sqlx::query_as("SELECT disable_gif_autoplay FROM user_preferences WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.unwrap_or_default())
+}
+
+/// Merges `request` onto the caller's existing preferences (each field
+/// independently optional, see `UpdatePreferencesRequest`) and upserts the
+/// result — a user's first-ever preference change creates their row.
+pub async fn update_preferences(
+    pool: &PgPool,
+    user_id: &str,
+    request: &UpdatePreferencesRequest,
+    updated_at: &str,
+) -> Result<PreferencesView> {
+    let current = get_preferences(pool, user_id).await?;
+    let updated = PreferencesView {
+        disable_gif_autoplay: request.disable_gif_autoplay.unwrap_or(current.disable_gif_autoplay),
+    };
+    sqlx::query(
+        "INSERT INTO user_preferences (user_id, disable_gif_autoplay, updated_at) VALUES ($1, $2, $3) \
+         ON CONFLICT (user_id) DO UPDATE SET disable_gif_autoplay = $2, updated_at = $3",
+    )
+    .bind(user_id)
+    .bind(updated.disable_gif_autoplay)
+    .bind(updated_at)
+    .execute(pool)
+    .await?;
+    Ok(updated)
 }
 
 /// SPEC.md §5: `q` matches `name` and `caption_text` **together** — one
@@ -604,8 +676,8 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle, \
-         users.slug AS owner_slug";
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, \
+         users.handle AS owner_handle, users.slug AS owner_slug";
     let order_by = match sort {
         LibrarySort::Newest => "gifs.created_at DESC",
         LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
@@ -718,8 +790,8 @@ pub async fn remove_favourite(pool: &PgPool, user_id: &str, gif_id: &str) -> Res
 pub async fn list_favourite_gifs(pool: &PgPool, user_id: &str) -> Result<Vec<PublicGif>> {
     let sql = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, users.handle AS owner_handle, \
-         users.slug AS owner_slug \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, \
+         users.handle AS owner_handle, users.slug AS owner_slug \
          FROM favourites \
          JOIN gifs ON gifs.id = favourites.gif_id \
          JOIN users ON users.id = gifs.user_id \

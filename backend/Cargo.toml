@@ -2,6 +2,10 @@
 name = "gifiac-backend"
 version = "0.1.0"
 edition = "2024"
+# Plain `cargo run` (README's documented local-dev command) would
+# otherwise be ambiguous once more than one `src/bin/*.rs` binary exists
+# alongside this package's own `src/main.rs`.
+default-run = "gifiac-backend"
 
 [dependencies]
 anyhow = "1.0.104"
