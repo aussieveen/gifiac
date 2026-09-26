@@ -95,6 +95,7 @@ const plainUser: CurrentUser = {
   role: 'user',
   avatarUrl: null,
   suggestedHandle: null,
+  preferences: { disableGifAutoplay: false },
 }
 
 // Archive now renders a <Link> (the "Remix" secondary button, shown when a
@@ -207,6 +208,92 @@ describe('Archive', () => {
     const secondPreview = screen.getByAltText('dog running preview')
 
     expect(firstPreview).not.toBe(secondPreview)
+  })
+
+  it('the close button closes the panel and returns focus to the tile', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Close details' }))
+
+    expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
+    expect(tile).toHaveFocus()
+  })
+
+  it('clicking the already-selected tile closes the panel', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
+
+    await user.click(tile)
+
+    expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
+  })
+
+  it('clicking empty grid space closes the panel', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
+
+    // The grid container itself (not a tile) — its own click handler only
+    // fires for a click that lands directly on it, not one bubbled up from
+    // a child, so target it directly rather than a descendant.
+    await user.click(document.querySelector('.archive-grid')!)
+
+    expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
+  })
+
+  it('Escape closes the panel and returns focus to the tile', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    const tile = await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(tile)
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
+    expect(tile).toHaveFocus()
+  })
+
+  it('Escape does not close the panel while focus is in the rename field', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(screen.getByLabelText('GIF name'))
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
+  })
+
+  it('Escape does not close the panel while the Import menu is open', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await openImportMenu(user)
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
   })
 
   it('renaming on blur calls the API and updates the grid', async () => {
@@ -676,6 +763,17 @@ describe('Archive', () => {
       'has-selection',
     )
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
+  })
+
+  it('has no close button below the editor breakpoint — the Back arrow is the only way to close', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    resizeTo(390)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('button', { name: 'Close details' })).not.toBeInTheDocument()
   })
 
   it('hides Remix below the editor breakpoint', async () => {

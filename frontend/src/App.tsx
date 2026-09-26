@@ -11,6 +11,7 @@ import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
 import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
 import { Library } from './Library'
+import { Preferences } from './Preferences'
 import { consumeReturnTo, saveReturnTo } from './returnTo'
 import type { CurrentUser, FilmstripMeta, Gif, Video } from './types'
 import { useCanEdit } from './useCanEdit'
@@ -55,6 +56,9 @@ function AccountMenu({ user }: { user: CurrentUser }) {
           >
             View profile
           </Link>
+          <Link className="account-dropdown-item" to="/preferences" role="menuitem" onClick={() => setOpen(false)}>
+            Preferences
+          </Link>
           <Link className="account-dropdown-item" to="/privacy" role="menuitem" onClick={() => setOpen(false)}>
             Privacy policy
           </Link>
@@ -73,17 +77,20 @@ function AccountMenu({ user }: { user: CurrentUser }) {
 }
 
 /** `/library` and `/library/:gifId` both land here — the id (if any)
- * pre-selects that GIF in the detail panel, and selecting a different one
- * pushes the id into the URL (`replace`d, so browsing the grid doesn't
- * spam history the way a real navigation would) so the current selection
- * is always a shareable link, not just in-memory state. */
+ * pre-selects that GIF in the detail panel, so the current selection is
+ * always a shareable link, not just in-memory state. Opening the first
+ * GIF from the closed state pushes a new history entry (so Back leaves
+ * the detail view); every subsequent selection change while one is
+ * already open — switching to a different GIF, or closing back to `null`
+ * — replaces that entry instead, so Back from the library skips over
+ * every GIF viewed along the way rather than stepping through each one. */
 function ArchiveRoute() {
   const { gifId } = useParams<{ gifId: string }>()
   const navigate = useNavigate()
   return (
     <Archive
       initialSelectedId={gifId ?? null}
-      onSelectGif={(id) => navigate(id ? `/library/${id}` : '/library', { replace: true })}
+      onSelectGif={(id) => navigate(id ? `/library/${id}` : '/library', { replace: Boolean(gifId) })}
     />
   )
 }
@@ -234,7 +241,7 @@ export default function App() {
     return <HandlePicker suggestedHandle={user.suggestedHandle} onHandleSet={setUser} />
   }
 
-  return <AuthenticatedApp user={user} location={location} navigate={navigate} />
+  return <AuthenticatedApp user={user} onUserChange={setUser} location={location} navigate={navigate} />
 }
 
 /** Split out so the return_to redirect effect only ever runs for an
@@ -242,10 +249,12 @@ export default function App() {
  * signed-out, handle picker) all return before this component exists. */
 function AuthenticatedApp({
   user,
+  onUserChange,
   location,
   navigate,
 }: {
   user: CurrentUser
+  onUserChange: (user: CurrentUser) => void
   location: ReturnType<typeof useLocation>
   navigate: ReturnType<typeof useNavigate>
 }) {
@@ -326,6 +335,7 @@ function AuthenticatedApp({
         <Route path="/library" element={<ArchiveRoute />} />
         <Route path="/library/:gifId" element={<ArchiveRoute />} />
         <Route path="/explore" element={<Library />} />
+        <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />
         <Route path="/new" element={<NewGifRoute />} />
         <Route path="/edit/:videoId" element={<EditRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />} />
         {user.role === 'admin' && <Route path="/admin" element={<AdminPage />} />}

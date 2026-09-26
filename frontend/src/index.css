@@ -638,6 +638,41 @@ button {
   color: var(--text-subtle);
 }
 
+.preferences-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+}
+
+.preferences-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.preferences-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preferences-row-title {
+  font-weight: 600;
+}
+
+.preferences-row input[type='checkbox'] {
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 18px;
+  height: 18px;
+}
+
 .admin-users-table {
   width: 100%;
   border-collapse: collapse;
@@ -2230,6 +2265,40 @@ button {
      (SPEC.md §13) and lose real content off the top/bottom or sides.
      `contain` always shows the whole GIF, letterboxed on --bg-sunken. */
   object-fit: contain;
+}
+
+/* Positions .archive-panel-close over the preview's corner — takes over
+   .archive-panel-preview's own align-self/max-width (see that rule's
+   comment) now that the img is nested inside this wrapper rather than a
+   direct flex child of .archive-panel itself. */
+.archive-panel-preview-wrap {
+  position: relative;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+/* Desktop only (see the `canEdit` gate in Archive.tsx/Library.tsx) — a
+   way to close the detail panel without hunting for empty grid space or
+   reaching for Escape. Mobile's full-screen panel keeps its own back
+   arrow instead. */
+.archive-panel-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(17, 17, 20, 0.8);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.archive-panel-close:hover {
+  background: rgba(40, 40, 46, 0.85);
 }
 
 .archive-panel-header {

@@ -48,7 +48,8 @@ pub async fn set_handle(
     let updated = db::get_user(&state.pool, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(Json(updated.into()))
+    let preferences = db::get_preferences(&state.pool, &updated.id).await?;
+    Ok(Json(CurrentUserView::from_user_and_preferences(updated, preferences)))
 }
 
 #[derive(Debug, Serialize)]

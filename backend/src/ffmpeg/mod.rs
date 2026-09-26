@@ -8,7 +8,7 @@ mod thumbnail;
 pub use clip::trim_video;
 pub use filmstrip::generate_filmstrip_sprite;
 pub use probe::probe_video;
-pub use thumbnail::generate_thumbnail;
+pub use thumbnail::{generate_midpoint_thumbnail, generate_thumbnail};
 
 use std::process::Stdio;
 

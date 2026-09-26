@@ -2,6 +2,7 @@ mod admin;
 mod auth;
 mod exports;
 pub(crate) mod gifs;
+mod preferences;
 mod profiles;
 pub(crate) mod videos;
 
@@ -57,6 +58,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             post(gifs::favourite_gif).delete(gifs::unfavourite_gif),
         )
         .route("/favourites", get(gifs::list_favourites))
+        .route("/preferences", put(preferences::update_preferences))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))

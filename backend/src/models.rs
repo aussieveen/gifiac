@@ -182,6 +182,11 @@ pub struct Gif {
     /// Bumped by `POST /api/gifs/{id}/use` (SPEC-CLOUD.md §8) every time a
     /// copy-link/copy-embed/download action fires — no dedup, auth only.
     pub use_count: i64,
+    /// `None` for every non-linked gif (mp4/webm cover the "static frame"
+    /// need there). For a linked gif: `pending` until the background
+    /// thumbnail job (or backfill CLI) has attempted it, then `ready` or
+    /// `failed` — see `0015_gif_thumbnails.sql`.
+    pub thumbnail_status: Option<String>,
 }
 
 impl Gif {
@@ -223,6 +228,7 @@ pub struct PublicGif {
     pub is_one_off: bool,
     pub is_public: bool,
     pub use_count: i64,
+    pub thumbnail_status: Option<String>,
     pub owner_handle: Option<String>,
     pub owner_slug: Option<String>,
 }
@@ -244,6 +250,7 @@ impl From<PublicGif> for Gif {
             is_one_off: g.is_one_off,
             is_public: g.is_public,
             use_count: g.use_count,
+            thumbnail_status: g.thumbnail_status,
         }
     }
 }
@@ -351,10 +358,15 @@ pub struct CurrentUserView {
     pub role: String,
     pub avatar_url: Option<String>,
     pub suggested_handle: Option<String>,
+    /// Bundled onto the current-user payload rather than fetched
+    /// separately (see PreferencesView) — every place that already calls
+    /// `GET /api/auth/me` (e.g. a gif grid deciding whether to render
+    /// hover-preview mode) gets it for free, no second round-trip.
+    pub preferences: PreferencesView,
 }
 
-impl From<User> for CurrentUserView {
-    fn from(user: User) -> Self {
+impl CurrentUserView {
+    pub fn from_user_and_preferences(user: User, preferences: PreferencesView) -> Self {
         let suggested_handle = user
             .handle
             .is_none()
@@ -367,8 +379,28 @@ impl From<User> for CurrentUserView {
             role: user.role,
             avatar_url: user.avatar_url,
             suggested_handle,
+            preferences,
         }
     }
+}
+
+/// A user's preferences (the new Preferences page) — `disable_gif_autoplay`
+/// is the first option: stop gifs looping unsolicited in grid/library
+/// views (the detail pane always loops regardless, see the frontend). A
+/// user who's never saved a preference has no `user_preferences` row at
+/// all; `PreferencesView::default()` (all off) is what they read as.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferencesView {
+    pub disable_gif_autoplay: bool,
+}
+
+/// `PUT /api/preferences` body — every field optional so a client can
+/// update just the one preference it has UI for without needing to know
+/// (and resubmit) every other preference that might exist by then.
+#[derive(Debug, Deserialize)]
+pub struct UpdatePreferencesRequest {
+    pub disable_gif_autoplay: Option<bool>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

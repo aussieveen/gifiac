@@ -57,6 +57,13 @@ pub fn webm_object_key(id: &Uuid) -> String {
     format!("clips/{id}.webm")
 }
 
+/// A linked GIF's generated poster-frame thumbnail (see
+/// `0015_gif_thumbnails.sql`) — same derived-from-id convention as the
+/// other object keys above, never separately stored.
+pub fn thumbnail_object_key(id: &Uuid) -> String {
+    format!("thumbnails/{id}.jpg")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +132,14 @@ mod tests {
         assert_eq!(
             template_filmstrip_path(dir, &id()),
             PathBuf::from("/data/videos/11111111-1111-4111-8111-111111111111_template_filmstrip.jpg")
+        );
+    }
+
+    #[test]
+    fn thumbnail_object_key_uses_the_thumbnails_prefix() {
+        assert_eq!(
+            thumbnail_object_key(&id()),
+            "thumbnails/11111111-1111-4111-8111-111111111111.jpg"
         );
     }
 

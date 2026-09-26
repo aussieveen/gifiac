@@ -15,6 +15,7 @@ pub mod scale;
 pub mod source_video;
 pub mod state;
 pub mod storage;
+pub mod thumbnails;
 
 use std::sync::Arc;
 
