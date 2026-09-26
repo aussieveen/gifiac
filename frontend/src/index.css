@@ -1072,12 +1072,16 @@ button {
 
 .editor-header {
   flex-shrink: 0;
-  height: 72px;
+  /* min-height, not height: .editor-title-block can stack up to 4 rows
+     (label, input, the suggested-name button, source-info) when the name
+     is still empty and a suggestion is available — a fixed height clips
+     that instead of the header growing to fit it. */
+  min-height: 72px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 32px;
+  padding: 8px 32px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
