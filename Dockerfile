@@ -67,6 +67,10 @@ COPY --from=builder /app/backend/target/release/gifiac-backend ./gifiac-backend
 # image as the server so it shares its ffmpeg/fontconfig setup and its
 # DATABASE_URL/GIFIAC_VIDEO_DIR env, run via `docker compose exec`.
 COPY --from=builder /app/backend/target/release/migrate_archive ./migrate_archive
+# One-off backfill (thumbnails.rs) for linked gifs created before that
+# pipeline existed — same "share the image, run via docker compose exec"
+# treatment as migrate_archive above.
+COPY --from=builder /app/backend/target/release/backfill_thumbnails ./backfill_thumbnails
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 EXPOSE 8080
