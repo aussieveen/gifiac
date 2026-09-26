@@ -47,9 +47,12 @@ services:
   # One-shot: creates the `gifiac-test` bucket and makes it public-read
   # (matching R2's bucket policy, SPEC.md §9), plus `gifiac-source-videos-test`
   # — the private stand-in for the source-video S3 bucket (SPEC-CLOUD.md
-  # §6, see backend/tests/common::test_source_storage) — left *without*
-  # a public policy, matching the real bucket's privacy. Exits after.
-  # Safe to re-run (`--ignore-existing`) on every `docker compose up`.
+  # §6, see backend/tests/common::test_source_storage) — and
+  # `gifiac-template-assets-test`, the private stand-in for the template-
+  # assets S3 bucket (SPEC-CLOUD.md §10, see
+  # backend/tests/common::test_template_assets_storage) — both left
+  # *without* a public policy, matching the real buckets' privacy. Exits
+  # after. Safe to re-run (`--ignore-existing`) on every `docker compose up`.
   minio-init:
     image: minio/mc
     container_name: gifiac-dev-minio-init
@@ -62,6 +65,7 @@ services:
         mc mb --ignore-existing local/gifiac-test
         mc anonymous set public local/gifiac-test
         mc mb --ignore-existing local/gifiac-source-videos-test
+        mc mb --ignore-existing local/gifiac-template-assets-test
     restart: "no"
 
 volumes:

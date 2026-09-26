@@ -92,6 +92,11 @@ finished GIFs/clips live in R2.
 | `SOURCE_VIDEOS_S3_BUCKET` | *(required)* | Bucket name |
 | `SOURCE_VIDEOS_S3_REGION` | *(required)* | AWS region the bucket lives in — also used to derive the S3 endpoint URL |
 | `SOURCE_VIDEOS_S3_ENDPOINT_URL` | *(optional)* | Overrides the derived endpoint — only set this in local dev, pointing at MinIO |
+| `TEMPLATE_ASSETS_S3_ACCESS_KEY_ID` | *(required)* | Access key for the private, versioned template-assets S3 bucket (a saved template's clip/thumbnail/filmstrip back up here — SPEC-CLOUD.md §10) |
+| `TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY` | *(required)* | Secret key for the same bucket |
+| `TEMPLATE_ASSETS_S3_BUCKET` | *(required)* | Bucket name |
+| `TEMPLATE_ASSETS_S3_REGION` | *(required)* | AWS region the bucket lives in — also used to derive the S3 endpoint URL |
+| `TEMPLATE_ASSETS_S3_ENDPOINT_URL` | *(optional)* | Overrides the derived endpoint — only set this in local dev, pointing at MinIO |
 
 The container listens on port `8080` internally; map it to whatever host
 port you like (`docker-compose.yml` maps `8123:8080` by default).
@@ -151,6 +156,13 @@ export SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
 export SOURCE_VIDEOS_S3_BUCKET=gifiac-source-videos-test
 export SOURCE_VIDEOS_S3_REGION=us-east-1
 export SOURCE_VIDEOS_S3_ENDPOINT_URL=http://localhost:19000
+# Same MinIO stand-in again, but the private template-assets bucket
+# (SPEC-CLOUD.md §10) — see backend/tests/common::test_template_assets_storage.
+export TEMPLATE_ASSETS_S3_ACCESS_KEY_ID=gifiac
+export TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
+export TEMPLATE_ASSETS_S3_BUCKET=gifiac-template-assets-test
+export TEMPLATE_ASSETS_S3_REGION=us-east-1
+export TEMPLATE_ASSETS_S3_ENDPOINT_URL=http://localhost:19000
 
 cargo run
 ```

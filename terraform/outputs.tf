@@ -29,6 +29,11 @@ output "source_videos_bucket_name" {
   value       = aws_s3_bucket.source_videos.bucket
 }
 
+output "template_assets_bucket_name" {
+  description = "The private S3 bucket name for TEMPLATE_ASSETS_S3_BUCKET."
+  value       = aws_s3_bucket.template_assets.bucket
+}
+
 output "github_deploy_role_arn" {
   description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub repo variable."
   value       = aws_iam_role.deploy.arn

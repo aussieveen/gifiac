@@ -61,6 +61,9 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let source_videos = storage::SourceStorageConfig::from_env()?;
     let source_storage = storage::Storage::new_for_source_bucket(&source_videos).await;
 
+    let template_assets = storage::TemplateAssetsConfig::from_env()?;
+    let template_assets_storage = storage::Storage::new_for_template_assets_bucket(&template_assets).await;
+
     let http_client = link_check::build_client()?;
     let google_auth = auth::GoogleAuthConfig::from_env()?;
 
@@ -69,6 +72,7 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         config,
         storage,
         source_storage,
+        template_assets_storage,
         http_client,
         google_auth,
         export_jobs: Default::default(),

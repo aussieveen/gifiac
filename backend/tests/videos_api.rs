@@ -1079,6 +1079,33 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     assert!(clip_path.exists(), "expected a template clip file on disk");
     assert!(thumb_path.exists(), "expected a template thumbnail file on disk");
     assert!(filmstrip_path.exists(), "expected a template filmstrip file on disk");
+
+    // SPEC-CLOUD.md §10: the same three files are also backed up to the
+    // private, versioned template-assets bucket — a fresh EC2 instance
+    // (no local cache) shouldn't lose a saved template for good.
+    let template_id = template_id_from_clip_path(&clip_path);
+    let scratch = TempDir::new().unwrap();
+    for (key, label) in [
+        (
+            gifiac_backend::paths::template_clip_object_key(&template_id),
+            "clip",
+        ),
+        (
+            gifiac_backend::paths::template_thumbnail_object_key(&template_id),
+            "thumbnail",
+        ),
+        (
+            gifiac_backend::paths::template_filmstrip_object_key(&template_id),
+            "filmstrip",
+        ),
+    ] {
+        test_app
+            .template_assets_storage
+            .download_file(&key, &scratch.path().join(label))
+            .await
+            .unwrap_or_else(|e| panic!("expected template {label} backed up to S3 at {key}: {e}"));
+    }
+
     let first_probe = gifiac_backend::ffmpeg::probe_video(&clip_path).unwrap();
     assert!(
         first_probe.duration_seconds < 2.0,
@@ -1141,6 +1168,20 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     assert!(!clip_path.exists(), "expected the template clip file to be removed");
     assert!(!thumb_path.exists(), "expected the template thumbnail file to be removed");
     assert!(!filmstrip_path.exists(), "expected the template filmstrip file to be removed");
+
+    // ...and its S3 backups go with it — an orphaned backup would just
+    // accumulate forever for a template nobody can see anymore.
+    for key in [
+        gifiac_backend::paths::template_clip_object_key(&template_id),
+        gifiac_backend::paths::template_thumbnail_object_key(&template_id),
+        gifiac_backend::paths::template_filmstrip_object_key(&template_id),
+    ] {
+        let result = test_app
+            .template_assets_storage
+            .download_file(&key, &scratch.path().join("should-not-exist"))
+            .await;
+        assert!(result.is_err(), "expected {key} to have been deleted from S3");
+    }
 }
 
 #[tokio::test]
@@ -1271,6 +1312,16 @@ fn template_asset_paths(test_app: &common::TestApp) -> (std::path::PathBuf, std:
         .expect("expected a template filmstrip file")
         .path();
     (clip, thumb, filmstrip)
+}
+
+/// Recovers the template's own id from its clip filename (`{id}_template.mp4`
+/// — see `paths::template_clip_path`) so a test can derive the S3 object
+/// keys (`paths::template_clip_object_key`/etc.) it should have been
+/// backed up under, without needing a separate DB lookup helper.
+fn template_id_from_clip_path(clip_path: &std::path::Path) -> uuid::Uuid {
+    let file_name = clip_path.file_name().unwrap().to_string_lossy();
+    let id_str = file_name.strip_suffix("_template.mp4").expect("expected a template clip filename");
+    uuid::Uuid::parse_str(id_str).expect("expected the template clip filename to start with a valid UUID")
 }
 
 #[tokio::test]

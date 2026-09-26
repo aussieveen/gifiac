@@ -18,6 +18,11 @@ pub struct AppState {
     /// distinct from `storage`, which is the public R2 bucket finished
     /// GIF/clip outputs go to.
     pub source_storage: Storage,
+    /// The private, versioned bucket a saved template's clip/thumbnail/
+    /// filmstrip are backed up to (SPEC-CLOUD.md §10) — distinct from
+    /// `source_storage`'s hard 7-day expiry, since a template is meant to
+    /// survive indefinitely, not just for the duration of active editing.
+    pub template_assets_storage: Storage,
     pub google_auth: GoogleAuthConfig,
     /// Shared client for the light URL sanity check behind linked GIFs
     /// (SPEC.md §13, see link_check.rs) — reused across requests rather

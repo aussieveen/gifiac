@@ -2,7 +2,9 @@
 
 Provisions SPEC-CLOUD.md §10's target shape: one EC2 instance behind an
 ALB (TLS via ACM), RDS Postgres, a private S3 bucket for raw video
-uploads, SSM Parameter Store for secrets, and a GitHub-OIDC deploy role.
+uploads, a second private, versioned S3 bucket for saved templates'
+clip/thumbnail/filmstrip backups, SSM Parameter Store for secrets, and a
+GitHub-OIDC deploy role.
 
 This is real, billed AWS infrastructure — `terraform apply` is a step
 only you should run, with your own AWS credentials.

@@ -418,6 +418,17 @@ pub async fn get_template_by_id(pool: &PgPool, id: &str) -> Result<Option<Templa
         .map_err(Into::into)
 }
 
+/// Every template, any owner — used only by the one-off
+/// `backfill_template_assets` CLI (SPEC-CLOUD.md §10) to back up whatever
+/// was saved before that S3 upload existed.
+pub async fn list_all_templates(pool: &PgPool) -> Result<Vec<Template>> {
+    let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
 const USER_COLUMNS: &str = "id, handle, slug, role, created_at, email, avatar_url, display_name, disabled";
 
 /// SPEC-CLOUD.md §2: identity lookup is the sole way a login resolves to a

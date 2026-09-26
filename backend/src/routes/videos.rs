@@ -435,6 +435,28 @@ pub(crate) async fn save_template(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to generate template filmstrip: {e}")))?;
     let filmstrip_ms = stage_started.elapsed().as_millis() as u64;
 
+    // SPEC-CLOUD.md §10: a template is meant to survive indefinitely, not
+    // just for the EC2 instance's own lifetime — back the three files up
+    // to the private, versioned template-assets bucket so an instance
+    // replacement doesn't lose them for good (see TemplateAssetsConfig's
+    // doc comment). Local files stay exactly as they are; nothing reads
+    // them back from S3 (yet — no route serves a template's own assets
+    // today), this is purely the durable copy the original spec called
+    // for.
+    let stage_started = std::time::Instant::now();
+    for (path, key, content_type) in [
+        (&clip_path, paths::template_clip_object_key(&template_id), "video/mp4"),
+        (&thumb_path, paths::template_thumbnail_object_key(&template_id), "image/jpeg"),
+        (&filmstrip_path, paths::template_filmstrip_object_key(&template_id), "image/jpeg"),
+    ] {
+        state
+            .template_assets_storage
+            .upload_file(&key, path, content_type)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to back up template asset {key}: {e}")))?;
+    }
+    let s3_backup_ms = stage_started.elapsed().as_millis() as u64;
+
     let stage_started = std::time::Instant::now();
     db::upsert_template(
         &state.pool,
@@ -454,8 +476,9 @@ pub(crate) async fn save_template(
         trim_ms,
         thumbnail_ms,
         filmstrip_ms,
+        s3_backup_ms,
         db_upsert_ms,
-        total_ms = ensure_on_disk_ms + trim_ms + thumbnail_ms + filmstrip_ms + db_upsert_ms,
+        total_ms = ensure_on_disk_ms + trim_ms + thumbnail_ms + filmstrip_ms + s3_backup_ms + db_upsert_ms,
         "save_template stage timings"
     );
 
@@ -477,17 +500,37 @@ pub async fn delete_template(
     }
 
     if let Some(template_id) = template_id.and_then(|t| Uuid::parse_str(&t).ok()) {
-        let clip_path = paths::template_clip_path(&state.config.video_dir, &template_id);
-        let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_id);
-        let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_id);
-        for path in [clip_path, thumb_path, filmstrip_path] {
-            if let Err(err) = tokio::fs::remove_file(&path).await
-                && err.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(path = %path.display(), error = %err, "failed to remove file for deleted template");
-            }
-        }
+        delete_template_assets(&state, &template_id).await;
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes a template's local files and its S3 backups (SPEC-CLOUD.md
+/// §10) by its own id — shared by the route above (video-id-scoped, for
+/// the owner's own video-nested flow) and `routes::admin::delete_template`
+/// (id-scoped, no owner filter). Best-effort throughout: a missing local
+/// file or S3 object is already the desired end state, not a failure, so
+/// this only ever logs, never returns an error.
+pub(crate) async fn delete_template_assets(state: &AppState, template_id: &Uuid) {
+    let clip_path = paths::template_clip_path(&state.config.video_dir, template_id);
+    let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, template_id);
+    let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, template_id);
+    for path in [clip_path, thumb_path, filmstrip_path] {
+        if let Err(err) = tokio::fs::remove_file(&path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), error = %err, "failed to remove file for deleted template");
+        }
+    }
+
+    for key in [
+        paths::template_clip_object_key(template_id),
+        paths::template_thumbnail_object_key(template_id),
+        paths::template_filmstrip_object_key(template_id),
+    ] {
+        if let Err(err) = state.template_assets_storage.delete_object(&key).await {
+            tracing::warn!(key, error = %err, "failed to remove S3 backup for deleted template");
+        }
+    }
 }

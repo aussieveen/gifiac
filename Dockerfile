@@ -76,6 +76,9 @@ COPY --from=builder /app/backend/target/release/migrate_archive ./migrate_archiv
 # pipeline existed — same "share the image, run via docker compose exec"
 # treatment as migrate_archive above.
 COPY --from=builder /app/backend/target/release/backfill_thumbnails ./backfill_thumbnails
+# One-off backfill (SPEC-CLOUD.md §10) for templates saved before the
+# template-assets S3 bucket existed — same treatment as the two above.
+COPY --from=builder /app/backend/target/release/backfill_template_assets ./backfill_template_assets
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 EXPOSE 8080

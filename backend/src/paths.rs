@@ -64,6 +64,22 @@ pub fn thumbnail_object_key(id: &Uuid) -> String {
     format!("thumbnails/{id}.jpg")
 }
 
+/// R2 object keys for a saved template's backup in the private,
+/// versioned template-assets bucket (SPEC-CLOUD.md §10) — derived from
+/// the template's own id, same convention as its local-disk path
+/// (`template_clip_path`/etc.) and as `gif_object_key`/etc. above.
+pub fn template_clip_object_key(template_id: &Uuid) -> String {
+    format!("templates/{template_id}.mp4")
+}
+
+pub fn template_thumbnail_object_key(template_id: &Uuid) -> String {
+    format!("templates/{template_id}_thumb.jpg")
+}
+
+pub fn template_filmstrip_object_key(template_id: &Uuid) -> String {
+    format!("templates/{template_id}_filmstrip.jpg")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +156,22 @@ mod tests {
         assert_eq!(
             thumbnail_object_key(&id()),
             "thumbnails/11111111-1111-4111-8111-111111111111.jpg"
+        );
+    }
+
+    #[test]
+    fn template_asset_object_keys_share_the_template_id() {
+        assert_eq!(
+            template_clip_object_key(&id()),
+            "templates/11111111-1111-4111-8111-111111111111.mp4"
+        );
+        assert_eq!(
+            template_thumbnail_object_key(&id()),
+            "templates/11111111-1111-4111-8111-111111111111_thumb.jpg"
+        );
+        assert_eq!(
+            template_filmstrip_object_key(&id()),
+            "templates/11111111-1111-4111-8111-111111111111_filmstrip.jpg"
         );
     }
 

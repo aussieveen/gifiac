@@ -63,6 +63,37 @@ impl SourceStorageConfig {
     }
 }
 
+/// Credentials/settings for the private template-assets S3 bucket
+/// (SPEC-CLOUD.md §10 — "persistent class", versioned) — a saved
+/// template's clip/thumbnail/filmstrip (`routes::videos::save_template`),
+/// durably backed up here instead of only ever living on the EC2
+/// instance's own disk (which an instance replacement would otherwise
+/// lose for good — there's no 7-day-window recovery path for these the
+/// way there is for the ephemeral raw-video bucket, since a template is
+/// meant to survive indefinitely). Same shape as `SourceStorageConfig` —
+/// a separate type rather than reusing it, since that one's name/doc
+/// comments are specific to the source-video bucket throughout this file.
+#[derive(Debug, Clone)]
+pub struct TemplateAssetsConfig {
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub bucket_name: String,
+    pub region: String,
+    pub endpoint_url_override: Option<String>,
+}
+
+impl TemplateAssetsConfig {
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            access_key_id: non_empty_env("TEMPLATE_ASSETS_S3_ACCESS_KEY_ID"),
+            secret_access_key: non_empty_env("TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY"),
+            bucket_name: require_env("TEMPLATE_ASSETS_S3_BUCKET")?,
+            region: require_env("TEMPLATE_ASSETS_S3_REGION")?,
+            endpoint_url_override: non_empty_env("TEMPLATE_ASSETS_S3_ENDPOINT_URL"),
+        })
+    }
+}
+
 /// Like `std::env::var(key).ok()`, but treats an empty string as absent
 /// too — production's docker-compose `"${VAR}"` substitution sets the
 /// container env var to `""` (not unset) when `.env` omits it, which is
@@ -144,6 +175,30 @@ impl Storage {
             // MinIO (local dev/test) — real S3 uses its normal
             // DNS-virtual-hosted addressing (the SDK's own default), so
             // this branch never applies in production.
+            builder = builder.endpoint_url(endpoint_url).force_path_style(true);
+        }
+
+        Self {
+            client: Client::from_conf(builder.build()),
+            bucket: config.bucket_name.clone(),
+            public_base_url: None,
+        }
+    }
+
+    /// Identical shape/behavior to `new_for_source_bucket` — see its own
+    /// doc comment — just for the template-assets bucket instead. Kept as
+    /// its own method (rather than a shared generic helper) since the two
+    /// configs are separate types with no shared trait, matching this
+    /// file's existing R2Config/SourceStorageConfig split.
+    pub async fn new_for_template_assets_bucket(config: &TemplateAssetsConfig) -> Self {
+        let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
+        if let (Some(access_key_id), Some(secret_access_key)) = (&config.access_key_id, &config.secret_access_key) {
+            loader = loader.credentials_provider(Credentials::new(access_key_id, secret_access_key, None, None, "gifiac"));
+        }
+        let sdk_config = loader.load().await;
+
+        let mut builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if let Some(endpoint_url) = &config.endpoint_url_override {
             builder = builder.endpoint_url(endpoint_url).force_path_style(true);
         }
 

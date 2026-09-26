@@ -387,6 +387,29 @@ async fn admin_can_list_and_delete_another_users_template() {
     assert_eq!(templates.len(), 1);
     assert_eq!(templates[0]["id"], template_id);
 
+    // SPEC-CLOUD.md §10: put_test_template's PUT already backed the
+    // template's clip/thumbnail/filmstrip up to S3 — confirm they're
+    // there before the admin delete below removes them.
+    let template_uuid = uuid::Uuid::parse_str(&template_id).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    for (key, label) in [
+        (gifiac_backend::paths::template_clip_object_key(&template_uuid), "clip"),
+        (
+            gifiac_backend::paths::template_thumbnail_object_key(&template_uuid),
+            "thumbnail",
+        ),
+        (
+            gifiac_backend::paths::template_filmstrip_object_key(&template_uuid),
+            "filmstrip",
+        ),
+    ] {
+        test_app
+            .template_assets_storage
+            .download_file(&key, &scratch.path().join(label))
+            .await
+            .unwrap_or_else(|e| panic!("expected template {label} backed up to S3 at {key}: {e}"));
+    }
+
     let delete_response = test_app
         .app
         .clone()
@@ -408,6 +431,18 @@ async fn admin_can_list_and_delete_another_users_template() {
         .await
         .unwrap();
     assert!(after_delete.is_none());
+
+    for key in [
+        gifiac_backend::paths::template_clip_object_key(&template_uuid),
+        gifiac_backend::paths::template_thumbnail_object_key(&template_uuid),
+        gifiac_backend::paths::template_filmstrip_object_key(&template_uuid),
+    ] {
+        let result = test_app
+            .template_assets_storage
+            .download_file(&key, &scratch.path().join("should-not-exist"))
+            .await;
+        assert!(result.is_err(), "expected {key} to have been deleted from S3 by the admin delete");
+    }
 }
 
 #[tokio::test]

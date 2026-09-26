@@ -133,16 +133,7 @@ pub async fn delete_template(
     }
 
     if let Ok(template_uuid) = Uuid::parse_str(&id) {
-        let clip_path = paths::template_clip_path(&state.config.video_dir, &template_uuid);
-        let thumb_path = paths::template_thumbnail_path(&state.config.video_dir, &template_uuid);
-        let filmstrip_path = paths::template_filmstrip_path(&state.config.video_dir, &template_uuid);
-        for path in [clip_path, thumb_path, filmstrip_path] {
-            if let Err(err) = tokio::fs::remove_file(&path).await
-                && err.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(path = %path.display(), error = %err, "failed to remove file for admin-deleted template");
-            }
-        }
+        crate::routes::videos::delete_template_assets(&state, &template_uuid).await;
     }
 
     Ok(StatusCode::NO_CONTENT)

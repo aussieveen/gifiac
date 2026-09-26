@@ -7,7 +7,7 @@ use gifiac_backend::auth::{GoogleAuthConfig, SESSION_COOKIE_NAME};
 use gifiac_backend::config::Config;
 use gifiac_backend::db;
 use gifiac_backend::state::AppState;
-use gifiac_backend::storage::{SourceStorageConfig, Storage};
+use gifiac_backend::storage::{SourceStorageConfig, Storage, TemplateAssetsConfig};
 use sqlx::PgPool;
 use tempfile::TempDir;
 
@@ -58,6 +58,21 @@ pub async fn test_source_storage() -> Storage {
     .await
 }
 
+/// Same MinIO instance again, standing in for the private template-assets
+/// S3 bucket (SPEC-CLOUD.md §10) — see `test_source_storage`'s own doc
+/// comment, same reasoning, just a separate bucket.
+#[allow(dead_code)]
+pub async fn test_template_assets_storage() -> Storage {
+    Storage::new_for_template_assets_bucket(&TemplateAssetsConfig {
+        access_key_id: Some("gifiac".to_string()),
+        secret_access_key: Some("gifiac-test-secret".to_string()),
+        bucket_name: "gifiac-template-assets-test".to_string(),
+        region: "us-east-1".to_string(),
+        endpoint_url_override: Some("http://localhost:19000".to_string()),
+    })
+    .await
+}
+
 /// Spins up the real router against a scratch video dir + throwaway sqlite
 /// file + the MinIO test bucket, so tests exercise actual FFmpeg
 /// probing/encoding and real object-storage uploads, not mocks.
@@ -71,6 +86,7 @@ pub struct TestApp {
     pub video_dir: PathBuf,
     pub storage: Storage,
     pub source_storage: Storage,
+    pub template_assets_storage: Storage,
     /// Kept alongside the copy moved into `AppState` so `login_as` can
     /// write `users`/`sessions` rows directly — `PgPool` is a cheap
     /// `Arc`-backed handle, so cloning it doesn't open a second pool.
@@ -105,12 +121,14 @@ pub async fn spawn_app() -> TestApp {
 
     let storage = test_storage();
     let source_storage = test_source_storage().await;
+    let template_assets_storage = test_template_assets_storage().await;
     let http_client = gifiac_backend::link_check::build_client().unwrap();
     let state = Arc::new(AppState {
         pool: pool.clone(),
         config,
         storage: storage.clone(),
         source_storage: source_storage.clone(),
+        template_assets_storage: template_assets_storage.clone(),
         http_client,
         google_auth: test_google_auth(),
         export_jobs: Default::default(),
@@ -122,6 +140,7 @@ pub async fn spawn_app() -> TestApp {
         video_dir,
         storage,
         source_storage,
+        template_assets_storage,
         pool,
         owner_cookie,
         _tempdir: tempdir,

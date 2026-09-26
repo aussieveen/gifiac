@@ -28,9 +28,11 @@ resource "aws_instance" "app" {
   # through the GitHub Actions deploy job (SSM send-command), not through
   # user_data again. Without this, the AWS provider's default behavior
   # forces a full instance replacement on any user_data diff — silently
-  # destroying the instance's root volume, and with it every locally-
-  # stored template clip/thumbnail (SPEC-CLOUD.md §4 assets, which only
-  # ever live on local disk, never S3 — see M8's scope-cut notes).
+  # destroying the instance's root volume, and with it whatever hasn't
+  # been backed up yet: template clips/thumbnails now do back up to S3
+  # (aws_s3_bucket.template_assets, s3.tf), but the local disk cache of a
+  # recently re-fetched raw source video, and any not-yet-clipped
+  # in-progress edit, would still only exist there.
   user_data_replace_on_change = false
 
   root_block_device {
@@ -40,24 +42,25 @@ resource "aws_instance" "app" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    docker_compose_yml      = file("${path.module}/../docker-compose.yml")
-    deploy_sh               = file("${path.module}/files/deploy.sh")
-    rds_endpoint            = aws_db_instance.main.endpoint
-    r2_account_id           = var.r2_account_id
-    r2_bucket_name          = var.r2_bucket_name
-    r2_public_base_url      = var.r2_public_base_url
-    google_client_id        = var.google_client_id
-    app_base_url            = "https://${var.domain_name}"
-    source_videos_s3_bucket = aws_s3_bucket.source_videos.bucket
-    source_videos_s3_region = var.aws_region
+    docker_compose_yml        = file("${path.module}/../docker-compose.yml")
+    deploy_sh                 = file("${path.module}/files/deploy.sh")
+    rds_endpoint              = aws_db_instance.main.endpoint
+    r2_account_id             = var.r2_account_id
+    r2_bucket_name            = var.r2_bucket_name
+    r2_public_base_url        = var.r2_public_base_url
+    google_client_id          = var.google_client_id
+    app_base_url              = "https://${var.domain_name}"
+    source_videos_s3_bucket   = aws_s3_bucket.source_videos.bucket
+    source_videos_s3_region   = var.aws_region
+    template_assets_s3_bucket = aws_s3_bucket.template_assets.bucket
+    template_assets_s3_region = var.aws_region
   })
 
   # `data.aws_ami.al2023` re-resolves to whatever AMI is newest at plan
   # time, but `ami` is a ForceNew attribute on aws_instance — so an
   # ordinary `terraform apply` for an unrelated change (a new variable, a
   # security group tweak) can silently pick up a newer AMI and replace the
-  # instance, destroying the root volume and with it every locally-stored
-  # template clip/thumbnail/filmstrip, exactly like the user_data case
+  # instance, destroying the root volume, exactly like the user_data case
   # above but without even a code diff to explain it. Once created, this
   # instance keeps its AMI; bump it deliberately (change the filter, or
   # `terraform apply -replace=aws_instance.app`) when you actually want to
