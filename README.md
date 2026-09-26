@@ -116,6 +116,9 @@ Run the backend and frontend as two separate dev processes; Vite proxies
   (See the [`Dockerfile`](Dockerfile) for the exact package list used in
   CI/production — other package managers will have equivalently-named
   `-dev`/`-devel` packages.)
+- `webpmux` (a linked gif's thumbnail pipeline, `thumbnails.rs`/
+  `ffmpeg/webp.rs`) — from the `webp` package on Debian/Ubuntu
+  (`libwebp` on Arch), alongside the `ffmpeg` binary itself.
 
 **Backend** (from `backend/`):
 

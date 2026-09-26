@@ -52,6 +52,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
     ca-certificates \
+    # `webpmux` (thumbnails.rs / ffmpeg/webp.rs) — this image's ffmpeg
+    # (5.1.9, Debian bookworm) can't decode animated WebP at all, confirmed
+    # directly; webpmux (a separate libwebp-based tool, not part of
+    # ffmpeg) extracts a single frame first so ffmpeg never has to.
+    webp \
     && rm -rf /var/lib/apt/lists/*
 
 # "Anton" (see backend/src/ass.rs's font-provisioning notes) — the same

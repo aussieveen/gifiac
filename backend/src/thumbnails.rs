@@ -60,15 +60,52 @@ async fn try_generate(storage: &Storage, http_client: &reqwest::Client, gif_id: 
         .await
         .context("writing downloaded gif to disk")?;
 
-    let probe_path = source_path.clone();
-    let probe = tokio::task::spawn_blocking(move || ffmpeg::probe_video(&probe_path))
-        .await
-        .context("probe task panicked")?
-        .context("probing downloaded gif")?;
+    // Animated WebP never reaches ffmpeg directly — the version this app
+    // actually ships (see ffmpeg/webp.rs's doc comment) can't decode it at
+    // all, regardless of seeking. `webpmux` (a separate tool, not part of
+    // ffmpeg) extracts a single frame first; only that clean, unwrapped
+    // frame goes to ffmpeg afterward, same as any other static image. A
+    // *static* (single-frame) WebP never had ANIM/ANMF chunks to begin
+    // with — ffmpeg's ordinary decoder already handles it directly, and
+    // `webpmux -get frame` actually errors if asked to extract a "frame"
+    // from one (confirmed: `WEBP_MUX_NOT_FOUND`), so that case skips
+    // straight to the plain-decode path below instead.
+    let webp_frame_count = if ffmpeg::looks_like_webp(&bytes) {
+        Some(
+            ffmpeg::webp_frame_count(&source_path)
+                .await
+                .context("reading webp frame count")?,
+        )
+    } else {
+        None
+    };
 
-    ffmpeg::generate_midpoint_thumbnail(&source_path, &thumb_path, probe.duration_seconds)
-        .await
-        .context("extracting thumbnail frame")?;
+    if let Some(frame_count) = webp_frame_count.filter(|&n| n > 1) {
+        let frame_path = tmp_dir.path().join("frame.webp");
+        ffmpeg::extract_webp_frame(&source_path, frame_count / 2 + 1, &frame_path)
+            .await
+            .context("extracting webp frame")?;
+        ffmpeg::generate_midpoint_thumbnail(&frame_path, &thumb_path, 0.0)
+            .await
+            .context("decoding extracted webp frame")?;
+    } else if webp_frame_count.is_some() {
+        // A static WebP — no duration/seeking is meaningful for a still
+        // image, and this is also exactly the "unknown duration" case
+        // `generate_midpoint_thumbnail` already handles by skipping `-ss`.
+        ffmpeg::generate_midpoint_thumbnail(&source_path, &thumb_path, 0.0)
+            .await
+            .context("decoding static webp")?;
+    } else {
+        let probe_path = source_path.clone();
+        let probe = tokio::task::spawn_blocking(move || ffmpeg::probe_video(&probe_path))
+            .await
+            .context("probe task panicked")?
+            .context("probing downloaded gif")?;
+
+        ffmpeg::generate_midpoint_thumbnail(&source_path, &thumb_path, probe.duration_seconds)
+            .await
+            .context("extracting thumbnail frame")?;
+    }
 
     storage
         .upload_file(&paths::thumbnail_object_key(&uuid), &thumb_path, "image/jpeg")
