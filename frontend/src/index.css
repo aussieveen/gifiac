@@ -2196,7 +2196,12 @@ button {
   outline-color: var(--accent);
 }
 
-.archive-thumb img {
+/* `video` alongside `img`: GifThumbnail (the "disable gif autoplay"
+   preference) renders a gif with mp4/webm as a `<video>` instead — it
+   needs the exact same fit/sizing as the plain `<img>` case, or it
+   renders at its unconstrained natural size and looks zoomed/cropped. */
+.archive-thumb img,
+.archive-thumb video {
   width: 100%;
   height: 100%;
   /* Same reasoning as .archive-panel-preview: `cover` crops any GIF that
