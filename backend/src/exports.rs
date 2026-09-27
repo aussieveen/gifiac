@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 use crate::ass::generate_ass;
 use crate::ffmpeg::export as ffmpeg_export;
-use crate::models::{ExportRequest, Gif, NewGif, TemplatePayload, Video};
+use crate::models::{ExportRequest, Gif, NewGif, Template, TemplateExportRequest, TemplatePayload, Video};
 use crate::state::AppState;
+use crate::template_assets::{self, TemplateAssetKind};
 use crate::{db, paths, source_video};
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,6 +111,11 @@ async fn run_pipeline(
         height: Some(result.height),
         external_url: None,
         user_id: owner_id.to_string(),
+        // Flow A (editing a video directly) never stamps lineage, even
+        // when `save_as_template` is checked below — lineage only ever
+        // points at a template *used* to start a gif (flow B), never one
+        // saved alongside an unrelated export.
+        template_id: None,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 
@@ -117,7 +123,14 @@ async fn run_pipeline(
     // same request, before the cleanup below, or that cleanup would
     // delete the video out from under a separate follow-up save (see
     // `ExportRequest::save_as_template`'s doc comment).
-    if request.save_as_template {
+    // `template_name` is validated non-empty at the route layer
+    // (`routes::exports::create_export`) before this job is even spawned —
+    // this is a defensive fallback, not the primary check, so a missing
+    // name here just skips the save rather than failing an export whose
+    // `gifs` row has already been created above.
+    if request.save_as_template
+        && let Some(template_name) = request.template_name.as_deref().filter(|n| !n.is_empty())
+    {
         let template_payload = TemplatePayload {
             captions: request.captions.clone(),
             gif_range_start: request.gif_range_start,
@@ -125,9 +138,17 @@ async fn run_pipeline(
             width: output_width,
             height: output_height,
         };
-        if let Err(err) =
-            crate::routes::videos::save_template(state, &video_uuid, &video.id, &video.extension, owner_id, &template_payload)
-                .await
+        if let Err(err) = crate::routes::videos::save_template(
+            state,
+            &video_uuid,
+            &video.id,
+            &video.extension,
+            owner_id,
+            template_name,
+            request.template_is_public,
+            &template_payload,
+        )
+        .await
         {
             tracing::warn!(video_id = %video.id, error = ?err, "failed to save template requested alongside export");
         }
@@ -150,6 +171,85 @@ async fn run_pipeline(
         tracing::warn!(video_id = %video.id, error = ?err, "failed to clean up source video after export");
     }
 
+    Ok(gif)
+}
+
+/// Flow B's counterpart to `run_export_job` — exporting from a template
+/// (own or someone else's public one) rather than a video directly. Never
+/// returns an `Err` itself, same broadcast-only-outcome contract.
+pub async fn run_template_export_job(
+    state: &AppState,
+    export_id: Uuid,
+    template: Template,
+    request: TemplateExportRequest,
+    owner_id: &str,
+    events: broadcast::Sender<ExportEvent>,
+) {
+    let send = |event: ExportEvent| {
+        let _ = events.send(event);
+    };
+
+    match run_template_pipeline(state, export_id, &template, &request, owner_id, &send).await {
+        Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
+        Err(err) => {
+            tracing::error!(export_id = %export_id, error = ?err, "template export job failed");
+            send(ExportEvent::Failed {
+                message: err.to_string(),
+            });
+        }
+    }
+}
+
+/// The server-side enforcement point for the public-templates design's
+/// "trim range and output dimensions are always locked" rule: every value
+/// that matters here — `clip_duration`, `width`, `height` — comes from
+/// `template.payload_json`, never from `request` (`TemplateExportRequest`
+/// has no such fields at all, so there is nothing for a client to
+/// smuggle). The clip itself is already scaled to those exact dimensions
+/// and starts at t=0 (`routes::videos::save_template`'s `ffmpeg::trim_video`
+/// call), so unlike `run_pipeline` there's no separate `scaled_dimensions`
+/// step and the export always spans the clip's full `[0, duration]`.
+async fn run_template_pipeline(
+    state: &AppState,
+    export_id: Uuid,
+    template: &Template,
+    request: &TemplateExportRequest,
+    owner_id: &str,
+    send: &impl Fn(ExportEvent),
+) -> anyhow::Result<Gif> {
+    let payload: TemplatePayload = serde_json::from_str(&template.payload_json)?;
+    let clip_duration = payload.gif_range_end - payload.gif_range_start;
+    let template_uuid = Uuid::parse_str(&template.id)?;
+
+    let media_path = template_assets::ensure_on_disk(state, &template_uuid, TemplateAssetKind::Clip).await?;
+
+    let ass = generate_ass(&request.captions, 0.0, clip_duration, payload.width, payload.height);
+
+    let result = transcode_and_upload(state, export_id, &media_path, &ass, 0.0, clip_duration, send).await?;
+
+    let caption_text = request
+        .captions
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let new_gif = NewGif {
+        id: export_id.to_string(),
+        // Flow B never has an associated `videos` row — it may not even
+        // be the caller's own source footage.
+        video_id: None,
+        name: request.name.clone(),
+        caption_text,
+        captions_json: Some(serde_json::to_string(&request.captions)?),
+        gif_range_start: Some(0.0),
+        gif_range_end: Some(clip_duration),
+        width: Some(result.width),
+        height: Some(result.height),
+        external_url: None,
+        user_id: owner_id.to_string(),
+        template_id: Some(template.id.clone()),
+    };
+    let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
     Ok(gif)
 }
 

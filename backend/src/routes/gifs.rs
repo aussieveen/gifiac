@@ -46,9 +46,17 @@ pub struct GifResponse {
     /// — the caller supplies it rather than `with_urls` computing it, so
     /// every call site stays explicit about whose favourite state this is.
     is_favourited: bool,
+    /// Per-viewer, like `is_favourited`: whether "Remix this GIF" should
+    /// show. `true` only when `gif.template_id` is set and that template
+    /// is still accessible to the current viewer (public, or owned by
+    /// them) — computed server-side (`db::is_template_remixable`/
+    /// `db::remixable_template_ids`) so it disappears cleanly the moment
+    /// the underlying template is deleted or made private, rather than
+    /// relying on the frontend to notice.
+    template_remixable: bool,
 }
 
-pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Result<GifResponse, AppError> {
+pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool, template_remixable: bool) -> Result<GifResponse, AppError> {
     if let Some(external_url) = gif.external_url.clone() {
         let thumbnail_url = if gif.thumbnail_status.as_deref() == Some("ready") {
             let uuid = Uuid::parse_str(&gif.id)?;
@@ -62,6 +70,7 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Res
             webm_url: None,
             thumbnail_url,
             is_favourited,
+            template_remixable,
             gif,
         });
     }
@@ -72,6 +81,7 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Res
         webm_url: Some(storage.public_url(&paths::webm_object_key(&uuid))),
         thumbnail_url: None,
         is_favourited,
+        template_remixable,
         gif,
     })
 }
@@ -82,7 +92,8 @@ pub(crate) fn with_urls(gif: Gif, storage: &Storage, is_favourited: bool) -> Res
 /// which just toggled it and know the result without a query).
 async fn viewer_response(state: &AppState, viewer_id: &str, gif: Gif) -> Result<GifResponse, AppError> {
     let is_favourited = db::is_favourited(&state.pool, viewer_id, &gif.id).await?;
-    with_urls(gif, &state.storage, is_favourited)
+    let template_remixable = db::is_template_remixable(&state.pool, gif.template_id.as_deref(), viewer_id).await?;
+    with_urls(gif, &state.storage, is_favourited, template_remixable)
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,11 +113,14 @@ pub async fn list_gifs(
 ) -> Result<Json<Vec<GifResponse>>, AppError> {
     let gifs = db::list_gifs(&state.pool, &user.id, query.q.as_deref()).await?;
     let favourited = db::list_favourite_gif_ids(&state.pool, &user.id).await?;
+    let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
+    let remixable = db::remixable_template_ids(&state.pool, &template_ids, Some(&user.id)).await?;
     let responses = gifs
         .into_iter()
         .map(|gif| {
             let is_favourited = favourited.contains(&gif.id);
-            with_urls(gif, &state.storage, is_favourited)
+            let template_remixable = gif.template_id.as_deref().is_some_and(|id| remixable.contains(id));
+            with_urls(gif, &state.storage, is_favourited, template_remixable)
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(responses))
@@ -200,7 +214,8 @@ pub async fn favourite_gif(
         .await?
         .ok_or(AppError::NotFound)?;
     db::add_favourite(&state.pool, &user.id, &id, &Utc::now().to_rfc3339()).await?;
-    Ok(Json(with_urls(gif, &state.storage, true)?))
+    let template_remixable = db::is_template_remixable(&state.pool, gif.template_id.as_deref(), &user.id).await?;
+    Ok(Json(with_urls(gif, &state.storage, true, template_remixable)?))
 }
 
 /// `DELETE /api/gifs/{id}/favourite` (SPEC-CLOUD.md §14) — idempotent
@@ -225,7 +240,8 @@ pub async fn unfavourite_gif(
             .ok_or(AppError::NotFound)?
     };
     db::remove_favourite(&state.pool, &user.id, &id).await?;
-    Ok(Json(with_urls(gif, &state.storage, false)?))
+    let template_remixable = db::is_template_remixable(&state.pool, gif.template_id.as_deref(), &user.id).await?;
+    Ok(Json(with_urls(gif, &state.storage, false, template_remixable)?))
 }
 
 /// `GET /api/favourites` (SPEC-CLOUD.md §14) — the caller's saved gifs, in
@@ -236,15 +252,19 @@ pub async fn list_favourites(
     CurrentUser(user): CurrentUser,
 ) -> Result<Json<Vec<LibraryEntry>>, AppError> {
     let gifs = db::list_favourite_gifs(&state.pool, &user.id).await?;
+    let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
+    let remixable = db::remixable_template_ids(&state.pool, &template_ids, Some(&user.id)).await?;
     let entries = gifs
         .into_iter()
         .map(|public_gif| {
             let owner_handle = public_gif.owner_handle.clone();
             let owner_slug = public_gif.owner_slug.clone();
+            let template_remixable = public_gif.template_id.as_deref().is_some_and(|id| remixable.contains(id));
             // Every row here is, by definition, one of the caller's own
             // favourites — no lookup needed, unlike list_library's mixed
             // viewer-relative state.
-            with_urls(public_gif.into(), &state.storage, true).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
+            with_urls(public_gif.into(), &state.storage, true, template_remixable)
+                .map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(entries))
@@ -275,13 +295,17 @@ pub async fn list_library(
     let viewer_id = viewer.as_ref().map(|CurrentUser(user)| user.id.as_str());
     let favourited = db::favourited_ids_for_viewer(&state.pool, viewer_id).await?;
     let gifs = db::list_public_gifs(&state.pool, query.q.as_deref(), query.sort).await?;
+    let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
+    let remixable = db::remixable_template_ids(&state.pool, &template_ids, viewer_id).await?;
     let entries = gifs
         .into_iter()
         .map(|public_gif| {
             let owner_handle = public_gif.owner_handle.clone();
             let owner_slug = public_gif.owner_slug.clone();
             let is_favourited = favourited.contains(&public_gif.id);
-            with_urls(public_gif.into(), &state.storage, is_favourited).map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
+            let template_remixable = public_gif.template_id.as_deref().is_some_and(|id| remixable.contains(id));
+            with_urls(public_gif.into(), &state.storage, is_favourited, template_remixable)
+                .map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(entries))
@@ -358,6 +382,7 @@ pub async fn link_gif(
         height: None,
         external_url: Some(url),
         user_id: user.id,
+        template_id: None,
     };
     let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 
@@ -374,7 +399,7 @@ pub async fn link_gif(
         }
     });
 
-    Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage, false)?)))
+    Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage, false, false)?)))
 }
 
 /// Bulk import (SPEC.md §7): each multipart field is one file, run through
@@ -468,9 +493,10 @@ pub async fn import_gifs(
             height: Some(result.height),
             external_url: None,
             user_id: user.id.clone(),
+            template_id: None,
         };
         let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
-        created.push(with_urls(gif, &state.storage, false)?);
+        created.push(with_urls(gif, &state.storage, false, false)?);
     }
 
     if created.is_empty() {

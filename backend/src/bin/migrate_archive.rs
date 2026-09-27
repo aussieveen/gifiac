@@ -292,6 +292,11 @@ async fn migrate_template(
         &template_id.to_string(),
         &template.video_id,
         &args.user_id,
+        // The old archive predates named templates — same placeholder
+        // convention `0016_public_templates.sql` backfills existing
+        // production rows with.
+        "Untitled template",
+        false,
         &payload,
         &template.saved_at,
     )
@@ -490,6 +495,7 @@ async fn run() -> Result<bool> {
                 height: gif.height,
                 external_url: gif.external_url.clone(),
                 user_id: args.user_id.clone(),
+                template_id: None,
             },
             &gif.created_at,
         )

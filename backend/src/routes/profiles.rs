@@ -61,8 +61,10 @@ pub struct ProfileResponse {
 }
 
 /// `GET /api/profiles/{slug}` — public, no auth required. Only a user's
-/// public gifs show here (SPEC-CLOUD.md §5) — templates join once
-/// they're servable independently of video ownership (M5d).
+/// public gifs show here (SPEC-CLOUD.md §5) — templates themselves are
+/// still never listed on a profile (public templates pass 2 deliberately
+/// has no attribution/profile surface for templates), but a gif's own
+/// "Remix this GIF" affordance (via `template_remixable`) works here too.
 ///
 /// Auth-optional (SPEC-CLOUD.md §14), same as `list_library`: a logged-out
 /// visitor still sees the profile, just with `is_favourited: false` on
@@ -79,12 +81,15 @@ pub async fn get_profile(
     let viewer_id = viewer.as_ref().map(|CurrentUser(viewer)| viewer.id.as_str());
     let favourited = db::favourited_ids_for_viewer(&state.pool, viewer_id).await?;
 
-    let gifs = db::list_public_gifs_by_user(&state.pool, &user.id)
-        .await?
+    let profile_gifs = db::list_public_gifs_by_user(&state.pool, &user.id).await?;
+    let template_ids: Vec<String> = profile_gifs.iter().filter_map(|g| g.template_id.clone()).collect();
+    let remixable = db::remixable_template_ids(&state.pool, &template_ids, viewer_id).await?;
+    let gifs = profile_gifs
         .into_iter()
         .map(|gif| {
             let is_favourited = favourited.contains(&gif.id);
-            with_urls(gif, &state.storage, is_favourited)
+            let template_remixable = gif.template_id.as_deref().is_some_and(|id| remixable.contains(id));
+            with_urls(gif, &state.storage, is_favourited, template_remixable)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

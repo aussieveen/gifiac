@@ -14,6 +14,8 @@ async fn put_test_template(test_app: &common::TestApp) -> String {
     let video = upload_test_video(test_app).await;
     let video_id = video["id"].as_str().unwrap();
     let payload = json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 1.0,

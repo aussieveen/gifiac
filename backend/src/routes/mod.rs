@@ -4,6 +4,7 @@ mod exports;
 pub(crate) mod gifs;
 mod preferences;
 mod profiles;
+mod templates;
 pub(crate) mod videos;
 
 use std::sync::Arc;
@@ -45,6 +46,17 @@ pub fn api_router() -> Router<Arc<AppState>> {
         )
         .route("/exports", post(exports::create_export))
         .route("/exports/{id}/progress", get(exports::export_progress))
+        .route("/templates/mine", get(templates::list_mine))
+        .route("/templates/others", get(templates::list_others))
+        .route(
+            "/templates/{id}",
+            get(templates::get_one).patch(templates::patch_one).delete(templates::delete_one),
+        )
+        .route("/templates/{id}/clip", get(templates::get_clip))
+        .route("/templates/{id}/thumbnail", get(templates::get_thumbnail))
+        .route("/templates/{id}/filmstrip.jpg", get(templates::get_filmstrip_image))
+        .route("/templates/{id}/meta", get(templates::get_filmstrip_meta))
+        .route("/templates/{id}/exports", post(exports::create_template_export))
         .route("/gifs", get(gifs::list_gifs))
         .route("/gifs/import", post(gifs::import_gifs))
         .route("/gifs/link", post(gifs::link_gif))

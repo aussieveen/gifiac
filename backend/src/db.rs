@@ -7,11 +7,11 @@ use uuid::Uuid;
 use crate::handle;
 use crate::models::{
     AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload,
-    UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
+    TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
-const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count, thumbnail_status";
+const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, is_one_off, is_public, use_count, thumbnail_status, template_id";
 /// The columns a fresh insert actually supplies — `is_one_off` is
 /// deliberately excluded: every newly created GIF (export, import, or
 /// link) starts out reusable, relying on the schema's `DEFAULT false`
@@ -20,8 +20,8 @@ const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_
 /// here, never part of what's `SELECT`ed back out to a response (SPEC-
 /// CLOUD.md §3's ownership model is enforced in the query, not surfaced
 /// to the frontend).
-const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, thumbnail_status";
-const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, payload_json, saved_at";
+const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, thumbnail_status, template_id";
+const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, name, is_public, payload_json, saved_at";
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool> {
     let pool = PgPoolOptions::new().connect(database_url).await?;
@@ -122,7 +122,7 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
     // nothing to generate here.
     let thumbnail_status = gif.external_url.is_some().then_some("pending");
     let sql = format!(
-        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -137,6 +137,7 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
         .bind(&gif.external_url)
         .bind(created_at)
         .bind(thumbnail_status)
+        .bind(&gif.template_id)
         .bind(&gif.user_id)
         .fetch_one(pool)
         .await
@@ -372,23 +373,31 @@ pub async fn get_template_id(pool: &PgPool, video_id: &str) -> Result<Option<Str
 /// overwrite) — unlike before M3, the route needs it *before* this call
 /// to name the clip/thumbnail files it writes to disk. `ON CONFLICT`
 /// leaves `id`/`user_id` alone on an overwrite: a template's identity and
-/// creator survive being re-saved.
+/// creator survive being re-saved — this is the "in-place overwrite, same
+/// id" the public-templates design calls for, so existing `gifs.template_id`
+/// lineage and a public template's URL both keep working across a re-save.
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_template(
     pool: &PgPool,
     id: &str,
     video_id: &str,
     user_id: &str,
+    name: &str,
+    is_public: bool,
     payload: &TemplatePayload,
     saved_at: &str,
 ) -> Result<()> {
     let payload_json = serde_json::to_string(payload)?;
     sqlx::query(
-        "INSERT INTO templates (id, video_id, user_id, payload_json, saved_at) VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (video_id) DO UPDATE SET payload_json = excluded.payload_json, saved_at = excluded.saved_at",
+        "INSERT INTO templates (id, video_id, user_id, name, is_public, payload_json, saved_at) VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         ON CONFLICT (video_id) DO UPDATE SET name = excluded.name, is_public = excluded.is_public, \
+         payload_json = excluded.payload_json, saved_at = excluded.saved_at",
     )
     .bind(id)
     .bind(video_id)
     .bind(user_id)
+    .bind(name)
+    .bind(is_public)
     .bind(payload_json)
     .bind(saved_at)
     .execute(pool)
@@ -396,7 +405,10 @@ pub async fn upsert_template(
     Ok(())
 }
 
-/// Returns `true` if a template was actually deleted.
+/// Returns `true` if a template was actually deleted. Video-id-scoped, for
+/// the owner's own video-nested flow A (`DELETE /api/videos/{id}/template`)
+/// — see `delete_template_by_id` for the New GIF page's own-id-scoped
+/// delete, and `admin_delete_template` for the ownership-agnostic one.
 pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM templates WHERE video_id = $1")
         .bind(video_id)
@@ -405,10 +417,22 @@ pub async fn delete_template(pool: &PgPool, video_id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-/// A template's full row, any visibility — used only by the owner-only
-/// `PATCH /api/templates/{id}` route, which needs to find the row (to
-/// distinguish "doesn't exist" from "not yours") before its ownership
-/// check can run.
+/// Deletes a template by its own id, scoped to `owner_id` — the New GIF
+/// page's "Delete template" action on one of the caller's own tiles.
+/// Distinct from `delete_template` (video-id-scoped, flow A) and
+/// `admin_delete_template` (no owner filter).
+pub async fn delete_template_by_id(pool: &PgPool, id: &str, owner_id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM templates WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(owner_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// A template's full row, any visibility — used to find the row (to
+/// distinguish "doesn't exist" from "not yours") before an owner-only
+/// check runs, and by the admin routes.
 pub async fn get_template_by_id(pool: &PgPool, id: &str) -> Result<Option<Template>> {
     let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1");
     sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
@@ -416,6 +440,161 @@ pub async fn get_template_by_id(pool: &PgPool, id: &str) -> Result<Option<Templa
         .fetch_optional(pool)
         .await
         .map_err(Into::into)
+}
+
+/// A template usable by `viewer_id` to start a new GIF from (flow B) —
+/// public, or owned by the viewer, the same "public OR owner" gate
+/// `get_favouritable_gif` uses for gifs. Every flow-B read goes through
+/// this: the New GIF page's detail view, the clip/thumbnail/filmstrip/meta
+/// asset routes, and the template-export route — a private template a
+/// non-owner doesn't have access to simply doesn't resolve here, the same
+/// `NotFound` a nonexistent id gets.
+pub async fn get_template_for_use(pool: &PgPool, id: &str, viewer_id: &str) -> Result<Option<Template>> {
+    let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1 AND (is_public = true OR user_id = $2)");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(viewer_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Renames a template in place — lightweight, deliberately not routed
+/// through `upsert_template`'s clip-regeneration pipeline: the public-
+/// templates design wants this instant, with no re-trim/re-save.
+pub async fn rename_template(pool: &PgPool, id: &str, owner_id: &str, name: &str) -> Result<Option<Template>> {
+    let sql = format!("UPDATE templates SET name = $1 WHERE id = $2 AND user_id = $3 RETURNING {TEMPLATE_COLUMNS}");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(name)
+        .bind(id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Flips a template's public/private flag — same lightweight shape as
+/// `rename_template`.
+pub async fn set_template_public(pool: &PgPool, id: &str, owner_id: &str, is_public: bool) -> Result<Option<Template>> {
+    let sql = format!("UPDATE templates SET is_public = $1 WHERE id = $2 AND user_id = $3 RETURNING {TEMPLATE_COLUMNS}");
+    sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(is_public)
+        .bind(id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Builds the "New GIF" page's grid rows from raw `Template` rows —
+/// deserializing `payload_json` in Rust (it's opaque JSON text, not
+/// `jsonb`, so `duration_seconds`/`caption_count` can't be computed in
+/// SQL). `owner_handle` is left to the caller to fill in (only meaningful
+/// for "From others", see `get_public_template_summaries`).
+fn template_summary_from(t: Template, owner_handle: Option<String>) -> Result<TemplateSummary> {
+    let payload: TemplatePayload = serde_json::from_str(&t.payload_json)?;
+    Ok(TemplateSummary {
+        id: t.id,
+        name: t.name,
+        is_public: t.is_public,
+        saved_at: t.saved_at,
+        duration_seconds: payload.gif_range_end - payload.gif_range_start,
+        caption_count: payload.captions.len(),
+        owner_handle,
+    })
+}
+
+/// The New GIF page's "My templates" tab — every template the caller
+/// owns, public or private.
+pub async fn get_template_summaries_owned(pool: &PgPool, owner_id: &str) -> Result<Vec<TemplateSummary>> {
+    let sql = format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE user_id = $1 ORDER BY saved_at DESC");
+    let rows = sqlx::query_as::<_, Template>(sqlx::AssertSqlSafe(sql))
+        .bind(owner_id)
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter().map(|t| template_summary_from(t, None)).collect()
+}
+
+/// The New GIF page's "From others" tab — every *other* user's public
+/// template, with a plain-text creator handle for attribution (no link,
+/// no profile page — the public-templates design deliberately excludes
+/// that, unlike gifs' `list_public_gifs`).
+pub async fn get_public_template_summaries(pool: &PgPool, exclude_user_id: &str) -> Result<Vec<TemplateSummary>> {
+    let columns = "t.id, t.video_id, t.user_id, t.name, t.is_public, t.payload_json, t.saved_at, users.handle AS owner_handle";
+    let sql = format!(
+        "SELECT {columns} FROM templates t JOIN users ON users.id = t.user_id \
+         WHERE t.is_public = true AND t.user_id != $1 ORDER BY t.saved_at DESC"
+    );
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: String,
+        video_id: Option<String>,
+        user_id: String,
+        name: String,
+        is_public: bool,
+        payload_json: String,
+        saved_at: String,
+        owner_handle: Option<String>,
+    }
+    let rows = sqlx::query_as::<_, Row>(sqlx::AssertSqlSafe(sql))
+        .bind(exclude_user_id)
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(|r| {
+            let template = Template {
+                id: r.id,
+                video_id: r.video_id,
+                user_id: r.user_id,
+                name: r.name,
+                is_public: r.is_public,
+                payload_json: r.payload_json,
+                saved_at: r.saved_at,
+            };
+            template_summary_from(template, r.owner_handle)
+        })
+        .collect()
+}
+
+/// Whether `template_id` (if any) is remixable by `viewer_id` — public, or
+/// owned by them. `None` (no template lineage at all) is always `false`.
+/// Single-item counterpart of `remixable_template_ids`, used wherever only
+/// one gif's response is being built.
+pub async fn is_template_remixable(pool: &PgPool, template_id: Option<&str>, viewer_id: &str) -> Result<bool> {
+    let Some(id) = template_id else { return Ok(false) };
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM templates WHERE id = $1 AND (is_public = true OR user_id = $2)")
+        .bind(id)
+        .bind(viewer_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(exists.is_some())
+}
+
+/// Bulk counterpart of `is_template_remixable`, for a list of gifs at
+/// once (`list_gifs`, `list_library`, `list_favourites`, a profile page)
+/// — one query instead of N. `viewer_id: None` (a logged-out library
+/// visitor) only ever matches public templates, since there's no owner to
+/// compare against.
+pub async fn remixable_template_ids(pool: &PgPool, template_ids: &[String], viewer_id: Option<&str>) -> Result<HashSet<String>> {
+    if template_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows: Vec<String> = match viewer_id {
+        Some(viewer) => {
+            sqlx::query_scalar("SELECT id FROM templates WHERE id = ANY($1) AND (is_public = true OR user_id = $2)")
+                .bind(template_ids)
+                .bind(viewer)
+                .fetch_all(pool)
+                .await?
+        }
+        None => {
+            sqlx::query_scalar("SELECT id FROM templates WHERE id = ANY($1) AND is_public = true")
+                .bind(template_ids)
+                .fetch_all(pool)
+                .await?
+        }
+    };
+    Ok(rows.into_iter().collect())
 }
 
 /// Every template, any owner — used only by the one-off
@@ -687,7 +866,7 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
          users.handle AS owner_handle, users.slug AS owner_slug";
     let order_by = match sort {
         LibrarySort::Newest => "gifs.created_at DESC",
@@ -801,7 +980,7 @@ pub async fn remove_favourite(pool: &PgPool, user_id: &str, gif_id: &str) -> Res
 pub async fn list_favourite_gifs(pool: &PgPool, user_id: &str) -> Result<Vec<PublicGif>> {
     let sql = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
-         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
          users.handle AS owner_handle, users.slug AS owner_slug \
          FROM favourites \
          JOIN gifs ON gifs.id = favourites.gif_id \
@@ -968,7 +1147,7 @@ mod tests {
         insert_video(&pool, &sample_video("v2", &user), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:02Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:02Z")
             .await
             .unwrap();
 
@@ -1000,6 +1179,7 @@ mod tests {
                 height: Some(270),
                 external_url: None,
                 user_id: user.clone(),
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -1031,6 +1211,7 @@ mod tests {
                 height: Some(200),
                 external_url: None,
                 user_id: user,
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -1060,6 +1241,7 @@ mod tests {
                 height: None,
                 external_url: Some("https://example.com/a.gif".to_string()),
                 user_id: user,
+                template_id: None,
             },
             "2026-08-22T00:00:01Z",
         )
@@ -1084,6 +1266,7 @@ mod tests {
             height: Some(270),
             external_url: None,
             user_id: user_id.to_string(),
+            template_id: None,
         }
     }
 
@@ -1385,7 +1568,7 @@ mod tests {
             .await
             .unwrap();
 
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
         let first = get_template(&pool, "v1").await.unwrap().unwrap();
@@ -1393,7 +1576,7 @@ mod tests {
 
         let mut overwrite = sample_template();
         overwrite.width = 320;
-        upsert_template(&pool, "t1", "v1", &user, &overwrite, "2026-08-22T00:00:02Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &overwrite, "2026-08-22T00:00:02Z")
             .await
             .unwrap();
 
@@ -1414,12 +1597,12 @@ mod tests {
             .unwrap();
         assert!(get_template_id(&pool, "v1").await.unwrap().is_none());
 
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
         assert_eq!(get_template_id(&pool, "v1").await.unwrap().as_deref(), Some("t1"));
 
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:02Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:02Z")
             .await
             .unwrap();
         assert_eq!(get_template_id(&pool, "v1").await.unwrap().as_deref(), Some("t1"));
@@ -1432,7 +1615,7 @@ mod tests {
         insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 
@@ -1453,7 +1636,7 @@ mod tests {
         insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 
@@ -1507,7 +1690,7 @@ mod tests {
         insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        upsert_template(&pool, "t1", "v1", &user, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 
@@ -1708,7 +1891,7 @@ mod tests {
         insert_video(&pool, &sample_video("v1", &owner), "2026-08-22T00:00:00Z")
             .await
             .unwrap();
-        upsert_template(&pool, "t1", "v1", &owner, &sample_template(), "2026-08-22T00:00:01Z")
+        upsert_template(&pool, "t1", "v1", &owner, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
             .await
             .unwrap();
 

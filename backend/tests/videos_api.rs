@@ -739,6 +739,8 @@ async fn making_a_gif_from_a_templated_video_leaves_it_in_place() {
     let video_id = video["id"].as_str().unwrap();
 
     let template_body = serde_json::json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 1.0,
@@ -860,6 +862,8 @@ async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_s
     let id = video["id"].as_str().unwrap();
 
     let template_body = serde_json::json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 1.0,
@@ -1010,6 +1014,8 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     assert_eq!(list_before[0]["has_template"], false);
 
     let template_body = serde_json::json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [{
             "id": "c1", "startTime": 0.0, "endTime": 1.0, "text": "hi",
             "fontFamily": "Impact, sans-serif", "fontSize": 28, "color": "#ffffff",
@@ -1117,6 +1123,8 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
     // place (same template id — reused via `db::get_template_id`) rather
     // than orphaning the previous save's.
     let overwrite_body = serde_json::json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 0.5,
@@ -1229,6 +1237,8 @@ async fn get_template_is_owner_scoped() {
     assert_eq!(get_before_response.status(), StatusCode::NOT_FOUND);
 
     let template_body = serde_json::json!({
+        "name": "Test template",
+        "is_public": false,
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 1.5,

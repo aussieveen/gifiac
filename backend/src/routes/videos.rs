@@ -16,7 +16,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
-use crate::models::{FilmstripMeta, NewVideo, TemplatePayload, Video, VideoListItem};
+use crate::models::{FilmstripMeta, NewVideo, PutTemplateRequest, TemplatePayload, Video, VideoListItem};
 use crate::paths;
 use crate::source_video;
 use crate::state::AppState;
@@ -352,11 +352,21 @@ pub async fn put_template(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
-    Json(payload): Json<TemplatePayload>,
+    Json(request): Json<PutTemplateRequest>,
 ) -> Result<Json<TemplatePayload>, AppError> {
     let (video_uuid, video) = load_video(&state, &id, &user.id).await?;
-    save_template(&state, &video_uuid, &id, &video.extension, &user.id, &payload).await?;
-    Ok(Json(payload))
+    save_template(
+        &state,
+        &video_uuid,
+        &id,
+        &video.extension,
+        &user.id,
+        &request.name,
+        request.is_public,
+        &request.payload,
+    )
+    .await?;
+    Ok(Json(request.payload))
 }
 
 /// The actual clip/thumbnail/filmstrip generation + upsert behind
@@ -365,12 +375,15 @@ pub async fn put_template(
 /// which must happen inside the same export request as the video's own
 /// post-export cleanup (see `ExportRequest::save_as_template`'s doc
 /// comment for why a separate follow-up call would race it).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_template(
     state: &AppState,
     video_uuid: &Uuid,
     video_id: &str,
     video_extension: &str,
     owner_id: &str,
+    name: &str,
+    is_public: bool,
     payload: &TemplatePayload,
 ) -> Result<(), AppError> {
     if payload.gif_range_end <= payload.gif_range_start {
@@ -463,6 +476,8 @@ pub(crate) async fn save_template(
         &template_id.to_string(),
         video_id,
         owner_id,
+        name,
+        is_public,
         payload,
         &Utc::now().to_rfc3339(),
     )

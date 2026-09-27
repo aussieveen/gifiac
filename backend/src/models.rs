@@ -62,6 +62,20 @@ pub struct TemplatePayload {
     pub height: i64,
 }
 
+/// `PUT /api/videos/{id}/template` body — a thin wrapper adding the two
+/// real-column fields (`name`, `is_public`) that live outside
+/// `TemplatePayload` itself (see that type's doc comment) alongside the
+/// unchanged payload content, so this stays a single request body rather
+/// than two separate calls.
+#[derive(Debug, Deserialize)]
+pub struct PutTemplateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub is_public: bool,
+    #[serde(flatten)]
+    pub payload: TemplatePayload,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilmstripMeta {
@@ -150,6 +164,20 @@ pub struct ExportRequest {
     /// older/other clients that omit it still deserialize as `false`.
     #[serde(default)]
     pub save_as_template: bool,
+    /// Required (validated in `routes::exports::create_export`) whenever
+    /// `save_as_template` is true — the "Template name" field revealed by
+    /// the Make GIF modal's "Also save as a template" checkbox. `None`
+    /// otherwise; not part of `TemplatePayload` itself (see that type's
+    /// doc comment) since it's a real `templates.name` column, not
+    /// payload content.
+    #[serde(default)]
+    pub template_name: Option<String>,
+    /// The "Public template" toggle in the same modal section — only
+    /// meaningful alongside `save_as_template`. Defaults `false` so an
+    /// export that isn't saving a template at all doesn't need to specify
+    /// it either way.
+    #[serde(default)]
+    pub template_is_public: bool,
     pub captions: Vec<Caption>,
     pub gif_range_start: f64,
     pub gif_range_end: f64,
@@ -187,6 +215,12 @@ pub struct Gif {
     /// thumbnail job (or backfill CLI) has attempted it, then `ready` or
     /// `failed` — see `0015_gif_thumbnails.sql`.
     pub thumbnail_status: Option<String>,
+    /// Lineage to the template this gif was exported from via flow B
+    /// ("start from a template") — `None` for a gif exported from a video
+    /// directly (flow A), even when that video happens to have its own
+    /// saved template. Drives the "Remix this GIF" button; never shown to
+    /// other users as attribution.
+    pub template_id: Option<String>,
 }
 
 impl Gif {
@@ -229,6 +263,7 @@ pub struct PublicGif {
     pub is_public: bool,
     pub use_count: i64,
     pub thumbnail_status: Option<String>,
+    pub template_id: Option<String>,
     pub owner_handle: Option<String>,
     pub owner_slug: Option<String>,
 }
@@ -251,23 +286,92 @@ impl From<PublicGif> for Gif {
             is_public: g.is_public,
             use_count: g.use_count,
             thumbnail_status: g.thumbnail_status,
+            template_id: g.template_id,
         }
     }
 }
 
-/// A template's full row (SPEC-CLOUD.md §4, now private-to-creator-only —
-/// the sharing layer 0008/0010 added and then removed) — deliberately not
-/// `Serialize`: `payload_json` is a raw serialized string, never meant to
-/// reach a client as-is (see `TemplatePayload`, which every route response
-/// actually returns). Used internally wherever a template needs looking up
-/// by its own id rather than by its owning video.
+/// A template's full row (SPEC-CLOUD.md §4 — public templates, second
+/// attempt: narrower than the sharing layer 0008 added and 0010 removed,
+/// see `0016_public_templates.sql`) — deliberately not `Serialize`:
+/// `payload_json` is a raw serialized string, never meant to reach a
+/// client as-is (see `TemplatePayload`/`TemplateSummary`/`TemplateDetail`,
+/// which every route response actually returns). Used internally wherever
+/// a template needs looking up by its own id rather than by its owning
+/// video.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Template {
     pub id: String,
     pub video_id: Option<String>,
     pub user_id: String,
+    pub name: String,
+    pub is_public: bool,
     pub payload_json: String,
     pub saved_at: String,
+}
+
+/// `GET /api/templates/mine` and `/others` row shape — the New GIF page's
+/// template grid. `duration_seconds`/`caption_count` are derived from
+/// `payload_json` in Rust (it's opaque JSON text, not `jsonb`, so this
+/// can't be computed in SQL) — see `db::template_summary_from_row`.
+/// `owner_handle` is `None` on "mine" (no attribution needed for your own
+/// templates) and `Some` on "others" (plain-text-only, per the design: no
+/// link, no profile page).
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateSummary {
+    pub id: String,
+    pub name: String,
+    pub is_public: bool,
+    pub saved_at: String,
+    pub duration_seconds: f64,
+    pub caption_count: usize,
+    pub owner_handle: Option<String>,
+}
+
+/// `GET /api/templates/{id}` — the full detail a flow-B editor needs:
+/// everything `TemplateSummary` has, plus the actual captions/dimensions
+/// to seed the editor with. Trim range is deliberately *not* included as
+/// editable state — the frontend derives its locked `[0, duration]`
+/// timeline from `duration_seconds` alone, never from a range the user
+/// could plausibly mutate.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateDetail {
+    pub id: String,
+    pub name: String,
+    pub is_public: bool,
+    pub saved_at: String,
+    pub duration_seconds: f64,
+    pub width: i64,
+    pub height: i64,
+    pub captions: Vec<Caption>,
+    pub owner_handle: Option<String>,
+    /// Whether the current viewer is the template's creator — the New GIF
+    /// page's detail pane uses this to decide whether to render the
+    /// pencil-rename/public-toggle/delete owner controls at all, rather
+    /// than relying on a 403 from those routes to hide them after the fact.
+    pub is_own: bool,
+}
+
+/// `POST /api/templates/{id}/exports` body — deliberately has no trim
+/// range, width, or height fields. Those are always locked to the
+/// template's own saved values, read server-side from the `templates` row
+/// itself (see `routes::templates::create_export`) — there is nothing for
+/// a client to spoof because the type doesn't carry those fields at all.
+#[derive(Debug, Deserialize)]
+pub struct TemplateExportRequest {
+    pub name: String,
+    pub captions: Vec<Caption>,
+}
+
+/// `PATCH /api/templates/{id}` body — same "independently optional
+/// fields, at least one required" shape as `PatchGifRequest`
+/// (`routes/gifs.rs`). Deliberately lightweight: renaming or flipping
+/// public/private never touches `payload_json`, the trim range, or the
+/// clip/thumbnail/filmstrip assets — no re-trim/re-save required.
+#[derive(Debug, Deserialize)]
+pub struct PatchTemplateRequest {
+    pub name: Option<String>,
+    pub is_public: Option<bool>,
 }
 
 /// `GET /api/admin/users` row (SPEC-CLOUD.md §7): a user plus the
@@ -289,13 +393,14 @@ pub struct AdminUserView {
 
 /// `GET /api/admin/users/{id}/templates` row (SPEC-CLOUD.md §7) — a lean,
 /// `payload_json`-free view for an admin browsing/moderating someone
-/// else's templates (trust & safety, independent of the sharing layer
-/// that used to sit on top of this — templates are private-to-creator
-/// now, but an admin can still see and remove any user's content).
+/// else's templates (trust & safety) — an admin can see and remove any
+/// user's content regardless of its own public/private flag.
 #[derive(Debug, Clone, Serialize)]
 pub struct AdminTemplateView {
     pub id: String,
     pub video_id: Option<String>,
+    pub name: String,
+    pub is_public: bool,
     pub saved_at: String,
 }
 
@@ -304,6 +409,8 @@ impl From<Template> for AdminTemplateView {
         Self {
             id: t.id,
             video_id: t.video_id,
+            name: t.name,
+            is_public: t.is_public,
             saved_at: t.saved_at,
         }
     }
@@ -437,4 +544,5 @@ pub struct NewGif {
     pub height: Option<i64>,
     pub external_url: Option<String>,
     pub user_id: String,
+    pub template_id: Option<String>,
 }

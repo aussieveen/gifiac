@@ -229,6 +229,7 @@ async fn save_as_template_during_export_preserves_the_video_and_creates_a_workin
         "video_id": video_id,
         "name": "with a template",
         "save_as_template": true,
+        "template_name": "A saved template",
         "captions": [],
         "gif_range_start": 0.0,
         "gif_range_end": 3.0
