@@ -109,6 +109,8 @@ describe('ProfilePage favourites', () => {
     is_public: true,
     use_count: 0,
     is_favourited: false,
+    template_id: null,
+    template_remixable: false,
     gif_url: 'http://example.com/g1.gif',
   }
 

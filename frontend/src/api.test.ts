@@ -306,16 +306,17 @@ describe('getTemplate', () => {
 describe('putTemplate', () => {
   it('PUTs the payload as JSON', async () => {
     const payload: TemplatePayload = { captions: [], gif_range_start: 0, gif_range_end: 2, width: 480, height: 270 }
+    const request = { name: 'My template', is_public: false, ...payload }
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(payload))
     vi.stubGlobal('fetch', fetchMock)
 
-    await putTemplate('v1', payload)
+    await putTemplate('v1', request)
 
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/videos/v1/template')
     expect(init.method).toBe('PUT')
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
-    expect(JSON.parse(init.body as string)).toEqual(payload)
+    expect(JSON.parse(init.body as string)).toEqual(request)
   })
 })
 

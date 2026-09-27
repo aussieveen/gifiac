@@ -52,6 +52,8 @@ const gifA: Gif = {
   is_public: false,
   use_count: 0,
   is_favourited: false,
+  template_id: null,
+  template_remixable: false,
   gif_url: 'http://localhost:19000/gifiac-test/gifs/g1.gif',
   mp4_url: 'http://localhost:19000/gifiac-test/clips/g1.mp4',
   webm_url: 'http://localhost:19000/gifiac-test/clips/g1.webm',
@@ -83,6 +85,8 @@ const linkedGif: Gif = {
   is_public: false,
   use_count: 0,
   is_favourited: false,
+  template_id: null,
+  template_remixable: false,
   gif_url: 'https://example.com/meme.gif',
   mp4_url: null,
   webm_url: null,
@@ -688,25 +692,37 @@ describe('Archive', () => {
     expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument()
   })
 
-  it('a gif with a video_id offers a Remix link back into the editor', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
+  it('a gif with remixable template lineage offers a "Remix this GIF" link to that template', async () => {
+    const gifWithTemplate = { ...gifA, template_id: 't1', template_remixable: true }
+    vi.mocked(listGifs).mockResolvedValue([gifWithTemplate])
     const user = userEvent.setup()
 
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    const remix = screen.getByRole('link', { name: 'Remix' }) as HTMLAnchorElement
-    expect(remix.getAttribute('href')).toBe(`/edit/${gifA.video_id}`)
+    const remix = screen.getByRole('link', { name: /remix this gif/i }) as HTMLAnchorElement
+    expect(remix.getAttribute('href')).toBe('/from-template/t1')
   })
 
-  it('a linked gif (no video_id) has no Remix link', async () => {
+  it('a gif with template lineage that is no longer remixable (template deleted/made private) has no Remix link', async () => {
+    const gifWithStaleTemplate = { ...gifA, template_id: 't1', template_remixable: false }
+    vi.mocked(listGifs).mockResolvedValue([gifWithStaleTemplate])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('link', { name: /remix this gif/i })).not.toBeInTheDocument()
+  })
+
+  it('a gif with no template lineage has no Remix link', async () => {
     vi.mocked(listGifs).mockResolvedValue([linkedGif])
     const user = userEvent.setup()
 
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'linked meme' }))
 
-    expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /remix this gif/i })).not.toBeInTheDocument()
   })
 
   it('adding a gif by url calls the API and prepends it to the grid', async () => {

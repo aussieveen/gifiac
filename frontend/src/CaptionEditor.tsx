@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createExport, getTemplate, putTemplate, subscribeExportProgress, videoFileUrl } from './api'
+import { createExport, createTemplateExport, getTemplate, subscribeExportProgress, templateClipUrl, videoFileUrl } from './api'
 import mark from './assets/brand/strewthgif-mark.svg'
 import {
   AlignCenterIcon,
@@ -16,7 +16,7 @@ import {
 } from './icons'
 import { suggestNameFrom } from './suggestName'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
-import type { Caption, FilmstripMeta, Gif, TemplatePayload, Video } from './types'
+import type { Caption, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
 
 /**
@@ -110,8 +110,20 @@ const STAGE_PADDING = 32
 // otherwise matches the preview's width.
 const MIN_TRANSPORT_WIDTH = 480
 
+/**
+ * What the editor is sourcing its clip from — flow A (editing an
+ * uploaded video directly: adjustable trim range, can save/overwrite a
+ * template) or flow B ("start from a template," own or someone else's
+ * public one: trim range and output dimensions always locked, no
+ * save/overwrite option at all, not even for the template's own
+ * creator). One component handles both since the timeline/drag/style
+ * inspector logic is identical either way — only the trim-range editing
+ * UI, media source, and the export call at the bottom differ.
+ */
+export type EditorSource = { kind: 'video'; video: Video } | { kind: 'template'; template: TemplateDetail }
+
 interface Props {
-  video: Video
+  source: EditorSource
   filmstrip: FilmstripMeta
   onBack: () => void
   /** Called once an export finishes — lets the caller jump straight to
@@ -225,14 +237,21 @@ interface WidthDrag {
   origWidth: number
 }
 
-export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBreakpoint }: Props) {
-  const duration = video.duration_seconds
+export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBreakpoint }: Props) {
+  const isTemplateSource = source.kind === 'template'
+  const duration = isTemplateSource ? source.template.duration_seconds : source.video.duration_seconds
   // Matches the backend's scale.rs output size — computed server-side,
-  // reflected here via the film-strip's own dimensions.
+  // reflected here via the film-strip's own dimensions. Also true for a
+  // template source: its filmstrip is generated from its own locked
+  // width/height (`routes::templates::get_filmstrip_meta`), so this needs
+  // no separate branch.
   const outputWidth = filmstrip.frameWidth
   const outputHeight = filmstrip.frameHeight
-  const clipUrl = videoFileUrl(video.id)
-  const [captions, setCaptions] = useState<Caption[]>([])
+  // Flow B's clip is the template's own self-contained, already-trimmed
+  // media — works even without access to the (possibly private, possibly
+  // someone else's) source video.
+  const clipUrl = isTemplateSource ? templateClipUrl(source.template.id) : videoFileUrl(source.video.id)
+  const [captions, setCaptions] = useState<Caption[]>(() => (isTemplateSource ? source.template.captions : []))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [gifRange, setGifRange] = useState({ start: 0, end: duration })
@@ -246,15 +265,12 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  // SPEC.md §12: pre-fills from the video's saved template, if any —
-  // `video.has_template` (from the video list) gives an immediate answer
-  // for which export-form control to show (checkbox vs. button) without
-  // waiting on the fetch below, which then corrects it if stale and
-  // supplies the actual caption/range payload to pre-fill with.
-  const [hasTemplate, setHasTemplate] = useState(video.has_template ?? false)
-  const [createTemplate, setCreateTemplate] = useState(false)
-  const [templateSaving, setTemplateSaving] = useState(false)
-  const [templateSaved, setTemplateSaved] = useState(false)
+  // The "Make GIF" popover's own state (flow A only — flow B never shows
+  // a save/overwrite option, not even for the template's own creator).
+  const [makeGifPopoverOpen, setMakeGifPopoverOpen] = useState(false)
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [templateIsPublic, setTemplateIsPublic] = useState(false)
   const [templateError, setTemplateError] = useState<string | null>(null)
   // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
   // null when nothing's snapped — drives the vertical guide line.
@@ -301,21 +317,21 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
 
   // SPEC.md §12: "Opening a video that has a template loads the caption
   // editor with all template data pre-filled." The user can freely change
-  // anything afterwards — this only sets the initial state. Keyed on the
-  // video's own id rather than `video` itself, which is a fresh object
-  // every render and would re-fire this on every render if used directly
-  // as the dependency.
-  const videoId = video.id
+  // anything afterwards — this only sets the initial state. Flow A only —
+  // a flow-B source already arrives with its own captions (see the
+  // `captions` initializer above) and never a "this video's own template"
+  // to look up. Keyed on the video's own id rather than `source` itself,
+  // which is a fresh object every render and would re-fire this on every
+  // render if used directly as the dependency.
+  const videoId = source.kind === 'video' ? source.video.id : null
   useEffect(() => {
+    if (videoId === null) return
     let cancelled = false
     getTemplate(videoId)
       .then((template) => {
-        if (cancelled) return
-        setHasTemplate(template !== null)
-        if (template) {
-          setCaptions(template.captions)
-          setGifRange({ start: template.gif_range_start, end: template.gif_range_end })
-        }
+        if (cancelled || !template) return
+        setCaptions(template.captions)
+        setGifRange({ start: template.gif_range_start, end: template.gif_range_end })
       })
       .catch((err) => {
         if (!cancelled) setTemplateError(err instanceof Error ? err.message : String(err))
@@ -706,38 +722,23 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
   const filmstripFrameWidth = timelineWidth / visibleFrameCount
   const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
-  // SPEC.md §12: output dimensions are derived from the video the same
-  // deterministic way the export pipeline does (backend/src/scale.rs) —
-  // `outputWidth`/`outputHeight` are already computed from that exact
-  // function server-side (see the PREVIEW_SCALE comment above), so this
-  // needs no export to run first to know what they'd be. Shared by both
-  // the standalone "Overwrite template" action and "Create template" on
-  // export completion, which otherwise build the identical payload.
-  function buildTemplatePayload(captionsForTemplate: Caption[]): TemplatePayload {
-    return {
-      captions: captionsForTemplate,
-      gif_range_start: Number(gifRange.start.toFixed(2)),
-      gif_range_end: Number(gifRange.end.toFixed(2)),
-      width: outputWidth,
-      height: outputHeight,
+  // Opens the "Make GIF" popover (flow A only) — nothing to configure
+  // until the GIF itself has a name, so an empty name falls back to the
+  // same inline error/focus behavior clicking Make GIF has always had,
+  // rather than opening a popover with nothing useful in it yet. The
+  // template name field is prefilled with the GIF's own name, matching
+  // the design ("Prefilled with the GIF's name").
+  function openMakeGifPopover() {
+    const trimmedName = name.trim()
+    if (!trimmedName) {
+      setNameError(true)
+      nameInputRef.current?.focus()
+      return
     }
-  }
-
-  // SPEC.md §12: "Overwriting is independent of exporting — the user can
-  // update the template without triggering a new GIF export."
-  async function overwriteTemplate() {
-    setTemplateSaving(true)
-    setTemplateError(null)
-    setTemplateSaved(false)
-    try {
-      await putTemplate(video.id, buildTemplatePayload(captions))
-      setHasTemplate(true)
-      setTemplateSaved(true)
-    } catch (err) {
-      setTemplateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setTemplateSaving(false)
-    }
+    setTemplateName(trimmedName)
+    setTemplateIsPublic(false)
+    setSaveAsTemplate(false)
+    setMakeGifPopoverOpen(true)
   }
 
   async function makeGif() {
@@ -747,8 +748,15 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
       nameInputRef.current?.focus()
       return
     }
+    const trimmedTemplateName = templateName.trim()
+    if (source.kind === 'video' && saveAsTemplate && !trimmedTemplateName) {
+      setTemplateError('Give your template a name before saving it')
+      return
+    }
+    setMakeGifPopoverOpen(false)
     setSubmitting(true)
     setExportError(null)
+    setTemplateError(null)
     setCompletedGif(null)
     setExportProgress(null)
     try {
@@ -762,27 +770,34 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
         const el = measureRefs.current[c.id]
         return el ? { ...c, text: measureWrappedLines(el) } : c
       })
-      const result = await createExport({
-        video_id: video.id,
-        name: trimmedName,
-        // SPEC.md §12: "Checking it saves the current export parameters
-        // as the video's template when the GIF is exported." Sent as
-        // part of the export request itself, not a separate follow-up
-        // PUT after it completes — a video not saved as a template
-        // doesn't survive past its own export (SPEC-CLOUD.md §6), so a
-        // later call here would race that cleanup and 404.
-        save_as_template: createTemplate,
-        captions: captionsWithWrapping,
-        gif_range_start: Number(gifRange.start.toFixed(2)),
-        gif_range_end: Number(gifRange.end.toFixed(2)),
-      })
+      const result =
+        source.kind === 'video'
+          ? await createExport({
+              video_id: source.video.id,
+              name: trimmedName,
+              // The "Also save as a template" checkbox — sent as part of
+              // the export request itself, not a separate follow-up PUT
+              // after it completes, since a video not saved as a
+              // template doesn't survive past its own export
+              // (SPEC-CLOUD.md §6), so a later call here would race that
+              // cleanup and 404.
+              save_as_template: saveAsTemplate,
+              template_name: saveAsTemplate ? trimmedTemplateName : undefined,
+              template_is_public: saveAsTemplate ? templateIsPublic : undefined,
+              captions: captionsWithWrapping,
+              gif_range_start: Number(gifRange.start.toFixed(2)),
+              gif_range_end: Number(gifRange.end.toFixed(2)),
+            })
+          : // Flow B: no range/dimension fields at all — those are always
+            // locked to the template's own saved values, enforced
+            // server-side.
+            await createTemplateExport(source.template.id, trimmedName, captionsWithWrapping)
       exportUnsubscribeRef.current = subscribeExportProgress(result.export_id, {
         onProgress: (stage, percent) => setExportProgress({ stage, percent }),
         onComplete: (gif) => {
           setCompletedGif(gif)
           setExportProgress(null)
           setSubmitting(false)
-          if (createTemplate) setHasTemplate(true)
           onGifCreated?.(gif)
         },
         onError: (message) => {
@@ -847,45 +862,88 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
               </button>
             )}
             <p className="editor-source-info">
-              {video.original_filename} · {outputWidth}×{outputHeight} · {duration.toFixed(1)}s
+              {source.kind === 'video'
+                ? `${source.video.original_filename} · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`
+                : `Based on "${source.template.name}" · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`}
             </p>
           </div>
         </div>
         <div className="editor-header-right">
-          {/* SPEC.md §12: a video with no template gets a toggle that
-              marks the *next* export as also saving a template; a video
-              already working from one gets a standalone "Overwrite
-              template" action instead, independent of exporting. */}
-          {!hasTemplate ? (
+          <div className="editor-makegif-anchor">
             <button
-              type="button"
-              className="btn btn-secondary editor-template-btn"
-              aria-pressed={createTemplate}
-              onClick={() => setCreateTemplate((v) => !v)}
+              className="btn btn-primary"
+              aria-label="Make GIF"
+              title={!name.trim() ? 'Name your GIF first' : undefined}
+              disabled={submitting}
+              onClick={source.kind === 'video' ? openMakeGifPopover : makeGif}
             >
-              Save as template
+              {submitting ? (
+                'Making…'
+              ) : (
+                <>
+                  Make GIF
+                  <span className="editor-make-gif-duration">{trimmedDuration.toFixed(1)}s</span>
+                </>
+              )}
             </button>
-          ) : (
-            <button className="btn btn-secondary" onClick={overwriteTemplate} disabled={templateSaving}>
-              {templateSaving ? 'Saving…' : 'Overwrite template'}
-            </button>
-          )}
-          <button
-            className="btn btn-primary"
-            aria-label="Make GIF"
-            title={!name.trim() ? 'Name your GIF first' : undefined}
-            disabled={submitting}
-            onClick={makeGif}
-          >
-            {submitting ? (
-              'Making…'
-            ) : (
-              <>
-                Make GIF
-                <span className="editor-make-gif-duration">{trimmedDuration.toFixed(1)}s</span>
-              </>
+            {/* Flow A only — flow B never shows a save/overwrite option,
+                not even for the template's own creator. */}
+            {makeGifPopoverOpen && source.kind === 'video' && (
+              <div className="editor-makegif-popover" role="dialog" aria-label="Make GIF">
+                <p className="editor-makegif-popover-summary">
+                  "{name.trim()}" · {trimmedDuration.toFixed(1)}s · {captions.length} caption
+                  {captions.length === 1 ? '' : 's'} · {outputWidth}×{outputHeight}
+                </p>
+                <label className="editor-makegif-checkbox-row" htmlFor="makegif-save-template">
+                  <input
+                    id="makegif-save-template"
+                    type="checkbox"
+                    checked={saveAsTemplate}
+                    onChange={(e) => setSaveAsTemplate(e.target.checked)}
+                  />
+                  <span>
+                    <strong>Also save as a template</strong>
+                    <br />
+                    <span className="va-hint">Keep this trim and captions to start new GIFs from</span>
+                  </span>
+                </label>
+                {saveAsTemplate && (
+                  <div className="editor-makegif-template-fields">
+                    <label className="field-label" htmlFor="makegif-template-name">
+                      Template name
+                    </label>
+                    <input
+                      id="makegif-template-name"
+                      className="editor-name-input"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                    />
+                    <label className="editor-makegif-checkbox-row" htmlFor="makegif-template-public">
+                      <input
+                        id="makegif-template-public"
+                        type="checkbox"
+                        checked={templateIsPublic}
+                        onChange={(e) => setTemplateIsPublic(e.target.checked)}
+                      />
+                      <span>
+                        <strong>Public template</strong>
+                        <br />
+                        <span className="va-hint">Others can find it under "From others"</span>
+                      </span>
+                    </label>
+                  </div>
+                )}
+                <div className="editor-makegif-popover-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setMakeGifPopoverOpen(false)}>
+                    Cancel
+                  </button>
+                  <button type="button" className="btn btn-primary" onClick={makeGif}>
+                    {saveAsTemplate ? 'Make GIF & save template' : 'Make GIF'}
+                  </button>
+                </div>
+              </div>
             )}
-          </button>
+          </div>
         </div>
       </header>
 
@@ -896,7 +954,6 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
       )}
       {exportError && <div className="editor-toast editor-toast-error">{exportError}</div>}
       {templateError && <div className="editor-toast editor-toast-error">{templateError}</div>}
-      {templateSaved && <div className="editor-toast">Template saved.</div>}
       {completedGif && (
         <div className="editor-toast">
           "{completedGif.name}" is ready ({completedGif.width}×{completedGif.height}).
@@ -1206,13 +1263,18 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
           <div className="editor-trim-pill">
             <span className="editor-trim-swatch" />
             Trim {gifRange.start.toFixed(2)}s → {gifRange.end.toFixed(2)}s · {trimmedDuration.toFixed(2)}s
+            {isTemplateSource && <span className="editor-trim-locked-tag">Locked</span>}
           </div>
-          <button className="btn btn-secondary" onClick={setRangeStartToPlayhead}>
-            Trim start
-          </button>
-          <button className="btn btn-secondary" onClick={setRangeEndToPlayhead}>
-            Trim end
-          </button>
+          {!isTemplateSource && (
+            <>
+              <button className="btn btn-secondary" onClick={setRangeStartToPlayhead}>
+                Trim start
+              </button>
+              <button className="btn btn-secondary" onClick={setRangeEndToPlayhead}>
+                Trim end
+              </button>
+            </>
+          )}
           <div className="editor-zoom-controls">
             <button
               type="button"
@@ -1295,8 +1357,12 @@ export function CaptionEditor({ video, filmstrip, onBack, onGifCreated, belowBre
                     width: timeToX(gifRange.end, duration, timelineWidth) - timeToX(gifRange.start, duration, timelineWidth),
                   }}
                 >
-                  <div className="va-range-handle" style={{ left: -5 }} onMouseDown={(e) => startRangeDrag(e, 'start')} />
-                  <div className="va-range-handle" style={{ right: -5 }} onMouseDown={(e) => startRangeDrag(e, 'end')} />
+                  {!isTemplateSource && (
+                    <>
+                      <div className="va-range-handle" style={{ left: -5 }} onMouseDown={(e) => startRangeDrag(e, 'start')} />
+                      <div className="va-range-handle" style={{ right: -5 }} onMouseDown={(e) => startRangeDrag(e, 'end')} />
+                    </>
+                  )}
                 </div>
                 <div
                   className="va-playhead"

@@ -8,7 +8,9 @@ import type {
   LibrarySort,
   Preferences,
   Profile,
+  TemplateDetail,
   TemplatePayload,
+  TemplateSummary,
   Video,
 } from './types'
 
@@ -104,12 +106,19 @@ export function videoFileUrl(id: string): string {
 export interface ExportRequest {
   video_id: string
   name: string
-  // The "Create template" checkbox — must ride along with the export
-  // request itself rather than a separate follow-up PUT after it
-  // completes, since a video not saved as a template doesn't survive
-  // past its export (see CaptionEditor's makeGif, which relies on this
-  // instead of calling putTemplate after the fact).
+  // The "Also save as a template" checkbox in the Make GIF modal — must
+  // ride along with the export request itself rather than a separate
+  // follow-up PUT after it completes, since a video not saved as a
+  // template doesn't survive past its export (see CaptionEditor's
+  // makeGif, which relies on this instead of calling putTemplate after
+  // the fact).
   save_as_template?: boolean
+  // Required whenever `save_as_template` is true — the modal's "Template
+  // name" field.
+  template_name?: string
+  // The modal's "Public template" toggle — only meaningful alongside
+  // `save_as_template`.
+  template_is_public?: boolean
   captions: Caption[]
   gif_range_start: number
   gif_range_end: number
@@ -267,7 +276,9 @@ export function linkGif(url: string, name: string): Promise<Gif> {
   })
 }
 
-// Video templates per SPEC.md §12.
+// Video templates (flow A: a video's own save/overwrite-in-place
+// template) per SPEC.md §12. `getTemplate` is only used today to prefill
+// the Make GIF modal's template name when a video already has one.
 
 export async function getTemplate(videoId: string): Promise<TemplatePayload | null> {
   const input = `/api/videos/${videoId}/template`
@@ -277,17 +288,86 @@ export async function getTemplate(videoId: string): Promise<TemplatePayload | nu
   return (await response.json()) as TemplatePayload
 }
 
-export function putTemplate(videoId: string, payload: TemplatePayload): Promise<TemplatePayload> {
+export function putTemplate(
+  videoId: string,
+  request_: { name: string; is_public: boolean } & TemplatePayload,
+): Promise<TemplatePayload> {
   return request<TemplatePayload>(`/api/videos/${videoId}/template`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(request_),
   })
 }
 
 export async function deleteTemplate(videoId: string): Promise<void> {
   const input = `/api/videos/${videoId}/template`
   await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
+}
+
+// Public templates (pass 2) — flow B, "use a template". `routes::templates`
+// on the backend.
+
+// The New GIF page's "My templates" tab.
+export function listMyTemplates(): Promise<TemplateSummary[]> {
+  return request<TemplateSummary[]>('/api/templates/mine')
+}
+
+// The New GIF page's "From others" tab — every other user's public
+// template.
+export function listOtherTemplates(): Promise<TemplateSummary[]> {
+  return request<TemplateSummary[]>('/api/templates/others')
+}
+
+export function getTemplateDetail(id: string): Promise<TemplateDetail> {
+  return request<TemplateDetail>(`/api/templates/${id}`)
+}
+
+// Lightweight, owner-only — doesn't touch the saved trim/captions/assets.
+export function renameTemplate(id: string, name: string): Promise<TemplateDetail> {
+  return request<TemplateDetail>(`/api/templates/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function setTemplatePublic(id: string, isPublic: boolean): Promise<TemplateDetail> {
+  return request<TemplateDetail>(`/api/templates/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_public: isPublic }),
+  })
+}
+
+export async function deleteTemplateById(id: string): Promise<void> {
+  const input = `/api/templates/${id}`
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
+}
+
+// The template's own self-contained, already-trimmed clip — the flow-B
+// editor's `<video>` source, works even without access to the (possibly
+// private, possibly someone else's) source video.
+export function templateClipUrl(id: string): string {
+  return `/api/templates/${id}/clip`
+}
+
+export function templateThumbnailUrl(id: string): string {
+  return `/api/templates/${id}/thumbnail`
+}
+
+export function getTemplateFilmstripMeta(id: string): Promise<FilmstripMeta> {
+  return request<FilmstripMeta>(`/api/templates/${id}/meta`)
+}
+
+// Flow B's export — deliberately carries no trim range or dimensions;
+// those are always locked to the template's own saved values, enforced
+// server-side (see `routes::exports::create_template_export`).
+export function createTemplateExport(templateId: string, name: string, captions: Caption[]): Promise<ExportAccepted> {
+  return request<ExportAccepted>(`/api/templates/${templateId}/exports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, captions }),
+  })
 }
 
 // Admin area per SPEC-CLOUD.md §7 — every user plus per-user usage stats,

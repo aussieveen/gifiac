@@ -36,14 +36,49 @@ export interface Video {
 }
 
 // SPEC.md §12: the saved export template payload — `PUT/GET
-// /api/videos/{id}/template`. Deliberately excludes `name` (per-GIF, not
-// per-template).
+// /api/videos/{id}/template`. `name`/`is_public` are real `templates`
+// columns, not part of this payload blob — see api.ts's `putTemplate`.
 export interface TemplatePayload {
   captions: Caption[]
   gif_range_start: number
   gif_range_end: number
   width: number
   height: number
+}
+
+// Public templates (pass 2) — `GET /api/templates/mine` and `/others` row
+// shape, matching the backend's `TemplateSummary`. Drives the New GIF
+// page's template grid.
+export interface TemplateSummary {
+  id: string
+  name: string
+  is_public: boolean
+  saved_at: string
+  duration_seconds: number
+  caption_count: number
+  // Only ever set on an "others" row — `null` for your own templates,
+  // which need no attribution shown.
+  owner_handle: string | null
+}
+
+// `GET /api/templates/{id}` — matching the backend's `TemplateDetail`.
+// What the "use this template" flow (flow B) needs to seed a locked-range
+// editor session: captions/dimensions, but deliberately no trim range to
+// edit (the frontend derives its `[0, duration_seconds]` timeline from
+// `duration_seconds` alone).
+export interface TemplateDetail {
+  id: string
+  name: string
+  is_public: boolean
+  saved_at: string
+  duration_seconds: number
+  width: number
+  height: number
+  captions: Caption[]
+  owner_handle: string | null
+  // Whether the current viewer is the template's creator — gates the New
+  // GIF page's rename/publish-toggle/delete controls.
+  is_own: boolean
 }
 
 // A user's Preferences-page settings (bundled onto `CurrentUser` rather
@@ -135,6 +170,17 @@ export interface Gif {
   // succeeds; `null`/absent while pending, on failure, or for a non-linked
   // gif (which needs no thumbnail at all, mp4_url/webm_url cover it).
   thumbnail_url?: string | null
+  // Lineage to the template this gif was exported from via flow B
+  // ("start from a template") — `null` for a gif made directly from a
+  // video (flow A), even when that video has its own saved template.
+  // Never shown as attribution, only drives the Remix button below.
+  template_id: string | null
+  // Per-viewer, like `is_favourited`: whether "Remix this GIF" should
+  // show — `true` only while `template_id`'s template is still
+  // accessible to the current viewer (public, or owned by them).
+  // Server-computed so it disappears cleanly the moment the template is
+  // deleted or made private.
+  template_remixable: boolean
 }
 
 // GET /api/library response shape (SPEC-CLOUD.md §8) — a Gif plus its

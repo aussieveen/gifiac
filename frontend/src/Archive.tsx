@@ -24,6 +24,7 @@ import {
   ExternalLinkIcon,
   LinkIcon,
   LockIcon,
+  PencilIcon,
   SearchIcon,
   ShareIcon,
   StarIcon,
@@ -204,10 +205,12 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
 
   const selected = gifs.find((g) => g.id === selectedId) ?? null
   // SPEC-CLOUD.md §14: Favourites can hold someone else's gif — owner-only
-  // controls (rename, Public/One-off, Delete, Remix) below all gate on
-  // this, matching the map's "Remix scope" decision that remixing another
-  // user's gif is out of scope, and the backend's own ownership-scoped
-  // rename/delete/publish endpoints, which 404 for a non-owner anyway.
+  // controls (rename, Public/One-off, Delete) below all gate on this,
+  // matching the backend's own ownership-scoped rename/delete/publish
+  // endpoints, which 404 for a non-owner anyway. "Remix this GIF" is
+  // deliberately NOT gated on this — it's keyed on template lineage
+  // (`template_remixable`), so a public template's Remix can show on
+  // someone else's gif too.
   const isOwnGif = !selected?.owner_slug || selected.owner_slug === user?.slug
 
   async function rename(name: string) {
@@ -719,12 +722,26 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                     <DownloadIcon /> Download
                   </a>
                 )}
-                {canEdit && selected.video_id && isOwnGif && (
-                  <Link className="btn btn-secondary" to={`/edit/${selected.video_id}`}>
-                    Remix
-                  </Link>
-                )}
               </div>
+
+              {/* Public templates, pass 2: shown only when this gif has
+                  template lineage to a template still accessible to the
+                  viewer (public, or owned by them) — `template_remixable`
+                  is computed server-side so it disappears cleanly the
+                  moment the template is deleted or made private, rather
+                  than a stale link that 404s on click. Replaces the old
+                  own-video-only remix entirely; unrelated to `isOwnGif`
+                  (a public template from someone else can be remixed from
+                  their gif too). */}
+              {canEdit && selected.template_id && selected.template_remixable && (
+                <Link className="archive-remix-action" to={`/from-template/${selected.template_id}`}>
+                  <PencilIcon size={14} className="archive-remix-action-icon" />
+                  <span className="archive-remix-action-copy">
+                    <strong>Remix this GIF</strong>
+                    <span className="va-hint">New captions, same clip</span>
+                  </span>
+                </Link>
+              )}
 
               {/* Pinned bottom bar, below the editor breakpoint only —
                   Share if available, else Copy link. Desktop keeps the

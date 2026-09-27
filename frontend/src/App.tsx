@@ -3,7 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } fr
 import { AdminPage } from './AdminPage'
 import { Archive } from './Archive'
 import lockup from './assets/brand/strewthgif-lockup-on-dark.svg'
-import { LOGIN_URL, getFilmstripMeta, getVideo, logout } from './api'
+import { LOGIN_URL, getFilmstripMeta, getTemplateDetail, getTemplateFilmstripMeta, getVideo, logout } from './api'
 import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
 import { EditorUnavailable } from './EditorUnavailable'
@@ -11,13 +11,13 @@ import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
 import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
 import { Library } from './Library'
+import { NewGifPage } from './NewGifPage'
 import { Preferences } from './Preferences'
 import { consumeReturnTo, saveReturnTo } from './returnTo'
-import type { CurrentUser, FilmstripMeta, Gif, Video } from './types'
+import type { CurrentUser, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
-import { VideoPicker } from './VideoPicker'
 
 /** The avatar/handle pill in the header — clicking it opens a small menu
  * (design brief §2) with a link to the user's own profile and sign-out,
@@ -99,7 +99,12 @@ function NewGifRoute() {
   const navigate = useNavigate()
   const canEdit = useCanEdit()
   if (!canEdit) return <EditorUnavailable />
-  return <VideoPicker onSelect={(video) => navigate(`/edit/${video.id}`)} />
+  return (
+    <NewGifPage
+      onUploaded={(video) => navigate(`/edit/${video.id}`)}
+      onStartFromTemplate={(templateId) => navigate(`/from-template/${templateId}`)}
+    />
+  )
 }
 
 /** Loads its own video + film-strip from `:videoId` (via `getVideo`,
@@ -180,7 +185,85 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
 
   return (
     <CaptionEditor
-      video={video}
+      source={{ kind: 'video', video }}
+      filmstrip={filmstrip}
+      onBack={backToPicker}
+      onGifCreated={onGifCreated}
+      belowBreakpoint={!canEdit}
+    />
+  )
+}
+
+/** Flow B — "start from a template," reached either from the New GIF
+ * page's grid or a GIF's "Remix this GIF" button. Keyed by template id,
+ * not video id: the template's own self-contained clip is what's loaded,
+ * so this works even for a public template whose source video the
+ * viewer has no access to. Same load/error/loading shape as `EditRoute`. */
+function FromTemplateRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
+  const { templateId } = useParams<{ templateId: string }>()
+  const navigate = useNavigate()
+  const canEdit = useCanEdit()
+  const [hasMountedEditor, setHasMountedEditor] = useState(false)
+  const [template, setTemplate] = useState<TemplateDetail | null>(null)
+  const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!templateId) return
+    let cancelled = false
+    setTemplate(null)
+    setFilmstrip(null)
+    setLoadError(null)
+    ;(async () => {
+      try {
+        const t = await getTemplateDetail(templateId)
+        if (cancelled) return
+        setTemplate(t)
+        const meta = await getTemplateFilmstripMeta(t.id)
+        if (!cancelled) setFilmstrip(meta)
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [templateId])
+
+  useEffect(() => {
+    if (template && filmstrip && canEdit) setHasMountedEditor(true)
+  }, [template, filmstrip, canEdit])
+
+  function backToPicker() {
+    navigate('/new')
+  }
+
+  if (!canEdit && !hasMountedEditor) {
+    return <EditorUnavailable />
+  }
+
+  if (loadError) {
+    return (
+      <div className="page">
+        <button className="back-link" onClick={backToPicker}>
+          ← back to library
+        </button>
+        <p className="export-error">This template is no longer available: {loadError}</p>
+      </div>
+    )
+  }
+
+  if (!template || !filmstrip) {
+    return (
+      <div className="page">
+        <p className="va-hint">Loading template…</p>
+      </div>
+    )
+  }
+
+  return (
+    <CaptionEditor
+      source={{ kind: 'template', template }}
       filmstrip={filmstrip}
       onBack={backToPicker}
       onGifCreated={onGifCreated}
@@ -281,7 +364,7 @@ function AuthenticatedApp({
   // The caption editor renders its own full header bar (back button,
   // wordmark, title, Make GIF) — the global app header would just be a
   // second, redundant one stacked above it.
-  const isEditorRoute = location.pathname.startsWith('/edit/')
+  const isEditorRoute = location.pathname.startsWith('/edit/') || location.pathname.startsWith('/from-template/')
 
   const libraryActive =
     location.pathname === '/' || location.pathname.startsWith('/library') || location.pathname === '/new' || isEditorRoute
@@ -338,6 +421,10 @@ function AuthenticatedApp({
         <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />
         <Route path="/new" element={<NewGifRoute />} />
         <Route path="/edit/:videoId" element={<EditRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />} />
+        <Route
+          path="/from-template/:templateId"
+          element={<FromTemplateRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />}
+        />
         {user.role === 'admin' && <Route path="/admin" element={<AdminPage />} />}
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>

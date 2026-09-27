@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,6 +28,16 @@ vi.mock('./api', () => ({
   getTemplate: vi.fn(),
   putTemplate: vi.fn(),
   deleteTemplate: vi.fn(),
+  listMyTemplates: vi.fn(),
+  listOtherTemplates: vi.fn(),
+  getTemplateDetail: vi.fn(),
+  renameTemplate: vi.fn(),
+  setTemplatePublic: vi.fn(),
+  deleteTemplateById: vi.fn(),
+  templateThumbnailUrl: (id: string) => `/api/templates/${id}/thumbnail`,
+  templateClipUrl: (id: string) => `/api/templates/${id}/clip`,
+  getTemplateFilmstripMeta: vi.fn(),
+  createTemplateExport: vi.fn(),
   listAdminUsers: vi.fn(),
   setUserDisabled: vi.fn(),
   listLibrary: vi.fn(),
@@ -43,10 +53,12 @@ import {
   listAdminUsers,
   listGifs,
   listLibrary,
-  listVideos,
+  listMyTemplates,
+  listOtherTemplates,
   logout,
   setHandle,
   subscribeExportProgress,
+  uploadVideo,
 } from './api'
 import type { ExportProgressHandlers } from './api'
 import type { CurrentUser } from './types'
@@ -105,7 +117,7 @@ function renderAppAt(path: string) {
 }
 
 beforeEach(() => {
-  vi.mocked(listVideos).mockReset()
+  vi.mocked(uploadVideo).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(getVideo).mockReset()
   vi.mocked(listGifs).mockReset()
@@ -117,6 +129,8 @@ beforeEach(() => {
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
   vi.mocked(logout).mockReset().mockResolvedValue(undefined)
   vi.mocked(listLibrary).mockReset().mockResolvedValue([])
+  vi.mocked(listMyTemplates).mockReset().mockResolvedValue([])
+  vi.mocked(listOtherTemplates).mockReset().mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -171,7 +185,6 @@ describe('App', () => {
 
   it('the + New GIF button switches to the video picker', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video])
     const user = userEvent.setup()
 
     renderApp()
@@ -182,9 +195,9 @@ describe('App', () => {
     await screen.findByText('New GIF', { selector: 'h1' })
   })
 
-  it('selecting a video loads its film-strip and opens the editor', async () => {
+  it('uploading a video loads its film-strip and opens the editor', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(uploadVideo).mockResolvedValue(video)
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     const user = userEvent.setup()
@@ -192,7 +205,9 @@ describe('App', () => {
     renderApp()
     await screen.findByText(/no gifs yet/i)
     await user.click(screen.getByRole('link', { name: 'New GIF' }))
-    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
+    await screen.findByText('New GIF', { selector: 'h1' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
 
     expect(await screen.findByText(/clip\.mp4/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
@@ -205,7 +220,7 @@ describe('App', () => {
 
   it('shows an error and lets you go back if the film-strip fails to load', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(uploadVideo).mockResolvedValue(video)
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockRejectedValue(new Error('/api/videos/v1/filmstrip failed (500): boom'))
     const user = userEvent.setup()
@@ -213,16 +228,20 @@ describe('App', () => {
     renderApp()
     await screen.findByText(/no gifs yet/i)
     await user.click(screen.getByRole('link', { name: 'New GIF' }))
-    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
+    await screen.findByText('New GIF', { selector: 'h1' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
 
     await screen.findByText(/boom/)
     await user.click(screen.getByRole('button', { name: /back to library/i }))
     await screen.findByText('New GIF', { selector: 'h1' })
   })
 
-  it('never renders one video against another video\'s stale film-strip when switching', async () => {
+  it("never renders one upload against a second upload's stale film-strip", async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video, otherVideo])
+    vi.mocked(uploadVideo).mockImplementation((file: File) =>
+      Promise.resolve(file.name === 'clip.mp4' ? video : otherVideo),
+    )
     vi.mocked(getVideo).mockImplementation((id: string) =>
       Promise.resolve(id === video.id ? video : otherVideo),
     )
@@ -234,21 +253,24 @@ describe('App', () => {
     renderApp()
     await screen.findByText(/no gifs yet/i)
     await user.click(screen.getByRole('link', { name: 'New GIF' }))
-    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
+    await screen.findByText('New GIF', { selector: 'h1' })
+    let input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
     await screen.findByText(/clip\.mp4/)
 
     await user.click(screen.getByRole('button', { name: /back to library/i }))
-    await user.click(await screen.findByRole('button', { name: /^other\.mp4/i }))
+    await screen.findByText('New GIF', { selector: 'h1' })
+    input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'other.mp4', { type: 'video/mp4' }))
 
-    // The switch target's film-strip fetch never resolves, so the editor
-    // (and clip.mp4's now-stale film-strip data) must not render at all.
+    // The second upload's film-strip fetch never resolves, so the editor
+    // (and the first upload's now-stale film-strip data) must not render.
     expect(screen.queryByRole('button', { name: 'Make GIF' })).not.toBeInTheDocument()
     expect(await screen.findByText(/loading film-strip/i)).toBeInTheDocument()
   })
 
   it('the My Library nav tab returns from the video picker to my library', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video])
     const user = userEvent.setup()
 
     renderApp()
@@ -308,7 +330,7 @@ describe('App', () => {
 
   it('making a GIF switches to the archive with it already selected', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listVideos).mockResolvedValue([video])
+    vi.mocked(uploadVideo).mockResolvedValue(video)
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
@@ -332,6 +354,8 @@ describe('App', () => {
       is_public: false,
       use_count: 0,
       is_favourited: false,
+      template_id: null,
+      template_remixable: false,
       created_at: '2026-01-01T00:00:00Z',
       gif_url: 'http://example.com/g1.gif',
     }
@@ -340,11 +364,15 @@ describe('App', () => {
     renderApp()
     await screen.findByText(/no gifs yet/i)
     await user.click(screen.getByRole('link', { name: 'New GIF' }))
-    await user.click(await screen.findByRole('button', { name: /^clip\.mp4/i }))
+    await screen.findByText('New GIF', { selector: 'h1' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
     await screen.findByText(/clip\.mp4/)
     await user.type(screen.getByLabelText('GIF name'), 'my clip')
     vi.mocked(listGifs).mockResolvedValue([createdGif])
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+    await user.click(within(dialog).getByRole('button', { name: 'Make GIF' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     act(() => handlers.onComplete?.(createdGif))

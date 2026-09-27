@@ -33,6 +33,8 @@ const entryA: LibraryEntry = {
   is_public: true,
   use_count: 0,
   is_favourited: false,
+  template_id: null,
+  template_remixable: false,
   gif_url: 'http://example.com/g1.gif',
   owner_handle: 'simon',
   owner_slug: 'simon',
