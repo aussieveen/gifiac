@@ -168,6 +168,19 @@
   box-sizing: border-box;
 }
 
+/* Reserves the vertical scrollbar's gutter unconditionally, instead of
+   only when the page happens to be tall enough to scroll. Without this,
+   picking a different template in the New GIF page's detail panel (whose
+   content height varies template to template) could cross the "does this
+   page scroll" threshold and toggle the scrollbar on/off, shifting the
+   whole page horizontally by its width — the "shake" when clicking
+   between templates, and part of why /new and /new?show=mine (different
+   content height, since one may need to scroll and the other may not)
+   ever rendered at very slightly different widths. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -1889,17 +1902,16 @@ button {
 }
 
 /* Two columns: the tile grid and a fixed-width detail panel, siblings —
-   the panel is never one of the grid's own items. Collapses to one
-   column via .no-panel when nothing is selected. */
+   the panel is never one of the grid's own items. .no-panel (nothing
+   selected) drops the panel from the DOM entirely but keeps the same
+   track sizing, so the grid column — and every tile's width, which is
+   aspect-ratio-driven off it — never changes based on whether a panel
+   happens to be showing. */
 .newgif-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 460px;
   gap: 32px;
   align-items: start;
-}
-
-.newgif-layout.no-panel {
-  grid-template-columns: 1fr;
 }
 
 .newgif-grid {
@@ -1930,11 +1942,15 @@ button {
   background: var(--surface);
 }
 
-/* Selection is a 3px accent outline on the thumbnail itself, offset by
-   2px — never a white ring, never around the name/sub-line below it. */
+/* Selection is a 3px accent outline on the thumbnail itself — never a
+   white ring, never around the name/sub-line below it. A negative
+   offset draws it *inside* the thumbnail's own box: a positive offset
+   (the original 2px) bled the ring outward past the tile's edge, making
+   the selected tile read as slightly bigger than its unselected
+   neighbors. */
 .newgif-template-thumb-wrap.selected {
   outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -3px;
 }
 
 .newgif-template-thumb {

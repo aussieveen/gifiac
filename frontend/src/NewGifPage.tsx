@@ -270,7 +270,7 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
       {loadError && <p className="export-error">{loadError}</p>}
       {uploadError && <p className="export-error">{uploadError}</p>}
 
-      <div className={`newgif-layout ${detail || detailLoading || detailError ? '' : 'no-panel'}`}>
+      <div className="newgif-layout">
         <div className="newgif-grid">
           <div
             className={`newgif-upload-tile ${dragActive ? 'drag-active' : ''}`}
