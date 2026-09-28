@@ -111,13 +111,13 @@ async fn run_pipeline(
         height: Some(result.height),
         external_url: None,
         user_id: owner_id.to_string(),
-        // Flow A (editing a video directly) never stamps lineage, even
-        // when `save_as_template` is checked below — lineage only ever
-        // points at a template *used* to start a gif (flow B), never one
-        // saved alongside an unrelated export.
+        // Unset at insert time — Flow A's `save_as_template` checkbox
+        // below backfills this via `db::set_gif_template_id` once the
+        // template row actually exists, since the template's id isn't
+        // known yet here.
         template_id: None,
     };
-    let gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
+    let mut gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 
     // SPEC.md §12's "Create template" checkbox — must happen inside this
     // same request, before the cleanup below, or that cleanup would
@@ -151,6 +151,13 @@ async fn run_pipeline(
         .await
         {
             tracing::warn!(video_id = %video.id, error = ?err, "failed to save template requested alongside export");
+        } else if let Some(template_id) = db::get_template_id(&state.pool, &video.id).await? {
+            // The gif that *produced* the template gets remix lineage to
+            // it too, same as any later gif started from it (Flow B) —
+            // otherwise "Remix this GIF" never shows on the one gif that
+            // made this template possible in the first place.
+            db::set_gif_template_id(&state.pool, &gif.id, &template_id).await?;
+            gif.template_id = Some(template_id);
         }
     }
 

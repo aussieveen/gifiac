@@ -311,6 +311,21 @@ pub async fn set_gif_public(pool: &PgPool, id: &str, owner_id: &str, is_public: 
         .map_err(Into::into)
 }
 
+/// Stamps a gif with the template it's now tied to — used only right after
+/// Flow A's "Also save as a template" checkbox (`exports::run_pipeline`)
+/// succeeds, so the gif that *produced* the template gets remix lineage to
+/// it too, not just later gifs started *from* it (Flow B, which already
+/// sets `template_id` at insert time). No ownership check: only called
+/// server-side, right after the same request already created both rows.
+pub async fn set_gif_template_id(pool: &PgPool, id: &str, template_id: &str) -> Result<()> {
+    sqlx::query("UPDATE gifs SET template_id = $1 WHERE id = $2")
+        .bind(template_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Bumps a gif's use counter (SPEC-CLOUD.md §8: copy-link, copy-embed, and
 /// download all fire this) — no ownership/visibility check, since the spec
 /// only requires "auth required," not "must be public or yours," and a

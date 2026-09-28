@@ -459,11 +459,12 @@ async fn template_export_from_a_private_template_you_dont_own_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-/// Flow A never stamps template lineage, even when `save_as_template` is
-/// checked — lineage only ever points at a template *used* to start a gif
-/// (flow B), never one saved alongside an unrelated export.
+/// Flow A stamps template lineage onto the gif that produced the template
+/// too, not just gifs later started *from* it (flow B) — the gif that made
+/// a template possible in the first place should offer "Remix this GIF"
+/// just as much as any of its descendants.
 #[tokio::test]
-async fn flow_a_export_never_stamps_template_lineage() {
+async fn flow_a_export_with_save_as_template_stamps_lineage_to_the_new_template() {
     let test_app = spawn_app().await;
     let fixture_dir = tempfile::TempDir::new().unwrap();
     let video_path = make_test_video(fixture_dir.path(), 3.0);
@@ -541,5 +542,8 @@ async fn flow_a_export_never_stamps_template_lineage() {
     let (last_event, last_data) = events.last().unwrap();
     assert_eq!(last_event, "complete");
     let gif: serde_json::Value = serde_json::from_str(last_data).unwrap();
-    assert!(gif["template_id"].is_null(), "flow A must never stamp template_id, even with save_as_template checked");
+    assert!(
+        gif["template_id"].is_string(),
+        "flow A with save_as_template checked must stamp the new template's id onto the gif"
+    );
 }
