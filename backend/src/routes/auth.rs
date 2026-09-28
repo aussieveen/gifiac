@@ -115,6 +115,54 @@ pub async fn callback(
     Ok((jar, Redirect::to(&format!("{}/", state.google_auth.app_base_url))))
 }
 
+// TEMPORARY, local-review-only: bypasses real Google OAuth (which can't
+// run against localhost) so the public-templates work can be clicked
+// through in a real browser. Not wired into any persistent config flag —
+// remove this before committing anything. Reuses the exact same
+// find-or-create-user + create-session + set-cookie shape `callback`
+// above does, just skipped the token exchange/userinfo fetch.
+#[derive(Debug, Deserialize)]
+pub struct DevLoginParams {
+    email: String,
+}
+
+pub async fn dev_login(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DevLoginParams>,
+) -> Result<impl IntoResponse, AppError> {
+    let now = Utc::now().to_rfc3339();
+    let user = match db::find_user_by_identity(&state.pool, "dev", &params.email).await? {
+        Some(existing) => existing,
+        None => {
+            let user_id = Uuid::new_v4().to_string();
+            db::create_user_with_identity(
+                &state.pool,
+                &user_id,
+                &now,
+                "dev",
+                &params.email,
+                Some(&params.email),
+                None,
+                Some("Local Dev User"),
+            )
+            .await?
+        }
+    };
+
+    let session_id = Uuid::new_v4().to_string();
+    db::create_session(&state.pool, &session_id, &user.id, &now).await?;
+
+    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, session_id))
+        .http_only(true)
+        .secure(state.google_auth.cookies_require_https())
+        .same_site(SameSite::Lax)
+        .path("/")
+        .max_age(CookieMaxAge::days(auth::SESSION_TTL_DAYS));
+
+    let jar = CookieJar::new().add(session_cookie);
+    Ok((jar, Redirect::to(&format!("{}/", state.google_auth.app_base_url))))
+}
+
 pub async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> Result<impl IntoResponse, AppError> {
     if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
         db::delete_session(&state.pool, cookie.value()).await?;

@@ -1072,10 +1072,6 @@ button {
 
 .editor-header {
   flex-shrink: 0;
-  /* min-height, not height: .editor-title-block can stack up to 4 rows
-     (label, input, the suggested-name button, source-info) when the name
-     is still empty and a suggestion is available — a fixed height clips
-     that instead of the header growing to fit it. */
   min-height: 72px;
   display: flex;
   align-items: center;
@@ -1119,116 +1115,11 @@ button {
   min-width: 0;
 }
 
-.editor-name-label-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.editor-name-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-subtle);
-}
-
-.editor-name-required-tag {
-  font-size: 11px;
+.editor-static-title {
+  margin: 0;
+  font-size: 18px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-}
-
-.editor-name-input-wrap {
-  position: relative;
-  width: 320px;
-  max-width: 100%;
-}
-
-.editor-name-input {
-  width: 100%;
-  height: 40px;
-  background: var(--surface);
-  border: 1px solid var(--border);
   color: var(--text);
-  font-family: var(--font-body);
-  font-size: 15px;
-  font-weight: 500;
-  border-radius: var(--radius);
-  padding: 0 32px 0 12px;
-}
-
-.editor-name-input:hover,
-.editor-name-input:focus {
-  border-color: var(--text-subtle);
-}
-
-.editor-name-input.error {
-  border: 2px solid var(--danger);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .editor-name-input.error {
-    animation: editor-name-shake 0.4s;
-  }
-}
-
-@keyframes editor-name-shake {
-  10%,
-  90% {
-    transform: translateX(-2px);
-  }
-  20%,
-  80% {
-    transform: translateX(4px);
-  }
-  30%,
-  50%,
-  70% {
-    transform: translateX(-6px);
-  }
-  40%,
-  60% {
-    transform: translateX(6px);
-  }
-}
-
-.editor-name-input::placeholder {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.editor-name-input-icon {
-  position: absolute;
-  top: 50%;
-  right: 12px;
-  transform: translateY(-50%);
-  color: var(--text-subtle);
-  pointer-events: none;
-}
-
-.editor-name-error {
-  margin: 0;
-  font-size: 13px;
-  color: var(--danger);
-}
-
-.editor-name-suggest {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  color: var(--accent);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.editor-name-suggest:hover {
-  text-decoration: underline;
 }
 
 .editor-source-info {
@@ -1632,52 +1523,198 @@ button {
 
 .editor-makegif-popover {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 12px);
   right: 0;
   z-index: 20;
-  width: 320px;
+  width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  gap: 16px;
+  background: var(--raised);
+  border: 1px solid #34353f;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
-.editor-makegif-popover-summary {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-subtle);
+/* The small arrow pointing up at the Make GIF button the popover is
+   anchored under — aligned to sit under the button, near the popover's
+   right edge (the popover itself is right-aligned to its anchor). */
+.editor-makegif-popover::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  right: 24px;
+  width: 12px;
+  height: 12px;
+  background: var(--raised);
+  border-left: 1px solid #34353f;
+  border-top: 1px solid #34353f;
+  transform: rotate(45deg);
+}
+
+.editor-makegif-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editor-makegif-title {
+  font-size: 17px;
+  font-weight: 700;
   margin: 0;
 }
 
-.editor-makegif-checkbox-row {
+.editor-makegif-summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+.editor-makegif-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor-makegif-field-label {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.editor-makegif-field-input {
+  height: 42px;
+  padding: 0 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.editor-makegif-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.25);
+}
+
+.editor-makegif-field-input.error {
+  border-color: var(--danger);
+}
+
+.editor-makegif-field-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+}
+
+/* The "Also save as a template" option — a single full-width toggle
+   card; checking it expands a second section within the same card. */
+.editor-makegif-template-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.editor-makegif-template-card.checked {
+  border-color: #4a4426;
+  background: #1f1d12;
+}
+
+.editor-makegif-template-card-toggle {
+  width: 100%;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
+  gap: 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.editor-makegif-checkbox-row input {
-  margin-top: 3px;
+.editor-makegif-checkbox {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.editor-makegif-checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.editor-makegif-template-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editor-makegif-template-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.editor-makegif-template-card-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.editor-makegif-template-card-help {
+  font-size: 13px;
+  color: var(--text-subtle);
 }
 
 .editor-makegif-template-fields {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-left: 4px;
-  border-left: 2px solid var(--border-subtle);
+  gap: 12px;
+  padding-left: 48px;
+}
+
+.editor-makegif-public-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editor-makegif-public-row .archive-switch {
+  width: 44px;
+  height: 26px;
 }
 
 .editor-makegif-popover-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
+}
+
+.editor-makegif-popover-actions .btn {
+  height: 44px;
+  padding: 0 18px;
+  font-size: 14px;
+  border-radius: var(--radius);
 }
 
 .editor-zoom-controls {
@@ -1760,28 +1797,6 @@ button {
   border-color: var(--accent);
 }
 
-.video-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-/* Public templates, pass 2: the New GIF page's "Upload a video" tile,
-   styled to sit alongside template cards in the same grid. */
-.video-card-upload {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: 4 / 3;
-  padding: 0;
-}
-
-.video-card-upload .dropzone-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
 .video-card-select {
   width: 100%;
   display: flex;
@@ -1838,6 +1853,364 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------- new gif page (public templates) ---------- */
+
+.newgif-pills {
+  display: flex;
+  gap: 6px;
+  margin: 20px 0;
+}
+
+.newgif-pill {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.newgif-pill.selected {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+
+.newgif-pill-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Two columns: the tile grid and a fixed-width detail panel, siblings —
+   the panel is never one of the grid's own items. Collapses to one
+   column via .no-panel when nothing is selected. */
+.newgif-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 460px;
+  gap: 32px;
+  align-items: start;
+}
+
+.newgif-layout.no-panel {
+  grid-template-columns: 1fr;
+}
+
+.newgif-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+/* A tile has no card wrapper — the thumbnail itself is the tile (16:10,
+   rounded, no border/padding); name + sub-line sit below it as plain
+   text, not inside a bordered box. */
+.newgif-template-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+}
+
+.newgif-template-thumb-wrap {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* Selection is a 3px accent outline on the thumbnail itself, offset by
+   2px — never a white ring, never around the name/sub-line below it. */
+.newgif-template-thumb-wrap.selected {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.newgif-template-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.newgif-template-thumb-caption {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 10px;
+  font-size: 17px;
+  text-align: center;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.newgif-template-duration {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(12, 12, 15, 0.85);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.newgif-template-name {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.newgif-template-subline {
+  font-size: 12px;
+  color: var(--text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.newgif-upload-tile {
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius);
+  border: 2px dashed #3a3b46;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.newgif-upload-tile.drag-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+
+.newgif-upload-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.newgif-upload-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #2a2716;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.newgif-upload-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.newgif-upload-subtitle {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.newgif-empty {
+  grid-column: 2 / -1;
+  padding: 8px 4px;
+}
+
+.newgif-empty-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.newgif-empty-subtitle {
+  font-size: 14px;
+  color: var(--text-subtle);
+  margin: 0;
+}
+
+/* Consistent 18px rhythm between preview / name block / captions block /
+   start button (and, for an owner, the settings row / divider / delete
+   button that follow) — one flex gap, no per-section overrides. */
+.newgif-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.newgif-panel-preview-wrap {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+}
+
+.newgif-panel-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.newgif-panel-preview-caption {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  font-size: 32px;
+  text-align: center;
+  line-height: 1.1;
+}
+
+.newgif-panel-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(12, 12, 15, 0.75);
+  border: none;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.newgif-panel-name-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.newgif-panel-name-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.newgif-panel-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.newgif-panel-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  font-weight: 700;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 2px 8px;
+}
+
+.newgif-panel-rename-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.newgif-panel-rename-btn:hover {
+  color: var(--text);
+}
+
+.newgif-panel-owner {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.newgif-panel-owner-handle {
+  color: var(--text);
+}
+
+.newgif-panel-captions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.newgif-panel-captions-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.newgif-caption-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.newgif-caption-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.newgif-start-btn {
+  width: 100%;
+  height: 52px;
+}
+
+.newgif-panel-divider {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 0;
 }
 
 /* ---------- archive (My Library) ---------- */

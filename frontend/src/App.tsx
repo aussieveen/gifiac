@@ -202,7 +202,16 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
 function FromTemplateRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
   const { templateId } = useParams<{ templateId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const canEdit = useCanEdit()
+  // Only set when this route was reached via a GIF's "Remix this GIF"
+  // link (Archive.tsx/Library.tsx pass it as router state) — threaded
+  // through to the editor so its header can read "Remix of: <name>"
+  // instead of "From template: <name>".
+  const remixOfName =
+    typeof (location.state as { remixOfName?: unknown } | null)?.remixOfName === 'string'
+      ? (location.state as { remixOfName: string }).remixOfName
+      : undefined
   const [hasMountedEditor, setHasMountedEditor] = useState(false)
   const [template, setTemplate] = useState<TemplateDetail | null>(null)
   const [filmstrip, setFilmstrip] = useState<FilmstripMeta | null>(null)
@@ -263,7 +272,7 @@ function FromTemplateRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void 
 
   return (
     <CaptionEditor
-      source={{ kind: 'template', template }}
+      source={{ kind: 'template', template, remixOfName }}
       filmstrip={filmstrip}
       onBack={backToPicker}
       onGifCreated={onGifCreated}

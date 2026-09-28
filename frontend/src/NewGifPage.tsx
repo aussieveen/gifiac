@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   deleteTemplateById,
   getTemplateDetail,
@@ -9,7 +10,7 @@ import {
   templateThumbnailUrl,
   uploadVideo,
 } from './api'
-import { PlusIcon, TrashIcon } from './icons'
+import { PencilIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import type { TemplateDetail, TemplateSummary, Video } from './types'
 
 interface Props {
@@ -20,19 +21,30 @@ interface Props {
   onStartFromTemplate: (templateId: string) => void
 }
 
-type Tab = 'mine' | 'others'
+type Pill = 'all' | 'mine' | 'shared'
+
+/** A `TemplateSummary` tagged with whether the current viewer owns it —
+ * needed once "All" merges both lists, since the sub-line and detail-pane
+ * owner controls both depend on it. */
+interface DisplayTemplate extends TemplateSummary {
+  isOwn: boolean
+}
+
+function parsePill(value: string | null): Pill {
+  return value === 'mine' || value === 'shared' ? value : 'all'
+}
 
 /**
- * The redesigned "New GIF" page — public templates, pass 2. Replaces the
- * old video-picker's list of previously-uploaded videos entirely
- * (uploading is now a one-shot, single-session action; a saved template
- * is the only way to revisit footage later) with a templates browser: an
- * "Upload a video" tile plus two tabs, own templates and public ones from
- * other users, each opening a detail pane with a "Start from template"
- * action.
+ * The redesigned "New GIF" page — public templates, pass 2 (Flow 2 mock).
+ * Three pills (All / Mine / Shared, URL-synced via `?show=`) over a
+ * borderless thumbnail grid — the "Upload a video" tile always leads —
+ * with a detail panel showing the selected template's preview, captions,
+ * and (owner-only) rename/share/delete controls.
  */
 export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
-  const [tab, setTab] = useState<Tab>('mine')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const pill = parsePill(searchParams.get('show'))
+
   const [myTemplates, setMyTemplates] = useState<TemplateSummary[]>([])
   const [otherTemplates, setOtherTemplates] = useState<TemplateSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -43,20 +55,32 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
 
+  const [renaming, setRenaming] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
   const [togglingPublic, setTogglingPublic] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [dragActive, setDragActive] = useState(false)
+
+  const mine: DisplayTemplate[] = myTemplates.map((t) => ({ ...t, isOwn: true }))
+  const shared: DisplayTemplate[] = otherTemplates.map((t) => ({ ...t, isOwn: false }))
+  const all: DisplayTemplate[] = [...mine, ...shared].sort((a, b) => (a.saved_at < b.saved_at ? 1 : -1))
+  const listFor = (p: Pill) => (p === 'mine' ? mine : p === 'shared' ? shared : all)
+  const templates = listFor(pill)
 
   useEffect(() => {
     let cancelled = false
     Promise.all([listMyTemplates(), listOtherTemplates()])
-      .then(([mine, others]) => {
+      .then(([myList, otherList]) => {
         if (cancelled) return
-        setMyTemplates(mine)
-        setOtherTemplates(others)
+        setMyTemplates(myList)
+        setOtherTemplates(otherList)
+        const initial = pill === 'mine' ? myList : pill === 'shared' ? otherList : [...myList, ...otherList]
+        setSelectedId(initial.length > 0 ? initial[0].id : null)
       })
       .catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -67,6 +91,9 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     return () => {
       cancelled = true
     }
+    // Only ever runs once on mount — the initial pill is read once here;
+    // switching pills afterward goes through selectPill below instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -78,6 +105,7 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     setDetailLoading(true)
     setDetailError(null)
     setActionError(null)
+    setRenaming(false)
     getTemplateDetail(selectedId)
       .then((d) => {
         if (!cancelled) setDetail(d)
@@ -92,6 +120,46 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
       cancelled = true
     }
   }, [selectedId])
+
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.focus()
+  }, [renaming])
+
+  // Whole-page drop target, in addition to the upload tile itself.
+  useEffect(() => {
+    function onDragOver(e: DragEvent) {
+      e.preventDefault()
+      setDragActive(true)
+    }
+    function onDragLeave(e: DragEvent) {
+      if (!e.relatedTarget) setDragActive(false)
+    }
+    function onDrop(e: DragEvent) {
+      e.preventDefault()
+      setDragActive(false)
+      handleFiles(e.dataTransfer?.files ?? null)
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function selectPill(next: Pill) {
+    setSearchParams(next === 'all' ? {} : { show: next }, { replace: true })
+    const list = listFor(next)
+    // Keep the current selection if it's still in the new list; otherwise
+    // fall back to that list's first template.
+    setSelectedId((current) => {
+      if (current && list.some((t) => t.id === current)) return current
+      return list.length > 0 ? list[0].id : null
+    })
+  }
 
   async function handleFiles(files: FileList | null) {
     const file = files?.[0]
@@ -108,9 +176,16 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     }
   }
 
-  async function rename(newName: string) {
+  function startRename() {
     if (!detail) return
-    const trimmed = newName.trim()
+    setNameDraft(detail.name)
+    setRenaming(true)
+  }
+
+  async function saveRename() {
+    if (!detail) return
+    const trimmed = nameDraft.trim()
+    setRenaming(false)
     if (!trimmed || trimmed === detail.name) return
     setActionError(null)
     try {
@@ -153,167 +228,225 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     }
   }
 
-  const templates = tab === 'mine' ? myTemplates : otherTemplates
-
   return (
-    <div className="page">
+    <div className="page newgif-page">
       <h1 className="page-title">New GIF</h1>
       <p className="subtitle">Upload a video to start from scratch, or pick a template to change.</p>
 
-      <div className="mode-toggle" role="group" aria-label="Template source">
+      <div className="newgif-pills" role="tablist" aria-label="Template source">
         <button
           type="button"
-          className={tab === 'mine' ? 'active' : ''}
-          onClick={() => {
-            setTab('mine')
-            setSelectedId(null)
-          }}
+          role="tab"
+          aria-selected={pill === 'all'}
+          className={`newgif-pill ${pill === 'all' ? 'selected' : ''}`}
+          onClick={() => selectPill('all')}
         >
-          My templates
-          <span className="archive-count">{myTemplates.length}</span>
+          All
+          <span className="newgif-pill-count">{all.length}</span>
         </button>
         <button
           type="button"
-          className={tab === 'others' ? 'active' : ''}
-          onClick={() => {
-            setTab('others')
-            setSelectedId(null)
-          }}
+          role="tab"
+          aria-selected={pill === 'mine'}
+          className={`newgif-pill ${pill === 'mine' ? 'selected' : ''}`}
+          onClick={() => selectPill('mine')}
         >
-          From others
-          <span className="archive-count">{otherTemplates.length}</span>
+          Mine
+          <span className="newgif-pill-count">{mine.length}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pill === 'shared'}
+          className={`newgif-pill ${pill === 'shared' ? 'selected' : ''}`}
+          onClick={() => selectPill('shared')}
+        >
+          Shared
+          <span className="newgif-pill-count">{shared.length}</span>
         </button>
       </div>
 
       {loading && <p className="va-hint">Loading templates…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
+      {uploadError && <p className="export-error">{uploadError}</p>}
 
-      <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
-        <div className="video-grid">
-          {tab === 'mine' && (
-            <div
-              className="dropzone video-card video-card-upload"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault()
-                handleFiles(e.dataTransfer.files)
-              }}
+      <div className={`newgif-layout ${detail || detailLoading || detailError ? '' : 'no-panel'}`}>
+        <div className="newgif-grid">
+          <div
+            className={`newgif-upload-tile ${dragActive ? 'drag-active' : ''}`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault()
+              handleFiles(e.dataTransfer.files)
+            }}
+          >
+            {uploading ? (
+              <span className="newgif-upload-title">Uploading…</span>
+            ) : (
+              <label className="newgif-upload-label">
+                <span className="newgif-upload-icon">
+                  <PlusIcon size={18} />
+                </span>
+                <span className="newgif-upload-title">Upload a video</span>
+                <span className="newgif-upload-subtitle">or drop it anywhere</span>
+                <input type="file" accept="video/*" onChange={(e) => handleFiles(e.target.files)} hidden />
+              </label>
+            )}
+          </div>
+
+          {templates.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className="newgif-template-tile"
+              onClick={() => setSelectedId(t.id)}
+              aria-pressed={selectedId === t.id}
             >
-              {uploading ? (
-                <span>Uploading…</span>
+              <span className={`newgif-template-thumb-wrap ${selectedId === t.id ? 'selected' : ''}`}>
+                <img src={templateThumbnailUrl(t.id)} alt="" className="newgif-template-thumb" />
+                {t.first_caption_text && (
+                  <span className="newgif-template-thumb-caption caption-text">{t.first_caption_text}</span>
+                )}
+                <span className="newgif-template-duration">{t.duration_seconds.toFixed(1)}s</span>
+              </span>
+              <span className="newgif-template-name">{t.name}</span>
+              <span className="newgif-template-subline">
+                {t.caption_count} caption{t.caption_count === 1 ? '' : 's'}
+                {!t.isOwn && t.owner_handle ? ` · shared by @${t.owner_handle}` : ''}
+              </span>
+            </button>
+          ))}
+
+          {!loading && templates.length === 0 && (
+            <div className="newgif-empty">
+              {pill === 'shared' ? (
+                <>
+                  <p className="newgif-empty-title">Nobody has shared a template yet.</p>
+                  <p className="newgif-empty-subtitle">Public templates from other people will show up here.</p>
+                </>
               ) : (
-                <label className="dropzone-label">
-                  <PlusIcon size={20} />
-                  Upload a video
-                  <span className="va-hint">or drop it anywhere</span>
-                  <input type="file" accept="video/*" onChange={(e) => handleFiles(e.target.files)} hidden />
-                </label>
+                <>
+                  <p className="newgif-empty-title">No templates yet</p>
+                  <p className="newgif-empty-subtitle">
+                    When you make a GIF, tick "Also save as a template" to keep its captions for next time.
+                  </p>
+                </>
               )}
             </div>
-          )}
-          {templates.map((t) => (
-            <div key={t.id} className={`video-card ${selectedId === t.id ? 'selected' : ''}`}>
-              <button type="button" className="video-card-select" onClick={() => setSelectedId(t.id)}>
-                <img src={templateThumbnailUrl(t.id)} alt={t.name} />
-                <span className="video-card-badge-template">{t.duration_seconds.toFixed(1)}s</span>
-                <span className="video-card-name">{t.name}</span>
-                <span className="va-hint">
-                  {t.caption_count} caption{t.caption_count === 1 ? '' : 's'}
-                  {t.owner_handle ? ` · by ${t.owner_handle}` : ''}
-                </span>
-              </button>
-            </div>
-          ))}
-          {!loading && templates.length === 0 && tab === 'others' && (
-            <p className="va-hint">No public templates from other users yet.</p>
           )}
         </div>
 
-        <div className="archive-panel">
-          {uploadError && <p className="export-error">{uploadError}</p>}
-          {!selectedId ? (
-            <div className="archive-panel-empty">
-              <p className="va-hint">Select a template to view details and start a GIF.</p>
-            </div>
-          ) : detailLoading ? (
-            <p className="va-hint">Loading template…</p>
-          ) : detailError ? (
-            <p className="export-error">{detailError}</p>
-          ) : detail ? (
-            <>
-              <div className="archive-panel-preview-wrap">
-                <img
-                  key={detail.id}
-                  className="archive-panel-preview"
-                  src={templateThumbnailUrl(detail.id)}
-                  alt={`${detail.name} preview`}
-                />
-              </div>
-              <div className="archive-panel-header">
-                {detail.is_own ? (
-                  <input
-                    className="archive-panel-name"
-                    aria-label="Template name"
-                    defaultValue={detail.name}
-                    key={`name-${detail.id}`}
-                    onBlur={(e) => rename(e.target.value)}
+        {(detail || detailLoading || detailError) && (
+          <div className="newgif-panel">
+            {detailLoading ? (
+              <p className="va-hint">Loading template…</p>
+            ) : detailError ? (
+              <p className="export-error">{detailError}</p>
+            ) : detail ? (
+              <>
+                <div className="newgif-panel-preview-wrap">
+                  <img
+                    key={detail.id}
+                    className="newgif-panel-preview"
+                    src={templateThumbnailUrl(detail.id)}
+                    alt={`${detail.name} preview`}
                   />
-                ) : (
-                  <p className="archive-panel-title-text">{detail.name}</p>
-                )}
-              </div>
+                  {detail.captions[0]?.text.trim() && (
+                    <span className="newgif-panel-preview-caption caption-text">{detail.captions[0].text.trim()}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="newgif-panel-close"
+                    aria-label="Close"
+                    onClick={() => setSelectedId(null)}
+                  >
+                    <XIcon size={14} />
+                  </button>
+                </div>
 
-              {!detail.is_own && detail.owner_handle && <p className="va-hint">by {detail.owner_handle}</p>}
-
-              {actionError && <p className="export-error">{actionError}</p>}
-
-              {detail.captions.length > 0 && (
-                <>
-                  <p className="va-hint">Captions in this template — you can change them</p>
-                  <div className="archive-chips" aria-hidden="true">
-                    {detail.captions.map((c) => (
-                      <span key={c.id} className="archive-chip">
-                        {c.text || '(empty)'}
-                      </span>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              <button type="button" className="btn btn-primary" onClick={() => onStartFromTemplate(detail.id)}>
-                Start from template
-              </button>
-
-              {detail.is_own && (
-                <>
-                  <div className="archive-settings-list">
-                    <div className="archive-settings-row">
-                      <div>
-                        <p className="archive-settings-title">Public</p>
-                        <p className="archive-settings-help">Others can find it under "From others"</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={detail.is_public}
-                        aria-label="Public"
-                        className={`archive-switch ${detail.is_public ? 'on' : ''}`}
-                        disabled={togglingPublic}
-                        onClick={togglePublic}
-                      >
-                        <span className="archive-switch-knob" />
+                <div className="newgif-panel-name-block">
+                  <div className="newgif-panel-name-row">
+                    {renaming ? (
+                      <input
+                        ref={renameInputRef}
+                        className="newgif-panel-name-input"
+                        aria-label="Template name"
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        onBlur={saveRename}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                          if (e.key === 'Escape') setRenaming(false)
+                        }}
+                      />
+                    ) : (
+                      <h2 className="newgif-panel-name">{detail.name}</h2>
+                    )}
+                    {detail.is_own && !renaming && (
+                      <button type="button" className="newgif-panel-rename-btn" aria-label="Rename template" onClick={startRename}>
+                        <PencilIcon size={14} />
                       </button>
+                    )}
+                  </div>
+                  {!detail.is_own && detail.owner_handle && (
+                    <p className="newgif-panel-owner">
+                      Shared by <span className="newgif-panel-owner-handle">@{detail.owner_handle}</span>
+                    </p>
+                  )}
+                </div>
+
+                {actionError && <p className="export-error">{actionError}</p>}
+
+                {detail.captions.length > 0 && (
+                  <div className="newgif-panel-captions">
+                    <p className="newgif-panel-captions-label">Captions in this template · you can change them</p>
+                    <div className="newgif-caption-chips">
+                      {detail.captions.map((c) => (
+                        <span key={c.id} className="newgif-caption-chip">
+                          {c.text.trim() || '(empty)'}
+                        </span>
+                      ))}
                     </div>
                   </div>
-                  <button type="button" className="btn btn-secondary archive-panel-delete" disabled={deleting} onClick={handleDelete}>
-                    <TrashIcon size={14} />
-                    Delete template
-                  </button>
-                </>
-              )}
-            </>
-          ) : null}
-        </div>
+                )}
+
+                <button type="button" className="btn btn-primary newgif-start-btn" onClick={() => onStartFromTemplate(detail.id)}>
+                  <PencilIcon size={16} />
+                  Start from template
+                </button>
+
+                {detail.is_own && (
+                  <>
+                    <div className="archive-settings-list">
+                      <div className="archive-settings-row">
+                        <div>
+                          <p className="archive-settings-title">Share template</p>
+                          <p className="archive-settings-help">Everyone can find it under Shared</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={detail.is_public}
+                          aria-label="Share template"
+                          className={`archive-switch ${detail.is_public ? 'on' : ''}`}
+                          disabled={togglingPublic}
+                          onClick={togglePublic}
+                        >
+                          <span className="archive-switch-knob" />
+                        </button>
+                      </div>
+                    </div>
+                    <hr className="newgif-panel-divider" />
+                    <button type="button" className="btn btn-danger" disabled={deleting} onClick={handleDelete}>
+                      <TrashIcon size={14} />
+                      {deleting ? 'Deleting…' : 'Delete template'}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   )

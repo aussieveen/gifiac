@@ -2,23 +2,34 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CaptionEditor } from './CaptionEditor'
-import type { FilmstripMeta, Video } from './types'
+import type { FilmstripMeta, TemplateDetail, Video } from './types'
 
-/** Opens the "Make GIF" popover and clicks its own submit button —
- * both accessible names are "Make GIF" (or "Make GIF & save template"
- * once the checkbox is checked), so the inner one is scoped to the
- * popover's `role="dialog"` to disambiguate. Assumes a name has already
- * been entered (an empty name never opens the popover at all). */
-async function clickMakeGif(user: ReturnType<typeof userEvent.setup>) {
+/** Opens the "Make GIF" dialog. Naming lives entirely inside it now — no
+ * header-level name field exists to type into first. */
+async function openMakeGifDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: 'Make GIF' }))
-  const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+  return screen.findByRole('dialog', { name: 'Make GIF' })
+}
+
+/** Opens the dialog, optionally types `name` into its own GIF name field,
+ * then submits — the common path most export-related tests need. Omit
+ * `name` to submit with whatever the field already holds (e.g. empty, to
+ * exercise the validation error). */
+async function makeGif(user: ReturnType<typeof userEvent.setup>, name?: string) {
+  const dialog = await openMakeGifDialog(user)
+  if (name !== undefined) {
+    await user.type(within(dialog).getByLabelText('GIF name'), name)
+  }
   await user.click(within(dialog).getByRole('button', { name: /Make GIF/ }))
+  return dialog
 }
 
 vi.mock('./api', () => ({
   createExport: vi.fn(),
+  createTemplateExport: vi.fn(),
   subscribeExportProgress: vi.fn(),
   videoFileUrl: (id: string) => `/api/videos/${id}/file`,
+  templateClipUrl: (id: string) => `/api/templates/${id}/clip`,
   getTemplate: vi.fn(),
   putTemplate: vi.fn(),
 }))
@@ -47,6 +58,19 @@ const filmstrip: FilmstripMeta = {
   imageUrl: '/api/videos/v1/filmstrip.jpg',
 }
 
+const templateDetail: TemplateDetail = {
+  id: 't1',
+  name: 'One-line change',
+  is_public: false,
+  saved_at: '2026-01-01T00:00:00Z',
+  duration_seconds: 8.2,
+  width: 160,
+  height: 90,
+  captions: [],
+  owner_handle: null,
+  is_own: true,
+}
+
 beforeEach(() => {
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
@@ -60,36 +84,71 @@ afterEach(() => {
 })
 
 describe('CaptionEditor', () => {
-  it('starts with no captions, and Make GIF stays enabled but explains it needs a name', () => {
+  it('renders no name input in the header — naming happens only in the Make GIF dialog', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
+    expect(screen.getByText('New GIF')).toBeInTheDocument()
+  })
+
+  it('shows the upload source in the header for flow A', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(screen.getByText('clip.mp4 · 160×90 · 8.0s')).toBeInTheDocument()
+  })
+
+  it('shows "From template: <name>" in the header when reached via the New GIF page', () => {
+    render(<CaptionEditor source={{ kind: 'template', template: templateDetail }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    expect(screen.getByText('From template: One-line change · 160×90 · 8.2s')).toBeInTheDocument()
+  })
+
+  it('shows "Remix of: <gif name>" in the header when reached via a GIF\'s Remix button', () => {
+    render(
+      <CaptionEditor
+        source={{ kind: 'template', template: templateDetail, remixOfName: 'my old gif' }}
+        filmstrip={filmstrip}
+        onBack={() => {}}
+      />,
+    )
+
+    expect(screen.getByText('Remix of: my old gif · 160×90 · 8.2s')).toBeInTheDocument()
+  })
+
+  it('starts with no captions, and Make GIF stays enabled — the dialog opens regardless of whether a name is filled in yet', () => {
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
 
     expect(screen.getByText(/select a caption on the timeline/i)).toBeInTheDocument()
     const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
     expect(makeGifButton).toBeEnabled()
-    expect(makeGifButton).toHaveAttribute('title', 'Name your GIF first')
+    expect(makeGifButton).not.toHaveAttribute('title')
   })
 
-  it('clicking Make GIF with an empty name focuses the field and shows an error, without starting an export', async () => {
+  it('the dialog opens with an empty name; submitting from it focuses the field and shows an error, without starting an export', async () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
 
-    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    const dialog = await openMakeGifDialog(user)
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
 
-    const nameInput = screen.getByLabelText('GIF name')
+    await user.click(within(dialog).getByRole('button', { name: 'Make GIF' }))
+
+    const nameInput = within(dialog).getByLabelText('GIF name')
     expect(nameInput).toHaveFocus()
-    expect(screen.getByRole('alert')).toHaveTextContent('Give your GIF a name before making it')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Give your GIF a name before making it')
     expect(createExport).not.toHaveBeenCalled()
   })
 
-  it('typing a name clears the empty-name error', async () => {
+  it('typing a name in the dialog clears its empty-name error', async () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
-    expect(screen.getByRole('alert')).toBeInTheDocument()
+    const dialog = await openMakeGifDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Make GIF' }))
+    expect(within(dialog).getByRole('alert')).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
+    await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
 
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('adding a caption selects it and shows it in the style panel', async () => {
@@ -120,8 +179,7 @@ describe('CaptionEditor', () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
 
     await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(createExport).mock.calls[0][0]
@@ -175,8 +233,7 @@ describe('CaptionEditor', () => {
     await user.click(screen.getByRole('switch', { name: /outline/i }))
     expect(screen.queryByLabelText('Outline color')).not.toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
     expect(vi.mocked(createExport).mock.calls[0][0].captions[0].outlineColor).toBeNull()
   })
@@ -242,10 +299,7 @@ describe('CaptionEditor', () => {
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
     const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
-    await user.type(screen.getByLabelText('GIF name'), '  my clip  ')
-    expect(makeGifButton).not.toHaveAttribute('title')
-
-    await clickMakeGif(user)
+    await makeGif(user, '  my clip  ')
 
     await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(createExport).mock.calls[0][0]
@@ -269,8 +323,7 @@ describe('CaptionEditor', () => {
     })
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     act(() => handlers.onProgress?.('encoding_gif', 42))
@@ -312,8 +365,7 @@ describe('CaptionEditor', () => {
     const onGifCreated = vi.fn()
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} onGifCreated={onGifCreated} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     const gif = {
@@ -327,8 +379,8 @@ describe('CaptionEditor', () => {
       width: 480,
       height: 270,
       external_url: null,
-        is_one_off: false,
-        is_public: false,
+      is_one_off: false,
+      is_public: false,
       use_count: 0,
       is_favourited: false,
       template_id: null,
@@ -340,16 +392,87 @@ describe('CaptionEditor', () => {
     expect(onGifCreated).toHaveBeenCalledWith(gif)
   })
 
-  it('the Make GIF popover offers "Also save as a template", unchecked by default', async () => {
+  it('the Make GIF dialog offers "Also save as a template", unchecked by default', async () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
 
-    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    await openMakeGifDialog(user)
 
-    const checkbox = await screen.findByRole('checkbox', { name: /also save as a template/i })
+    const checkbox = screen.getByRole('checkbox', { name: /also save as a template/i })
     expect(checkbox).not.toBeChecked()
     expect(screen.queryByLabelText('Template name')).not.toBeInTheDocument()
+  })
+
+  it('flow B (a template source) never shows the "Also save as a template" option, even for the template\'s own creator', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'template', template: templateDetail }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    await openMakeGifDialog(user)
+
+    expect(screen.queryByRole('checkbox', { name: /also save as a template/i })).not.toBeInTheDocument()
+  })
+
+  it('opening the dialog moves focus to its own GIF name field', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    const dialog = await openMakeGifDialog(user)
+
+    expect(within(dialog).getByLabelText('GIF name')).toHaveFocus()
+  })
+
+  it('autofocuses the name field with the cursor at the end of any existing text', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    let dialog = await openMakeGifDialog(user)
+    await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
+    dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+
+    const nameInput = within(dialog).getByLabelText('GIF name') as HTMLInputElement
+    expect(nameInput).toHaveFocus()
+    expect(nameInput.selectionStart).toBe(nameInput.value.length)
+    expect(nameInput.selectionEnd).toBe(nameInput.value.length)
+  })
+
+  it('Escape closes the dialog and returns focus to the Make GIF button', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
+    await user.click(makeGifButton)
+    await screen.findByRole('dialog', { name: 'Make GIF' })
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: 'Make GIF' })).not.toBeInTheDocument()
+    expect(makeGifButton).toHaveFocus()
+  })
+
+  it('Cancel closes the dialog and returns focus to the Make GIF button', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const makeGifButton = screen.getByRole('button', { name: 'Make GIF' })
+    await user.click(makeGifButton)
+    const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Make GIF' })).not.toBeInTheDocument()
+    expect(makeGifButton).toHaveFocus()
+  })
+
+  it('the dialog summary omits the GIF name and shows duration, caption count, and dimensions', async () => {
+    const user = userEvent.setup()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
+
+    const dialog = await openMakeGifDialog(user)
+    await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
+
+    expect(dialog).not.toHaveTextContent('my clip')
+    expect(dialog).toHaveTextContent('8.0s · 1 caption · 160×90')
   })
 
   it('pre-fills captions and the GIF range from a saved template', async () => {
@@ -398,13 +521,12 @@ describe('CaptionEditor', () => {
     })
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await user.click(screen.getByRole('button', { name: 'Make GIF' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+    const dialog = await openMakeGifDialog(user)
+    await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
     await user.click(within(dialog).getByRole('checkbox', { name: /also save as a template/i }))
     await user.clear(within(dialog).getByLabelText('Template name'))
     await user.type(within(dialog).getByLabelText('Template name'), 'my template')
-    await user.click(within(dialog).getByRole('checkbox', { name: /public template/i }))
+    await user.click(within(dialog).getByRole('switch', { name: /share template/i }))
     await user.click(within(dialog).getByRole('button', { name: 'Make GIF & save template' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
@@ -446,8 +568,7 @@ describe('CaptionEditor', () => {
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
 
     await waitFor(() => expect(createExport).toHaveBeenCalled())
     expect(createExport).toHaveBeenCalledWith(expect.objectContaining({ save_as_template: false }))
@@ -462,8 +583,7 @@ describe('CaptionEditor', () => {
     })
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     act(() =>
@@ -496,8 +616,7 @@ describe('CaptionEditor', () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
 
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
 
     await screen.findByText(/not found/i)
   })
@@ -511,8 +630,7 @@ describe('CaptionEditor', () => {
     })
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     act(() => handlers.onError?.('ffmpeg exploded'))
@@ -527,8 +645,7 @@ describe('CaptionEditor', () => {
     vi.mocked(subscribeExportProgress).mockReturnValue(unsubscribe)
     const user = userEvent.setup()
     const { unmount } = render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
-    await clickMakeGif(user)
+    await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
     unmount()
@@ -876,30 +993,11 @@ describe('CaptionEditor', () => {
     expect(screen.getByText(/Trim 4\.00s → 8\.00s/)).toBeInTheDocument()
   })
 
-  it('autofocuses the (always-empty-on-open) name field', () => {
-    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-
-    expect(screen.getByLabelText('GIF name')).toHaveFocus()
-  })
-
   it('labels the font-size slider "Size", matching "Line height"', async () => {
     const user = userEvent.setup()
     render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
     expect(screen.getByText('Size')).toBeInTheDocument()
-  })
-
-  it('offers a suggested name built from the first caption, and fills the field on click', async () => {
-    const user = userEvent.setup()
-    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
-    await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
-    await user.clear(screen.getByLabelText('Caption text'))
-    await user.type(screen.getByLabelText('Caption text'), 'a bold new gif')
-
-    const suggestion = screen.getByRole('button', { name: /use "a bold new gif"/i })
-    await user.click(suggestion)
-
-    expect(screen.getByLabelText('GIF name')).toHaveValue('A bold new gif')
   })
 })

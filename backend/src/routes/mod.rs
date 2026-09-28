@@ -16,6 +16,9 @@ use crate::state::AppState;
 
 pub fn api_router() -> Router<Arc<AppState>> {
     Router::new()
+        // TEMPORARY, local-review-only — see routes::auth::dev_login's doc
+        // comment. Remove before committing anything.
+        .route("/auth/dev-login", get(auth::dev_login))
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))

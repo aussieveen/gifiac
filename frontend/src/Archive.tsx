@@ -734,7 +734,11 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   (a public template from someone else can be remixed from
                   their gif too). */}
               {canEdit && selected.template_id && selected.template_remixable && (
-                <Link className="archive-remix-action" to={`/from-template/${selected.template_id}`}>
+                <Link
+                  className="archive-remix-action"
+                  to={`/from-template/${selected.template_id}`}
+                  state={{ remixOfName: selected.name }}
+                >
                   <PencilIcon size={14} className="archive-remix-action-icon" />
                   <span className="archive-remix-action-copy">
                     <strong>Remix this GIF</strong>

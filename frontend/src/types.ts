@@ -56,6 +56,10 @@ export interface TemplateSummary {
   saved_at: string
   duration_seconds: number
   caption_count: number
+  // The first caption's text (already trimmed), if any — overlaid on the
+  // tile's thumbnail in the caption style so templates are tellable apart
+  // while browsing, without opening each one.
+  first_caption_text: string | null
   // Only ever set on an "others" row — `null` for your own templates,
   // which need no attribution shown.
   owner_handle: string | null

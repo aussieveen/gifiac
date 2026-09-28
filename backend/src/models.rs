@@ -325,6 +325,10 @@ pub struct TemplateSummary {
     pub saved_at: String,
     pub duration_seconds: f64,
     pub caption_count: usize,
+    /// The first caption's text (trimmed), if any — the New GIF page's
+    /// tile overlays this on the thumbnail in the caption style, so a
+    /// browsing user can tell templates apart without opening each one.
+    pub first_caption_text: Option<String>,
     pub owner_handle: Option<String>,
 }
 

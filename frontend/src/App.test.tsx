@@ -368,10 +368,10 @@ describe('App', () => {
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
     await screen.findByText(/clip\.mp4/)
-    await user.type(screen.getByLabelText('GIF name'), 'my clip')
     vi.mocked(listGifs).mockResolvedValue([createdGif])
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
     const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
+    await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
     await user.click(within(dialog).getByRole('button', { name: 'Make GIF' }))
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 

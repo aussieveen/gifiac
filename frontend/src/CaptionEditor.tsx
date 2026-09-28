@@ -6,15 +6,15 @@ import {
   AlignLeftIcon,
   AlignRightIcon,
   ArrowLeftIcon,
+  BookmarkIcon,
+  CheckIcon,
   MinusIcon,
   PauseIcon,
-  PencilIcon,
   PlayheadIcon,
   PlayIcon,
   PlusIcon,
   XIcon,
 } from './icons'
-import { suggestNameFrom } from './suggestName'
 import { centeredScrollLeft, clamp, linesFromCharTops, snapValue, spriteBackgroundStyle, timeToX, xToTime } from './timeline'
 import type { Caption, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
 import { useWindowDrag } from './useWindowDrag'
@@ -120,7 +120,18 @@ const MIN_TRANSPORT_WIDTH = 480
  * inspector logic is identical either way — only the trim-range editing
  * UI, media source, and the export call at the bottom differ.
  */
-export type EditorSource = { kind: 'video'; video: Video } | { kind: 'template'; template: TemplateDetail }
+export type EditorSource =
+  | { kind: 'video'; video: Video }
+  | {
+      kind: 'template'
+      template: TemplateDetail
+      /** Set only when this template was reached via a GIF's "Remix this
+       * GIF" button (as opposed to picking it from the New GIF page) —
+       * the originating GIF's own name, threaded through so the header
+       * can read "Remix of: <name>" instead of "From template: <name>".
+       * `undefined` for every other way of reaching flow B. */
+      remixOfName?: string
+    }
 
 interface Props {
   source: EditorSource
@@ -257,6 +268,8 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const [gifRange, setGifRange] = useState({ start: 0, end: duration })
   const [applyToAll, setApplyToAll] = useState(false)
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX)
+  // Naming lives entirely in the Make GIF dialog now — there is no
+  // header-level name field or "name required" gate on opening it.
   const [name, setName] = useState('')
   const [nameError, setNameError] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
@@ -265,13 +278,18 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  // The "Make GIF" popover's own state (flow A only — flow B never shows
-  // a save/overwrite option, not even for the template's own creator).
+  // The "Make GIF" dialog's own state — opens for both flows (naming is
+  // universal now), but the "Also save as a template" card only ever
+  // renders for flow A (flow B never shows a save/overwrite option, not
+  // even for the template's own creator).
   const [makeGifPopoverOpen, setMakeGifPopoverOpen] = useState(false)
   const [saveAsTemplate, setSaveAsTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
+  const [templateNameError, setTemplateNameError] = useState(false)
   const [templateIsPublic, setTemplateIsPublic] = useState(false)
   const [templateError, setTemplateError] = useState<string | null>(null)
+  const templateNameInputRef = useRef<HTMLInputElement>(null)
+  const makeGifButtonRef = useRef<HTMLButtonElement>(null)
   // SPEC.md §14: the on-screen x of the target a drag just snapped to, or
   // null when nothing's snapped — drives the vertical guide line.
   const [snapGuideX, setSnapGuideX] = useState<number | null>(null)
@@ -295,6 +313,23 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // Focus moves into the dialog's own name field the moment it opens,
+  // cursor at the end of whatever's already there (never at the start,
+  // which would otherwise leave someone editing an existing name typing
+  // into the middle of it).
+  useEffect(() => {
+    if (!makeGifPopoverOpen) return
+    const el = nameInputRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [makeGifPopoverOpen])
+
+  function closeMakeGifPopover() {
+    setMakeGifPopoverOpen(false)
+    makeGifButtonRef.current?.focus()
+  }
 
   const previewRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -722,22 +757,18 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const filmstripFrameWidth = timelineWidth / visibleFrameCount
   const filmstripScale = FILMSTRIP_HEIGHT / filmstrip.frameHeight
 
-  // Opens the "Make GIF" popover (flow A only) — nothing to configure
-  // until the GIF itself has a name, so an empty name falls back to the
-  // same inline error/focus behavior clicking Make GIF has always had,
-  // rather than opening a popover with nothing useful in it yet. The
-  // template name field is prefilled with the GIF's own name, matching
-  // the design ("Prefilled with the GIF's name").
+  // Opens the "Make GIF" dialog — for both flows, always, regardless of
+  // whether the GIF has a name yet: the "name required" check lives
+  // inside the dialog's own field, not gating whether it opens at all.
+  // The template name field (flow A only) is prefilled with the GIF's
+  // own name, matching the design ("prefilled from the editor's name
+  // field").
   function openMakeGifPopover() {
-    const trimmedName = name.trim()
-    if (!trimmedName) {
-      setNameError(true)
-      nameInputRef.current?.focus()
-      return
-    }
-    setTemplateName(trimmedName)
+    setTemplateName(name.trim())
     setTemplateIsPublic(false)
     setSaveAsTemplate(false)
+    setNameError(false)
+    setTemplateNameError(false)
     setMakeGifPopoverOpen(true)
   }
 
@@ -750,7 +781,8 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
     }
     const trimmedTemplateName = templateName.trim()
     if (source.kind === 'video' && saveAsTemplate && !trimmedTemplateName) {
-      setTemplateError('Give your template a name before saving it')
+      setTemplateNameError(true)
+      templateNameInputRef.current?.focus()
       return
     }
     setMakeGifPopoverOpen(false)
@@ -813,7 +845,12 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   }
 
   const trimmedDuration = gifRange.end - gifRange.start
-  const suggestedName = captions.length > 0 ? suggestNameFrom(captions[0].text) : ''
+  const sourceInfo =
+    source.kind === 'video'
+      ? `${source.video.original_filename} · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`
+      : source.remixOfName
+        ? `Remix of: ${source.remixOfName} · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`
+        : `From template: ${source.template.name} · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`
 
   return (
     <div className="editor-shell">
@@ -826,56 +863,18 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
           <img src={mark} alt="StrewthGif" className="editor-brand" />
           <div className="editor-divider" />
           <div className="editor-title-block">
-            <div className="editor-name-label-row">
-              <label className="editor-name-label" htmlFor="editor-name-input">
-                GIF name
-              </label>
-              {!name.trim() && <span className="editor-name-required-tag">Required</span>}
-            </div>
-            <div className="editor-name-input-wrap">
-              <input
-                id="editor-name-input"
-                ref={nameInputRef}
-                className={`editor-name-input ${nameError ? 'error' : ''}`}
-                placeholder="Name your GIF"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value)
-                  if (nameError) setNameError(false)
-                }}
-                aria-label="GIF name"
-                aria-invalid={nameError || undefined}
-                // Never pre-filled today (not even for Remix) — this always
-                // autofocuses a freshly opened editor, which is the intent.
-                autoFocus={!name}
-              />
-              <PencilIcon size={14} className="editor-name-input-icon" />
-            </div>
-            {nameError && (
-              <p className="editor-name-error" role="alert">
-                Give your GIF a name before making it
-              </p>
-            )}
-            {!name.trim() && suggestedName && (
-              <button type="button" className="editor-name-suggest" onClick={() => setName(suggestedName)}>
-                Use "{suggestedName}"
-              </button>
-            )}
-            <p className="editor-source-info">
-              {source.kind === 'video'
-                ? `${source.video.original_filename} · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`
-                : `Based on "${source.template.name}" · ${outputWidth}×${outputHeight} · ${duration.toFixed(1)}s`}
-            </p>
+            <p className="editor-static-title">New GIF</p>
+            <p className="editor-source-info">{sourceInfo}</p>
           </div>
         </div>
         <div className="editor-header-right">
           <div className="editor-makegif-anchor">
             <button
+              ref={makeGifButtonRef}
               className="btn btn-primary"
               aria-label="Make GIF"
-              title={!name.trim() ? 'Name your GIF first' : undefined}
               disabled={submitting}
-              onClick={source.kind === 'video' ? openMakeGifPopover : makeGif}
+              onClick={openMakeGifPopover}
             >
               {submitting ? (
                 'Making…'
@@ -886,55 +885,125 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
                 </>
               )}
             </button>
-            {/* Flow A only — flow B never shows a save/overwrite option,
-                not even for the template's own creator. */}
-            {makeGifPopoverOpen && source.kind === 'video' && (
-              <div className="editor-makegif-popover" role="dialog" aria-label="Make GIF">
-                <p className="editor-makegif-popover-summary">
-                  "{name.trim()}" · {trimmedDuration.toFixed(1)}s · {captions.length} caption
-                  {captions.length === 1 ? '' : 's'} · {outputWidth}×{outputHeight}
-                </p>
-                <label className="editor-makegif-checkbox-row" htmlFor="makegif-save-template">
-                  <input
-                    id="makegif-save-template"
-                    type="checkbox"
-                    checked={saveAsTemplate}
-                    onChange={(e) => setSaveAsTemplate(e.target.checked)}
-                  />
-                  <span>
-                    <strong>Also save as a template</strong>
-                    <br />
-                    <span className="va-hint">Keep this trim and captions to start new GIFs from</span>
+            {makeGifPopoverOpen && (
+              <div
+                className="editor-makegif-popover"
+                role="dialog"
+                aria-label="Make GIF"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.stopPropagation()
+                    closeMakeGifPopover()
+                  }
+                }}
+              >
+                <div className="editor-makegif-header">
+                  <p className="editor-makegif-title">Make GIF</p>
+                  <span className="editor-makegif-summary">
+                    {trimmedDuration.toFixed(1)}s · {captions.length} caption{captions.length === 1 ? '' : 's'} ·{' '}
+                    {outputWidth}×{outputHeight}
                   </span>
-                </label>
-                {saveAsTemplate && (
-                  <div className="editor-makegif-template-fields">
-                    <label className="field-label" htmlFor="makegif-template-name">
-                      Template name
-                    </label>
-                    <input
-                      id="makegif-template-name"
-                      className="editor-name-input"
-                      value={templateName}
-                      onChange={(e) => setTemplateName(e.target.value)}
-                    />
-                    <label className="editor-makegif-checkbox-row" htmlFor="makegif-template-public">
-                      <input
-                        id="makegif-template-public"
-                        type="checkbox"
-                        checked={templateIsPublic}
-                        onChange={(e) => setTemplateIsPublic(e.target.checked)}
-                      />
-                      <span>
-                        <strong>Public template</strong>
-                        <br />
-                        <span className="va-hint">Others can find it under "From others"</span>
+                </div>
+
+                <div className="editor-makegif-field">
+                  <label className="editor-makegif-field-label" htmlFor="makegif-name-input">
+                    GIF name
+                  </label>
+                  <input
+                    id="makegif-name-input"
+                    ref={nameInputRef}
+                    className={`editor-makegif-field-input ${nameError ? 'error' : ''}`}
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value)
+                      if (nameError) setNameError(false)
+                    }}
+                    aria-invalid={nameError || undefined}
+                  />
+                  {nameError && (
+                    <p className="editor-makegif-field-error" role="alert">
+                      Give your GIF a name before making it
+                    </p>
+                  )}
+                </div>
+
+                {/* Flow A only — flow B never shows a save/overwrite
+                    option, not even for the template's own creator. */}
+                {source.kind === 'video' && (
+                  /* A plain <div> "card" — not itself a button, since it
+                     needs to contain real interactive children (the
+                     template-name input, the share switch) once expanded,
+                     and a <button> can't legally contain those (the
+                     browser silently breaks the DOM if it does). Only the
+                     collapsed toggle row is the actual role="checkbox"
+                     button. */
+                  <div className={`editor-makegif-template-card ${saveAsTemplate ? 'checked' : ''}`}>
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={saveAsTemplate}
+                      className="editor-makegif-template-card-toggle"
+                      onClick={() => setSaveAsTemplate((v) => !v)}
+                    >
+                      <span className={`editor-makegif-checkbox ${saveAsTemplate ? 'checked' : ''}`} aria-hidden="true">
+                        {saveAsTemplate && <CheckIcon size={13} />}
                       </span>
-                    </label>
+                      <span className="editor-makegif-template-card-copy">
+                        <span className="editor-makegif-template-card-title">
+                          <BookmarkIcon size={14} />
+                          Also save as a template
+                        </span>
+                        <span className="editor-makegif-template-card-help">Keep the trim and captions for next time</span>
+                      </span>
+                    </button>
+
+                    {saveAsTemplate && (
+                      <div className="editor-makegif-template-fields">
+                        <div className="editor-makegif-field">
+                          <label className="editor-makegif-field-label" htmlFor="makegif-template-name">
+                            Template name
+                          </label>
+                          <input
+                            id="makegif-template-name"
+                            ref={templateNameInputRef}
+                            className={`editor-makegif-field-input ${templateNameError ? 'error' : ''}`}
+                            value={templateName}
+                            onChange={(e) => {
+                              setTemplateName(e.target.value)
+                              if (templateNameError) setTemplateNameError(false)
+                            }}
+                            aria-invalid={templateNameError || undefined}
+                          />
+                          {templateNameError && (
+                            <p className="editor-makegif-field-error" role="alert">
+                              Give your template a name before saving it
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="editor-makegif-public-row">
+                          <div>
+                            <p className="archive-settings-title">Share template</p>
+                            <p className="archive-settings-help">Everyone can find it under Shared</p>
+                          </div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={templateIsPublic}
+                            aria-label="Share template"
+                            className={`archive-switch ${templateIsPublic ? 'on' : ''}`}
+                            onClick={() => setTemplateIsPublic((v) => !v)}
+                          >
+                            <span className="archive-switch-knob" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
+
                 <div className="editor-makegif-popover-actions">
-                  <button type="button" className="btn btn-secondary" onClick={() => setMakeGifPopoverOpen(false)}>
+                  <button type="button" className="btn btn-secondary" onClick={closeMakeGifPopover}>
                     Cancel
                   </button>
                   <button type="button" className="btn btn-primary" onClick={makeGif}>

@@ -493,6 +493,11 @@ pub async fn set_template_public(pool: &PgPool, id: &str, owner_id: &str, is_pub
 /// for "From others", see `get_public_template_summaries`).
 fn template_summary_from(t: Template, owner_handle: Option<String>) -> Result<TemplateSummary> {
     let payload: TemplatePayload = serde_json::from_str(&t.payload_json)?;
+    let first_caption_text = payload
+        .captions
+        .first()
+        .map(|c| c.text.trim().to_string())
+        .filter(|s| !s.is_empty());
     Ok(TemplateSummary {
         id: t.id,
         name: t.name,
@@ -500,6 +505,7 @@ fn template_summary_from(t: Template, owner_handle: Option<String>) -> Result<Te
         saved_at: t.saved_at,
         duration_seconds: payload.gif_range_end - payload.gif_range_start,
         caption_count: payload.captions.len(),
+        first_caption_text,
         owner_handle,
     })
 }
