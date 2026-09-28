@@ -79,6 +79,10 @@ COPY --from=builder /app/backend/target/release/backfill_thumbnails ./backfill_t
 # One-off backfill (SPEC-CLOUD.md §10) for templates saved before the
 # template-assets S3 bucket existed — same treatment as the two above.
 COPY --from=builder /app/backend/target/release/backfill_template_assets ./backfill_template_assets
+# One-off backfill (exports.rs) for gifs exported before Flow A started
+# stamping template_id onto the gif that produced a template — same
+# treatment as the backfills above.
+COPY --from=builder /app/backend/target/release/backfill_gif_template_lineage ./backfill_gif_template_lineage
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 EXPOSE 8080

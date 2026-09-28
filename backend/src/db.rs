@@ -326,6 +326,24 @@ pub async fn set_gif_template_id(pool: &PgPool, id: &str, template_id: &str) -> 
     Ok(())
 }
 
+/// One-off backfill counterpart to `set_gif_template_id`, for gifs created
+/// before it existed: any gif whose video already has a template (saved
+/// either before or after that gif was exported — `save_as_template` and
+/// the plain "Save template" toggle both upsert onto the same `video_id`)
+/// but whose own `template_id` is still unstamped. A gif whose video never
+/// got a template stays `NULL`, same as always. Returns the number of gifs
+/// updated.
+pub async fn backfill_gif_template_lineage(pool: &PgPool) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE gifs SET template_id = templates.id \
+         FROM templates \
+         WHERE gifs.video_id = templates.video_id AND gifs.template_id IS NULL",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Bumps a gif's use counter (SPEC-CLOUD.md §8: copy-link, copy-embed, and
 /// download all fire this) — no ownership/visibility check, since the spec
 /// only requires "auth required," not "must be public or yours," and a
@@ -1627,6 +1645,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get_template_id(&pool, "v1").await.unwrap().as_deref(), Some("t1"));
+    }
+
+    #[tokio::test]
+    async fn backfill_gif_template_lineage_stamps_only_gifs_missing_it() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        insert_video(&pool, &sample_video("v1", &user), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        upsert_template(&pool, "t1", "v1", &user, "Template", false, &sample_template(), "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        // Flow A, pre-fix: exported from v1 (which has a template) but
+        // never got stamped — exactly what this backfill exists to fix.
+        let mut unstamped = sample_gif("g1", "unstamped", "hi", &user);
+        unstamped.video_id = Some("v1".to_string());
+        insert_gif(&pool, &unstamped, "2026-08-22T00:00:02Z").await.unwrap();
+
+        // Already correct (either post-fix Flow A, or Flow B) — must be
+        // left alone, not overwritten with some other template.
+        let mut already_stamped = sample_gif("g2", "already stamped", "hi", &user);
+        already_stamped.template_id = Some("t1".to_string());
+        insert_gif(&pool, &already_stamped, "2026-08-22T00:00:03Z").await.unwrap();
+
+        // No template lineage at all (untemplated video) — must stay NULL.
+        let untemplated = sample_gif("g3", "untemplated", "hi", &user);
+        insert_gif(&pool, &untemplated, "2026-08-22T00:00:04Z").await.unwrap();
+
+        let updated = backfill_gif_template_lineage(&pool).await.unwrap();
+        assert_eq!(updated, 1);
+
+        assert_eq!(get_gif(&pool, "g1", &user).await.unwrap().unwrap().template_id.as_deref(), Some("t1"));
+        assert_eq!(get_gif(&pool, "g2", &user).await.unwrap().unwrap().template_id.as_deref(), Some("t1"));
+        assert!(get_gif(&pool, "g3", &user).await.unwrap().unwrap().template_id.is_none());
+
+        // Re-running is a no-op — nothing left to stamp.
+        assert_eq!(backfill_gif_template_lineage(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
