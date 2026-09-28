@@ -722,30 +722,21 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                     <DownloadIcon /> Download
                   </a>
                 )}
+                {/* Public templates, pass 2: shown only when this gif has
+                    template lineage to a template still accessible to the
+                    viewer (public, or owned by them) — `template_remixable`
+                    is computed server-side so it disappears cleanly the
+                    moment the template is deleted or made private, rather
+                    than a stale link that 404s on click. Replaces the old
+                    own-video-only remix entirely; unrelated to `isOwnGif`
+                    (a public template from someone else can be remixed from
+                    their gif too). */}
+                {canEdit && selected.template_id && selected.template_remixable && (
+                  <Link className="btn btn-secondary" to={`/from-template/${selected.template_id}`} state={{ remixOfName: selected.name }}>
+                    <PencilIcon size={14} /> Remix
+                  </Link>
+                )}
               </div>
-
-              {/* Public templates, pass 2: shown only when this gif has
-                  template lineage to a template still accessible to the
-                  viewer (public, or owned by them) — `template_remixable`
-                  is computed server-side so it disappears cleanly the
-                  moment the template is deleted or made private, rather
-                  than a stale link that 404s on click. Replaces the old
-                  own-video-only remix entirely; unrelated to `isOwnGif`
-                  (a public template from someone else can be remixed from
-                  their gif too). */}
-              {canEdit && selected.template_id && selected.template_remixable && (
-                <Link
-                  className="archive-remix-action"
-                  to={`/from-template/${selected.template_id}`}
-                  state={{ remixOfName: selected.name }}
-                >
-                  <PencilIcon size={14} className="archive-remix-action-icon" />
-                  <span className="archive-remix-action-copy">
-                    <strong>Remix this GIF</strong>
-                    <span className="va-hint">New captions, same clip</span>
-                  </span>
-                </Link>
-              )}
 
               {/* Pinned bottom bar, below the editor breakpoint only —
                   Share if available, else Copy link. Desktop keeps the

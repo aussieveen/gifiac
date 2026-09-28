@@ -90,12 +90,13 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         // for a directory-root request (`/`) — since the frontend is now a
         // real client-side router (multiple paths, not one view-switching
         // page), a deep link like `/library` or a refresh on one 404s
-        // without this: `not_found_service` falls back to index.html for
-        // any path ServeDir can't match to a real static file, letting the
-        // client-side router take over from there.
-        .fallback_service(
-            ServeDir::new(STATIC_DIR).not_found_service(ServeFile::new(format!("{STATIC_DIR}/index.html"))),
-        )
+        // without this: falling back to index.html for any path ServeDir
+        // can't match to a real static file lets the client-side router
+        // take over from there. Use `fallback` (not `not_found_service`,
+        // which wraps the fallback in `SetStatus::new(_, 404)` and forces
+        // every deep-link response to 404 even though the body is a
+        // perfectly good index.html) so the response status stays 200.
+        .fallback_service(ServeDir::new(STATIC_DIR).fallback(ServeFile::new(format!("{STATIC_DIR}/index.html"))))
 }
 
 pub async fn run() -> anyhow::Result<()> {

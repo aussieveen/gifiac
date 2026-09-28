@@ -700,7 +700,7 @@ describe('Archive', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    const remix = screen.getByRole('link', { name: /remix this gif/i }) as HTMLAnchorElement
+    const remix = screen.getByRole('link', { name: /remix/i }) as HTMLAnchorElement
     expect(remix.getAttribute('href')).toBe('/from-template/t1')
   })
 
@@ -712,7 +712,7 @@ describe('Archive', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    expect(screen.queryByRole('link', { name: /remix this gif/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /remix/i })).not.toBeInTheDocument()
   })
 
   it('a gif with no template lineage has no Remix link', async () => {
@@ -722,7 +722,7 @@ describe('Archive', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'linked meme' }))
 
-    expect(screen.queryByRole('link', { name: /remix this gif/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /remix/i })).not.toBeInTheDocument()
   })
 
   it('adding a gif by url calls the API and prepends it to the grid', async () => {

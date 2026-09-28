@@ -374,24 +374,15 @@ export function Library() {
                     <DownloadIcon /> Download
                   </a>
                 )}
+                {/* Public templates, pass 2: same "Remix this GIF" affordance
+                    as Archive.tsx's detail panel — net new here, the Global
+                    Library previously had no remix action at all. */}
+                {canEdit && selected.template_id && selected.template_remixable && (
+                  <Link className="btn btn-secondary" to={`/from-template/${selected.template_id}`} state={{ remixOfName: selected.name }}>
+                    <PencilIcon size={14} /> Remix
+                  </Link>
+                )}
               </div>
-
-              {/* Public templates, pass 2: same "Remix this GIF" affordance
-                  as Archive.tsx's detail panel — net new here, the Global
-                  Library previously had no remix action at all. */}
-              {canEdit && selected.template_id && selected.template_remixable && (
-                <Link
-                  className="archive-remix-action"
-                  to={`/from-template/${selected.template_id}`}
-                  state={{ remixOfName: selected.name }}
-                >
-                  <PencilIcon size={14} className="archive-remix-action-icon" />
-                  <span className="archive-remix-action-copy">
-                    <strong>Remix this GIF</strong>
-                    <span className="va-hint">New captions, same clip</span>
-                  </span>
-                </Link>
-              )}
 
               {!canEdit && (
                 <div className="archive-mobile-action-bar">

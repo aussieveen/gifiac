@@ -2989,36 +2989,6 @@ button {
   background: var(--text);
 }
 
-/* Public templates, pass 2: "Remix this GIF" — a distinct, secondary
-   create-action below the utilities row, shown only when the gif has
-   template lineage still accessible to the viewer. */
-.archive-remix-action {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.archive-remix-action:hover {
-  border-color: var(--accent);
-}
-
-.archive-remix-action-icon {
-  flex-shrink: 0;
-  color: var(--accent);
-}
-
-.archive-remix-action-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-}
-
 .archive-panel-delete {
   color: var(--danger);
   border-color: var(--danger);
