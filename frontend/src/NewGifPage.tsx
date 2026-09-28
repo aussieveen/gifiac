@@ -304,9 +304,6 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
             >
               <span className={`newgif-template-thumb-wrap ${selectedId === t.id ? 'selected' : ''}`}>
                 <img src={templateThumbnailUrl(t.id)} alt="" className="newgif-template-thumb" />
-                {t.first_caption_text && (
-                  <span className="newgif-template-thumb-caption caption-text">{t.first_caption_text}</span>
-                )}
                 <span className="newgif-template-duration">{t.duration_seconds.toFixed(1)}s</span>
               </span>
               <span className="newgif-template-name">{t.name}</span>
@@ -351,9 +348,6 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
                     src={templateThumbnailUrl(detail.id)}
                     alt={`${detail.name} preview`}
                   />
-                  {detail.captions[0]?.text.trim() && (
-                    <span className="newgif-panel-preview-caption caption-text">{detail.captions[0].text.trim()}</span>
-                  )}
                   <button
                     type="button"
                     className="newgif-panel-close"

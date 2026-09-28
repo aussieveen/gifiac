@@ -1960,21 +1960,6 @@ button {
   display: block;
 }
 
-.newgif-template-thumb-caption {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 10px;
-  font-size: 17px;
-  text-align: center;
-  line-height: 1.15;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
 .newgif-template-duration {
   position: absolute;
   bottom: 8px;
@@ -2090,16 +2075,6 @@ button {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-.newgif-panel-preview-caption {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  font-size: 32px;
-  text-align: center;
-  line-height: 1.1;
 }
 
 .newgif-panel-close {
