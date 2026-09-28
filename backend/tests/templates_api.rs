@@ -134,6 +134,72 @@ async fn get_one_enforces_public_or_owner_visibility() {
     assert_eq!(body["is_own"], true);
 }
 
+/// Regression test: the clip a template serves (`get_clip`) is trimmed to
+/// start at 0 (`routes::videos::save_template`'s `ffmpeg::trim_video`
+/// call), but the captions stored in `payload_json` are authored in the
+/// *source video's* absolute timeline (flow A's own re-fill needs them
+/// that way). `to_detail` must rebase them by `gif_range_start` before
+/// handing them to flow B — otherwise every caption shows `gif_range_start`
+/// seconds later than it should against the (already 0-based) clip.
+#[tokio::test]
+async fn get_one_rebases_captions_to_the_trimmed_clips_own_timeline() {
+    let test_app = spawn_app().await;
+    let video = upload_test_video(&test_app).await;
+    let video_id = video["id"].as_str().unwrap();
+    let payload = json!({
+        "name": "Offset template",
+        "is_public": false,
+        "captions": [{
+            "id": "c1",
+            "startTime": 1.5,
+            "endTime": 2.0,
+            "text": "hello",
+            "fontFamily": "Impact, sans-serif",
+            "fontSize": 28,
+            "color": "#ffffff",
+            "align": "center",
+            "x": 0.5,
+            "y": 0.88
+        }],
+        // Trimmed to start 1.0s into the source video — the clip itself
+        // will start at 0 and run for 1.5s.
+        "gif_range_start": 1.0,
+        "gif_range_end": 2.5,
+        "width": 320,
+        "height": 240
+    });
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PUT")
+                .uri(format!("/api/videos/{video_id}/template"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let template_id: String = sqlx::query_scalar("SELECT id FROM templates WHERE video_id = $1")
+        .bind(video_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+
+    let owner_cookie = test_app.owner_cookie.clone();
+    let (status, body) = get_json(&test_app, &owner_cookie, &format!("/api/templates/{template_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["duration_seconds"], 1.5);
+    let captions = body["captions"].as_array().unwrap();
+    assert_eq!(captions.len(), 1);
+    // 1.5 - 1.0 = 0.5, 2.0 - 1.0 = 1.0 — relative to the clip's own start,
+    // not the source video's.
+    assert_eq!(captions[0]["startTime"], 0.5);
+    assert_eq!(captions[0]["endTime"], 1.0);
+}
+
 #[tokio::test]
 async fn patch_renames_and_toggles_public_without_touching_saved_content() {
     let test_app = spawn_app().await;

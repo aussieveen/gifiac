@@ -44,6 +44,21 @@ async fn load_usable_template(state: &AppState, id: &str, viewer_id: &str) -> Re
 
 fn to_detail(t: Template, viewer_id: &str, owner_handle: Option<String>) -> Result<TemplateDetail, AppError> {
     let payload: TemplatePayload = serde_json::from_str(&t.payload_json)?;
+    // `payload.captions` are stored in the *source video's* absolute
+    // timeline (flow A's own `GET /api/videos/{id}/template` re-fill needs
+    // them that way, against the full untrimmed video) — but the clip this
+    // template actually serves (`get_clip`) is a self-contained file that
+    // was trimmed to start at 0 (`routes::videos::save_template`'s
+    // `ffmpeg::trim_video` call). Rebasing here, at the flow-B read edge,
+    // is what keeps the two timelines from disagreeing — without this the
+    // captions showed `gif_range_start` seconds later than they should,
+    // both in the flow-B editor and in the burned-in export (which just
+    // forwards whatever `TemplateExportRequest.captions` the editor sent).
+    let mut captions = payload.captions;
+    for caption in &mut captions {
+        caption.start_time -= payload.gif_range_start;
+        caption.end_time -= payload.gif_range_start;
+    }
     Ok(TemplateDetail {
         is_own: t.user_id == viewer_id,
         id: t.id,
@@ -53,7 +68,7 @@ fn to_detail(t: Template, viewer_id: &str, owner_handle: Option<String>) -> Resu
         duration_seconds: payload.gif_range_end - payload.gif_range_start,
         width: payload.width,
         height: payload.height,
-        captions: payload.captions,
+        captions,
         owner_handle,
     })
 }
