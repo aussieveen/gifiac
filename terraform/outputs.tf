@@ -50,7 +50,7 @@ output "ses_dns_records" {
   value = concat(
     [
       for token in aws_sesv2_email_identity.main.dkim_signing_attributes[0].tokens : {
-        name  = "${token}._domainkey.${var.domain_name}"
+        name  = "${token}._domainkey.${var.ses_domain_name}"
         type  = "CNAME"
         value = "${token}.dkim.amazonses.com"
       }
@@ -67,7 +67,7 @@ output "ses_dns_records" {
         value = "v=spf1 include:amazonses.com ~all"
       },
       {
-        name  = "_dmarc.${var.domain_name}"
+        name  = "_dmarc.${var.ses_domain_name}"
         type  = "TXT"
         value = "v=DMARC1; p=none; rua=mailto:${var.email_from_address}"
       },

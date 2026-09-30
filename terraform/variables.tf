@@ -17,7 +17,12 @@ variable "expected_aws_account_id" {
 }
 
 variable "domain_name" {
-  description = "Domain the app is served on. DNS is not hosted in Route53 (see terraform/README.md) — this only names the ACM certificate; the user points DNS at the ALB manually."
+  description = "Domain the app is served on. DNS is not hosted in Route53 (see terraform/README.md) — this only names the ACM certificate and APP_BASE_URL; the user points DNS at the ALB manually."
+  type        = string
+}
+
+variable "ses_domain_name" {
+  description = "Domain SES sends login-code emails from — deliberately separate from domain_name: SES verification only flows parent-to-child (verifying this domain also authorizes any subdomain of it, but not the reverse), and domain_name here is a `www.` subdomain the app happens to be served on. Defaults to the apex of domain_name isn't derived automatically (fragile string-stripping); set it explicitly. email_from_address must be on this domain or a subdomain of it."
   type        = string
 }
 
