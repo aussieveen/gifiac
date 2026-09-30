@@ -125,9 +125,7 @@ pub struct Caption {
     /// together, no combination decouples them), so multi-line captions
     /// render each line as its own positioned Dialogue event instead of
     /// relying on libass's fixed automatic line pitch, which measured at
-    /// roughly a 1.0 multiplier here — and which is exactly what the user
-    /// asked to have reduced, so `0.65` is the new default rather than a
-    /// value that reproduces the old (complained-about) spacing.
+    /// roughly a 1.0 multiplier here.
     #[serde(default = "default_line_height")]
     pub line_height: f64,
 }
@@ -137,7 +135,7 @@ fn default_caption_width() -> f64 {
 }
 
 fn default_line_height() -> f64 {
-    0.65
+    1.1
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

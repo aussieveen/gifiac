@@ -183,7 +183,7 @@ describe('CaptionEditor', () => {
 
     await waitFor(() => expect(createExport).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(createExport).mock.calls[0][0]
-    expect(payload.captions[0]).toMatchObject({ width: 0.6, outlineColor: '#000000', lineHeight: 0.65 })
+    expect(payload.captions[0]).toMatchObject({ width: 0.6, outlineColor: '#000000', lineHeight: 1.1 })
   })
 
   it('the line-height slider updates the caption and the live preview', async () => {
@@ -192,8 +192,8 @@ describe('CaptionEditor', () => {
     await user.click(screen.getByRole('button', { name: /add caption at playhead/i }))
 
     const slider = screen.getByLabelText('Line height')
-    expect(slider).toHaveValue('0.65')
-    expect(document.querySelector('.preview-caption')).toHaveStyle({ lineHeight: '0.65' })
+    expect(slider).toHaveValue('1.1')
+    expect(document.querySelector('.preview-caption')).toHaveStyle({ lineHeight: '1.1' })
 
     fireEvent.change(slider, { target: { value: '0.4' } })
 

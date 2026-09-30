@@ -68,7 +68,7 @@ const MAX_CAPTION_WIDTH = 1
 // a caption that only auto-wraps (no typed line break) can preview tighter
 // than it actually exports. Typing Enter to force the break keeps the two
 // in sync.
-const DEFAULT_LINE_HEIGHT = 0.65
+const DEFAULT_LINE_HEIGHT = 1.1
 const MIN_LINE_HEIGHT = 0.3
 const MAX_LINE_HEIGHT = 1.5
 const BASE_TIMELINE_WIDTH = 700
