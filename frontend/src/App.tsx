@@ -7,6 +7,7 @@ import { LOGIN_URL, getFilmstripMeta, getTemplateDetail, getTemplateFilmstripMet
 import { AuthShell } from './AuthShell'
 import { CaptionEditor } from './CaptionEditor'
 import { EditorUnavailable } from './EditorUnavailable'
+import { EmailSignIn } from './EmailSignIn'
 import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
 import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
@@ -287,6 +288,9 @@ export default function App() {
   const { user, loading: authLoading, setUser } = useCurrentUser()
   const navigate = useNavigate()
   const location = useLocation()
+  // Not a route (the whole pre-auth area isn't under react-router here) —
+  // just which sign-in screen is showing.
+  const [showEmailSignIn, setShowEmailSignIn] = useState(false)
 
   if (authLoading) {
     return (
@@ -297,6 +301,17 @@ export default function App() {
   }
 
   if (!user) {
+    if (showEmailSignIn) {
+      return (
+        <EmailSignIn
+          onBack={() => setShowEmailSignIn(false)}
+          onSignedIn={(signedInUser) => {
+            setShowEmailSignIn(false)
+            setUser(signedInUser)
+          }}
+        />
+      )
+    }
     return (
       <AuthShell>
         <div className="auth-tiles-wrap">
@@ -325,6 +340,9 @@ export default function App() {
           <LogInIcon />
           Sign in with Google
         </a>
+        <button type="button" className="btn btn-secondary" onClick={() => setShowEmailSignIn(true)}>
+          Continue with email
+        </button>
       </AuthShell>
     )
   }

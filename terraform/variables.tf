@@ -94,3 +94,31 @@ variable "r2_secret_access_key" {
   type        = string
   sensitive   = true
 }
+
+# --- Email one-time-passcode login (SPEC-EMAIL-AUTH.md) ---
+# login_code_hmac_key has no variable here — it's Terraform-generated
+# (ssm.tf's random_id.login_code_hmac_key), the same "nothing external
+# needs to know it" reasoning as db_password, rather than a human-supplied
+# secret like the ones above.
+
+variable "email_from_address" {
+  description = "The `From:` address login-code emails are sent from (non-secret) — e.g. \"StrewthGif <login@strewthgif.example.com>\". Must be on a domain SES is verified for (see ses.tf)."
+  type        = string
+}
+
+variable "turnstile_site_key" {
+  description = "Cloudflare Turnstile site key (non-secret — exposed to the frontend via GET /api/config). The matching secret key is turnstile_secret_key below."
+  type        = string
+}
+
+variable "turnstile_secret_key" {
+  description = "Cloudflare Turnstile secret key (SPEC-EMAIL-AUTH.md §6). Supplied via terraform.tfvars or TF_VAR_turnstile_secret_key — never committed."
+  type        = string
+  sensitive   = true
+}
+
+variable "trust_cf_connecting_ip" {
+  description = "Whether the origin accepts traffic exclusively from Cloudflare's IP ranges — only then is the CF-Connecting-IP header safe to trust for per-IP rate limiting (SPEC-EMAIL-AUTH.md §6)."
+  type        = bool
+  default     = false
+}

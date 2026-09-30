@@ -63,6 +63,12 @@ resource "aws_iam_role_policy" "ec2_app" {
           "${aws_s3_bucket.template_assets.arn}/*",
         ]
       },
+      {
+        Sid      = "SendLoginCodeEmail"
+        Effect   = "Allow"
+        Action   = ["ses:SendEmail"]
+        Resource = aws_sesv2_email_identity.main.arn
+      },
     ]
   })
 }

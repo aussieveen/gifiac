@@ -42,10 +42,25 @@ vi.mock('./api', () => ({
   setUserDisabled: vi.fn(),
   listLibrary: vi.fn(),
   recordGifUse: vi.fn(),
+  getConfig: vi.fn(() => Promise.resolve({ turnstileSiteKey: null })),
+  startEmailLogin: vi.fn(),
+  verifyEmailCode: vi.fn(),
+  EmailAuthError: class EmailAuthError extends Error {
+    code: string
+    retryAfterSeconds?: number
+    attemptsRemaining?: number
+    constructor(code: string, retryAfterSeconds?: number, attemptsRemaining?: number) {
+      super(code)
+      this.code = code
+      this.retryAfterSeconds = retryAfterSeconds
+      this.attemptsRemaining = attemptsRemaining
+    }
+  },
 }))
 
 import {
   createExport,
+  EmailAuthError,
   getCurrentUser,
   getFilmstripMeta,
   getTemplate,
@@ -57,8 +72,10 @@ import {
   listOtherTemplates,
   logout,
   setHandle,
+  startEmailLogin,
   subscribeExportProgress,
   uploadVideo,
+  verifyEmailCode,
 } from './api'
 import type { ExportProgressHandlers } from './api'
 import type { CurrentUser } from './types'
@@ -126,6 +143,8 @@ beforeEach(() => {
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue(loggedInUser)
   vi.mocked(setHandle).mockReset()
+  vi.mocked(startEmailLogin).mockReset()
+  vi.mocked(verifyEmailCode).mockReset()
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
   vi.mocked(logout).mockReset().mockResolvedValue(undefined)
   vi.mocked(listLibrary).mockReset().mockResolvedValue([])
@@ -139,6 +158,134 @@ afterEach(() => {
 })
 
 describe('App', () => {
+  it('shows the email sign-in screen after clicking "Continue with email", and back returns to the landing screen', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    const user = userEvent.setup()
+
+    renderApp()
+
+    await screen.findByText('Sign in with Google')
+    await user.click(screen.getByRole('button', { name: 'Continue with email' }))
+
+    await screen.findByRole('heading', { name: 'Continue with email' })
+    await user.click(screen.getByRole('button', { name: /back/i }))
+
+    await screen.findByText('Sign in with Google')
+  })
+
+  it('signing in with email routes a brand-new user into the handle picker, same as Google', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    vi.mocked(startEmailLogin).mockResolvedValue(undefined)
+    vi.mocked(verifyEmailCode).mockResolvedValue(userWithoutAHandle)
+    const user = userEvent.setup()
+
+    renderApp()
+
+    await user.click(await screen.findByRole('button', { name: 'Continue with email' }))
+    await user.type(screen.getByLabelText('Email address'), 'new@example.com')
+    await user.click(screen.getByRole('button', { name: 'Send code' }))
+
+    expect(startEmailLogin).toHaveBeenCalledWith('new@example.com', '')
+    await user.type(await screen.findByLabelText('6-digit code'), '123456')
+
+    expect(verifyEmailCode).toHaveBeenCalledWith('new@example.com', '123456')
+    await screen.findByLabelText('Handle')
+  })
+
+  it('shows the wrong-code error with attempts remaining, and lets the visitor retry', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    vi.mocked(startEmailLogin).mockResolvedValue(undefined)
+    vi.mocked(verifyEmailCode)
+      .mockRejectedValueOnce(new EmailAuthError('invalid_or_expired', undefined, 3))
+      .mockResolvedValueOnce(loggedInUser)
+    const user = userEvent.setup()
+
+    renderApp()
+
+    await user.click(await screen.findByRole('button', { name: 'Continue with email' }))
+    await user.type(screen.getByLabelText('Email address'), 'jess@example.com')
+    await user.click(screen.getByRole('button', { name: 'Send code' }))
+
+    await user.type(await screen.findByLabelText('6-digit code'), '000000')
+    await screen.findByText(/that code is incorrect or has expired/i)
+    await screen.findByText(/you have 3 tries left with this code/i)
+
+    // the field clears on a rejected code, so the visitor can retry
+    expect(screen.getByLabelText('6-digit code')).toHaveValue('')
+    await user.type(screen.getByLabelText('6-digit code'), '123456')
+    expect(verifyEmailCode).toHaveBeenLastCalledWith('jess@example.com', '123456')
+  })
+
+  it('shows too-many-attempts without an attempts-remaining count', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    vi.mocked(startEmailLogin).mockResolvedValue(undefined)
+    vi.mocked(verifyEmailCode).mockRejectedValue(new EmailAuthError('too_many_attempts'))
+    const user = userEvent.setup()
+
+    renderApp()
+
+    await user.click(await screen.findByRole('button', { name: 'Continue with email' }))
+    await user.type(screen.getByLabelText('Email address'), 'jess@example.com')
+    await user.click(screen.getByRole('button', { name: 'Send code' }))
+
+    await user.type(await screen.findByLabelText('6-digit code'), '000000')
+    await screen.findByText(/too many attempts\. request a new code/i)
+    expect(screen.queryByText(/tries left/i)).not.toBeInTheDocument()
+  })
+
+  it('disables resend during the cooldown, then enables it once the countdown reaches zero', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    vi.mocked(startEmailLogin).mockResolvedValue(undefined)
+    const user = userEvent.setup({ delay: null })
+
+    renderApp()
+
+    await user.click(await screen.findByRole('button', { name: 'Continue with email' }))
+    await user.type(screen.getByLabelText('Email address'), 'jess@example.com')
+    await user.click(screen.getByRole('button', { name: 'Send code' }))
+    await screen.findByLabelText('6-digit code')
+
+    expect(screen.queryByRole('button', { name: 'Resend code' })).not.toBeInTheDocument()
+    expect(screen.getByText(/resend code in 1:00/i)).toBeInTheDocument()
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000)
+    })
+
+    expect(await screen.findByRole('button', { name: 'Resend code' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Resend code' }))
+    expect(startEmailLogin).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
+
+  it('surfaces the retry-after wait and resets the cooldown when a resend is rate-limited', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    vi.mocked(startEmailLogin)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new EmailAuthError('too_many_requests', 42))
+    const user = userEvent.setup({ delay: null })
+
+    renderApp()
+
+    await user.click(await screen.findByRole('button', { name: 'Continue with email' }))
+    await user.type(screen.getByLabelText('Email address'), 'jess@example.com')
+    await user.click(screen.getByRole('button', { name: 'Send code' }))
+    await screen.findByLabelText('6-digit code')
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000)
+    })
+    await user.click(await screen.findByRole('button', { name: 'Resend code' }))
+
+    await screen.findByText(/please wait 42 seconds before requesting another code/i)
+    expect(screen.getByText(/resend code in 0:42/i)).toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+
   it('shows the handle picker prefilled with the suggestion, and proceeds once set', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(userWithoutAHandle)
     vi.mocked(setHandle).mockResolvedValue({ ...loggedInUser, handle: 'sim-on' })

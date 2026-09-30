@@ -29,9 +29,17 @@ only you should run, with your own AWS credentials.
    r2_secret_access_key     = "..."
    r2_bucket_name           = "..."
    r2_public_base_url       = "https://..."
+   email_from_address       = "StrewthGif <login@gifiac.example.com>"
+   turnstile_site_key       = "..."
+   turnstile_secret_key     = "..."
+   # trust_cf_connecting_ip  = true              # only if the origin is locked to Cloudflare IP ranges — see email_auth.rs
    # aws_profile             = "personal"       # optional, see versions.tf
    # expected_aws_account_id = "123456789012"   # optional, see account_guard.tf
    ```
+
+   `login_code_hmac_key` isn't here — Terraform generates it itself
+   (`ssm.tf`'s `random_id.login_code_hmac_key`), the same as the RDS
+   password, since nothing external ever needs to know or match it.
 
 4. `terraform init`
 
@@ -88,6 +96,19 @@ way a Route53-hosted domain could. That makes `apply` genuinely two-phase
 
 - Point the domain's DNS (an ALIAS or CNAME, again wherever DNS is
   hosted) at `terraform output alb_dns_name`.
+- Add the SES records from `terraform output ses_dns_records` (DKIM
+  CNAMEs plus the MAIL FROM subdomain's MX/SPF, and a `_dmarc` TXT only if
+  the domain doesn't already have one) wherever DNS is hosted, all as
+  DNS-only (grey cloud, if using Cloudflare) — **do not** touch the root
+  domain's existing MX/SPF records (Cloudflare Email Routing already owns
+  those; SES's own MX/SPF live on the separate `mail.` subdomain only).
+  Then wait for the identity to show `VerificationStatus: SUCCESS`:
+  ```bash
+  aws sesv2 get-email-identity --email-identity <your domain>
+  ```
+  and request SES production access (move out of the sandbox) in the SES
+  region used, from the SES console — a new AWS account's SES starts
+  sandboxed and can only send to verified addresses otherwise.
 - Set `AWS_DEPLOY_ROLE_ARN` as a **GitHub repository variable** (not a
   secret — it's not sensitive) to `terraform output github_deploy_role_arn`.
   This is the one step Terraform can't do itself without a separate

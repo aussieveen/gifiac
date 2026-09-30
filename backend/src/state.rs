@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use crate::auth::GoogleAuthConfig;
 use crate::config::Config;
+use crate::email_auth::EmailAuthConfig;
 use crate::exports::ExportEvent;
+use crate::mailer::Mailer;
 use crate::storage::Storage;
 
 pub struct AppState {
@@ -24,6 +26,11 @@ pub struct AppState {
     /// survive indefinitely, not just for the duration of active editing.
     pub template_assets_storage: Storage,
     pub google_auth: GoogleAuthConfig,
+    /// Email-passcode login config (SPEC-EMAIL-AUTH.md) — the HMAC key,
+    /// Turnstile keys, and rate-limit-adjacent settings read from env at
+    /// startup, mirroring `google_auth`.
+    pub email_auth: EmailAuthConfig,
+    pub mailer: Mailer,
     /// Shared client for the light URL sanity check behind linked GIFs
     /// (SPEC.md §13, see link_check.rs) — reused across requests rather
     /// than building a fresh one per submission.

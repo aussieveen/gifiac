@@ -6,6 +6,8 @@ use axum::Router;
 use gifiac_backend::auth::{GoogleAuthConfig, SESSION_COOKIE_NAME};
 use gifiac_backend::config::Config;
 use gifiac_backend::db;
+use gifiac_backend::email_auth::{EmailAuthConfig, MailerKind};
+use gifiac_backend::mailer::Mailer;
 use gifiac_backend::state::AppState;
 use gifiac_backend::storage::{SourceStorageConfig, Storage, TemplateAssetsConfig};
 use sqlx::PgPool;
@@ -19,6 +21,22 @@ fn test_google_auth() -> GoogleAuthConfig {
         client_id: "test-client-id".to_string(),
         client_secret: "test-client-secret".to_string(),
         app_base_url: "http://localhost:5173".to_string(),
+    }
+}
+
+/// 32 bytes of fixed (not random — tests don't need real secrecy) key
+/// material, base64-free since `EmailAuthConfig` here is built directly
+/// rather than via `from_env`/its base64 decoding. No Turnstile secret —
+/// tests exercise the "unset" skip path, same as local dev.
+fn test_email_auth() -> EmailAuthConfig {
+    EmailAuthConfig {
+        login_code_hmac_key: b"01234567890123456789012345678901".to_vec(),
+        mailer_kind: MailerKind::Log,
+        email_from_address: None,
+        ses_region: None,
+        turnstile_secret_key: None,
+        turnstile_site_key: None,
+        trust_cf_connecting_ip: false,
     }
 }
 
@@ -99,6 +117,10 @@ pub struct TestApp {
     /// test. Tests specifically about cross-user isolation call
     /// `login_as` again for a second, distinct user.
     pub owner_cookie: String,
+    /// Every `(to, code)` pair sent through the test `Mailer::capture()`
+    /// backend — lets a test assert on the exact code it needs to submit
+    /// to `/api/auth/email/verify`, without a real inbox.
+    pub sent_codes: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
     _tempdir: TempDir,
 }
 
@@ -123,6 +145,7 @@ pub async fn spawn_app() -> TestApp {
     let source_storage = test_source_storage().await;
     let template_assets_storage = test_template_assets_storage().await;
     let http_client = gifiac_backend::link_check::build_client().unwrap();
+    let (mailer, sent_codes) = Mailer::capture();
     let state = Arc::new(AppState {
         pool: pool.clone(),
         config,
@@ -131,6 +154,8 @@ pub async fn spawn_app() -> TestApp {
         template_assets_storage: template_assets_storage.clone(),
         http_client,
         google_auth: test_google_auth(),
+        email_auth: test_email_auth(),
+        mailer,
         export_jobs: Default::default(),
     });
     let app = gifiac_backend::build_app(state);
@@ -143,6 +168,7 @@ pub async fn spawn_app() -> TestApp {
         template_assets_storage,
         pool,
         owner_cookie,
+        sent_codes,
         _tempdir: tempdir,
     }
 }
