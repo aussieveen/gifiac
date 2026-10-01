@@ -71,20 +71,27 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-west-1
 
-      # terraform/files/deploy.sh already lives on the instance (written by
-      # user_data.sh.tftpl at first boot) — this just re-runs it, so the
-      # deploy logic lives in one place, not duplicated here. But
-      # docker-compose.yml is ALSO only written at first boot (same
-      # user_data.sh.tftpl) and deploy.sh never touches it — so without
-      # re-pushing it here on every deploy, edits to docker-compose.yml in
-      # this repo (e.g. env vars, ports, volumes) would silently never
-      # reach the running instance. Sent as base64 over SSM's shorthand
-      # `commands=[...]` param to dodge quoting the file's own YAML.
+      # terraform/files/deploy.sh and docker-compose.yml are BOTH only
+      # written once, at first boot, by user_data.sh.tftpl — and deploy.sh
+      # never touches either of them again. So both get re-pushed here on
+      # every deploy; without it, edits to either file in this repo (new
+      # env vars, ports, volumes, or deploy logic itself) would silently
+      # never reach the running instance, which is exactly what happened
+      # to the email-auth feature's deploy.sh changes before this fix:
+      # the instance kept running the pre-feature deploy.sh, which never
+      # wrote LOGIN_CODE_HMAC_KEY/MAILER/etc. into .env at all. Both sent
+      # as base64 over SSM's shorthand `commands=[...]` param to dodge
+      # quoting each file's own syntax.
       - name: Trigger deploy via SSM
         run: |
           compose_b64="$(base64 -w0 docker-compose.yml)"
-          params="$(jq -n --arg b64 "$compose_b64" \
-            '{commands: ["echo " + $b64 + " | base64 -d > /opt/gifiac/docker-compose.yml", "bash /opt/gifiac/deploy.sh"]}')"
+          deploy_sh_b64="$(base64 -w0 terraform/files/deploy.sh)"
+          params="$(jq -n --arg compose_b64 "$compose_b64" --arg deploy_sh_b64 "$deploy_sh_b64" \
+            '{commands: [
+              "echo " + $compose_b64 + " | base64 -d > /opt/gifiac/docker-compose.yml",
+              "echo " + $deploy_sh_b64 + " | base64 -d > /opt/gifiac/deploy.sh",
+              "bash /opt/gifiac/deploy.sh"
+            ]}')"
 
           command_id=$(aws ssm send-command \
             --targets "Key=tag:Name,Values=gifiac" \
