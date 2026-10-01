@@ -549,6 +549,93 @@ button {
   background: var(--border);
 }
 
+/* The 6-digit code entry — still one real <input> under the hood
+   (inputmode="numeric" autocomplete="one-time-code", so phones can
+   autofill it and pasting all six digits works), stretched fully
+   transparent over six purely decorative boxes that read their digit
+   straight from `code` state. Avoids the fragile letter-spacing tricks
+   other "boxed OTP input" implementations use to fake this with a single
+   visible input. */
+.code-input-wrap {
+  position: relative;
+  align-self: flex-start;
+}
+
+.code-boxes {
+  display: flex;
+  gap: 8px;
+}
+
+.code-box {
+  width: 52px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: 28px;
+  color: var(--text);
+}
+
+.code-box--active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.2);
+}
+
+.code-box--error {
+  border-color: var(--danger);
+}
+
+.code-box--disabled {
+  opacity: 0.45;
+}
+
+.code-box__caret {
+  width: 2px;
+  height: 30px;
+  background: var(--accent);
+}
+
+.code-input-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: text;
+}
+
+.auth-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: #2a1715;
+  border: 1px solid #5a2a24;
+  color: #ffb3a8;
+  font-size: 14px;
+}
+
+.auth-alert svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.auth-alert-sub {
+  display: block;
+  font-size: 13px;
+  color: #d9a39b;
+  margin-top: 2px;
+}
+
 /* Decorative stack of three tiles above the sign-in headline. Solid muted
    blocks for now (design brief §3 leaves the door open to real public
    GIFs later). */

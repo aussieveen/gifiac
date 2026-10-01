@@ -210,8 +210,10 @@ describe('App', () => {
     await screen.findByText(/that code is incorrect or has expired/i)
     await screen.findByText(/you have 3 tries left with this code/i)
 
-    // the field clears on a rejected code, so the visitor can retry
-    expect(screen.getByLabelText('6-digit code')).toHaveValue('')
+    // the wrong code stays visible (styled as an error) rather than
+    // clearing, so the visitor can see what they entered
+    expect(screen.getByLabelText('6-digit code')).toHaveValue('000000')
+    await user.clear(screen.getByLabelText('6-digit code'))
     await user.type(screen.getByLabelText('6-digit code'), '123456')
     expect(verifyEmailCode).toHaveBeenLastCalledWith('jess@example.com', '123456')
   })

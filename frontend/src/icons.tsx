@@ -54,6 +54,16 @@ export function MailIcon({ size = 18, className }: IconProps) {
   )
 }
 
+export function AlertIcon({ size = 18, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v5" />
+      <path d="M12 16h.01" />
+    </svg>
+  )
+}
+
 export function SearchIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base} width={size} height={size} className={className}>
