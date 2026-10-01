@@ -462,6 +462,34 @@ button {
   text-align: center;
 }
 
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.2);
+}
+
+.auth-label {
+  align-self: flex-start;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* The sign-in screen's two provider buttons — a dedicated wrapper
+   (rather than relying on auth-center's 36px section gap) so they sit
+   close together as one choice, both full width of the same column. */
+.auth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.auth-buttons .btn-hero {
+  width: 100%;
+}
+
 /* The bordered panel the email-sign-in steps sit in (design canvas:
    AuthLogin.dc.html / AuthCode.dc.html) — auth-shell's other screens
    (handle picker, loading) stay panel-less, unchanged. */
@@ -769,6 +797,9 @@ button {
 }
 
 .back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: none;
   color: var(--text-subtle);

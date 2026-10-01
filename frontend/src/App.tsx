@@ -332,18 +332,20 @@ export default function App() {
           <span className="caption-text auth-headline-line2">THERE'S A GIF FOR THAT.</span>
         </h1>
         <p className="auth-subline">Clip it, caption it, send it. Sign in to get to your library.</p>
-        <a
-          className="btn btn-primary btn-hero"
-          href={LOGIN_URL}
-          onClick={() => saveReturnTo(location.pathname + location.search)}
-        >
-          <LogInIcon />
-          Sign in with Google
-        </a>
-        <button type="button" className="btn btn-secondary btn-hero" onClick={() => setShowEmailSignIn(true)}>
-          <MailIcon />
-          Continue with email
-        </button>
+        <div className="auth-buttons">
+          <a
+            className="btn btn-primary btn-hero"
+            href={LOGIN_URL}
+            onClick={() => saveReturnTo(location.pathname + location.search)}
+          >
+            <LogInIcon />
+            Continue with Google
+          </a>
+          <button type="button" className="btn btn-secondary btn-hero" onClick={() => setShowEmailSignIn(true)}>
+            <MailIcon />
+            Continue with email
+          </button>
+        </div>
       </AuthShell>
     )
   }

@@ -183,10 +183,13 @@ function EmailStep({
           once you&rsquo;re in.
         </p>
         <form className="auth-form" onSubmit={submit}>
+          <label className="auth-label" htmlFor="email-address-input">
+            Email address
+          </label>
           <input
+            id="email-address-input"
             className="auth-input"
             type="email"
-            aria-label="Email address"
             autoComplete="email"
             inputMode="email"
             value={email}

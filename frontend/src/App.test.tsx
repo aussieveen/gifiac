@@ -164,13 +164,13 @@ describe('App', () => {
 
     renderApp()
 
-    await screen.findByText('Sign in with Google')
+    await screen.findByText('Continue with Google')
     await user.click(screen.getByRole('button', { name: 'Continue with email' }))
 
     await screen.findByRole('heading', { name: 'Continue with email' })
     await user.click(screen.getByRole('button', { name: /back/i }))
 
-    await screen.findByText('Sign in with Google')
+    await screen.findByText('Continue with Google')
   })
 
   it('signing in with email routes a brand-new user into the handle picker, same as Google', async () => {
@@ -577,7 +577,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     renderAppAt('/library/abc123')
-    const signInLink = await screen.findByRole('link', { name: /sign in with google/i })
+    const signInLink = await screen.findByRole('link', { name: /continue with google/i })
     await user.click(signInLink)
     expect(sessionStorage.getItem('strewthgif:return_to')).toBe('/library/abc123')
 
