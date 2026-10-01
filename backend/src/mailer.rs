@@ -98,7 +98,17 @@ impl Mailer {
     }
 }
 
+/// "070372" -> "070 372" — a bare 6-digit run is hard to read/copy at a
+/// glance; splitting it into the two groups the design shows (and the
+/// code-entry screen itself visually groups into) matches what the
+/// recipient is about to type. `code` is always exactly 6 digits
+/// (email_auth::generate_code), so a fixed split point is safe.
+fn format_code_display(code: &str) -> String {
+    format!("{} {}", &code[..3], &code[3..])
+}
+
 fn plain_text_body(code: &str) -> String {
+    let code = format_code_display(code);
     format!(
         "Here's your StrewthGif sign-in code:\n\n    {code}\n\n\
          This code expires in 10 minutes.\n\n\
@@ -108,9 +118,14 @@ fn plain_text_body(code: &str) -> String {
 }
 
 fn html_body(code: &str) -> String {
+    let code = format_code_display(code);
     format!(
         "<div style=\"font-family:Helvetica,Arial,sans-serif;background:#f4f1e8;padding:32px\">\
          <div style=\"max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e4dfcf\">\
+         <div style=\"background:#111114;padding:20px 32px\">\
+         <img src=\"https://media.strewthgif.com/brand/strewthgif-lockup-on-dark.png\" alt=\"StrewthGif\" \
+         width=\"141\" height=\"28\" style=\"display:block;height:28px;width:141px;border:0\">\
+         </div>\
          <div style=\"padding:32px\">\
          <p style=\"font-size:22px;font-weight:700;color:#111114;margin:0 0 18px\">Here's your sign-in code</p>\
          <p style=\"font-size:16px;color:#3a3b44;margin:0 0 18px\">Enter this code on StrewthGif to sign in:</p>\
@@ -119,6 +134,30 @@ fn html_body(code: &str) -> String {
          <p style=\"font-size:15px;color:#3a3b44;margin:0 0 8px\">This code expires in <b>10 minutes</b>.</p>\
          <p style=\"font-size:13px;color:#6c6d7a;margin:0\">If you didn't request this, you can ignore this email. \
          Nobody can sign in without the code.</p>\
-         </div></div></div>"
+         </div>\
+         <div style=\"padding:18px 32px;border-top:1px solid #eee8d6\">\
+         <p style=\"font-size:12px;color:#8a8b98;margin:0\">Sent by StrewthGif because this address was entered on \
+         the sign-in page.</p>\
+         </div>\
+         </div></div>"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_code_display_splits_into_two_groups_of_three() {
+        assert_eq!(format_code_display("070372"), "070 372");
+    }
+
+    #[test]
+    fn html_body_includes_header_grouped_code_and_footer() {
+        let html = html_body("070372");
+        assert!(html.contains("strewthgif-lockup-on-dark.png"), "missing header logo");
+        assert!(html.contains("070 372"), "code not grouped into two blocks of 3");
+        assert!(!html.contains("070372"), "ungrouped code leaked in alongside the grouped one");
+        assert!(html.contains("Sent by StrewthGif because this address was entered"), "missing footer");
+    }
 }
