@@ -13,6 +13,7 @@ declare global {
     turnstile?: {
       render(container: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback'?: () => void }): string
       remove(widgetId: string): void
+      getResponse(widgetId: string): string | undefined
     }
   }
 }
@@ -40,20 +41,30 @@ function loadTurnstileScript(): Promise<void> {
  * before the visitor has completed the challenge. `null` `siteKey` (the
  * `/api/config` default when `TURNSTILE_SECRET_KEY` isn't set — local
  * dev/test) renders nothing and the token stays permanently `null`,
- * matching the backend skipping verification in that same case. */
+ * matching the backend skipping verification in that same case.
+ *
+ * `getToken()` is what submit should actually call, not the `token`
+ * state directly: Cloudflare's widget visibly flips to "Success!" and
+ * writes its response into the DOM synchronously with completion, but
+ * the registered `callback` — and so our `setToken` — can land a tick
+ * later. A click right as "Success!" appears can otherwise race ahead of
+ * the state update and submit an empty token despite the widget showing
+ * success (reproduced in prod). `getResponse` reads the SDK's own
+ * current value, sidestepping the race entirely; `token` state is kept
+ * only to drive `required`/button-enabled rendering. */
 function useTurnstile(siteKey: string | null) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [token, setToken] = useState<string | null>(null)
+  const widgetIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!siteKey) return
     let cancelled = false
-    let widgetId: string | null = null
 
     loadTurnstileScript()
       .then(() => {
         if (cancelled || !containerRef.current || !window.turnstile) return
-        widgetId = window.turnstile.render(containerRef.current, {
+        widgetIdRef.current = window.turnstile.render(containerRef.current, {
           sitekey: siteKey,
           callback: (t) => setToken(t),
           'expired-callback': () => setToken(null),
@@ -66,11 +77,21 @@ function useTurnstile(siteKey: string | null) {
 
     return () => {
       cancelled = true
-      if (widgetId && window.turnstile) window.turnstile.remove(widgetId)
+      if (widgetIdRef.current && window.turnstile) window.turnstile.remove(widgetIdRef.current)
+      widgetIdRef.current = null
     }
   }, [siteKey])
 
-  return { containerRef, token, required: siteKey !== null }
+  function getToken(): string | null {
+    const widgetId = widgetIdRef.current
+    if (widgetId && window.turnstile) {
+      const live = window.turnstile.getResponse(widgetId)
+      if (live) return live
+    }
+    return token
+  }
+
+  return { containerRef, token, getToken, required: siteKey !== null }
 }
 
 type Step = { kind: 'email' } | { kind: 'code'; email: string }
@@ -135,7 +156,7 @@ function EmailStep({
     setSending(true)
     setError(null)
     try {
-      await startEmailLogin(email.trim(), turnstile.token ?? '')
+      await startEmailLogin(email.trim(), turnstile.getToken() ?? '')
       onCodeSent(email.trim())
     } catch (err) {
       setError(emailAuthErrorMessage(err))

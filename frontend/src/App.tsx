@@ -10,7 +10,7 @@ import { EditorUnavailable } from './EditorUnavailable'
 import { EmailSignIn } from './EmailSignIn'
 import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
-import { ChevronDownIcon, LogInIcon, PlusIcon } from './icons'
+import { ChevronDownIcon, LogInIcon, MailIcon, PlusIcon } from './icons'
 import { Library } from './Library'
 import { NewGifPage } from './NewGifPage'
 import { Preferences } from './Preferences'
@@ -340,7 +340,8 @@ export default function App() {
           <LogInIcon />
           Sign in with Google
         </a>
-        <button type="button" className="btn btn-secondary" onClick={() => setShowEmailSignIn(true)}>
+        <button type="button" className="btn btn-secondary btn-hero" onClick={() => setShowEmailSignIn(true)}>
+          <MailIcon />
           Continue with email
         </button>
       </AuthShell>

@@ -45,6 +45,15 @@ export function LogInIcon({ size = 18, className }: IconProps) {
   )
 }
 
+export function MailIcon({ size = 18, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3 7l9 6 9-6" />
+    </svg>
+  )
+}
+
 export function SearchIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base} width={size} height={size} className={className}>
