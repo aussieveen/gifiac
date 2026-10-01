@@ -556,18 +556,27 @@ button {
    straight from `code` state. Avoids the fragile letter-spacing tricks
    other "boxed OTP input" implementations use to fake this with a single
    visible input. */
+/* `align-self: stretch` + `max-width` (rather than the boxes' natural
+   content width) so this fills whatever the card actually has to give —
+   on a narrow phone, auth-card's own padding alone leaves less than the
+   six boxes' natural 352px, and a fixed-width row would spill past the
+   card's edge rather than shrinking with it. */
 .code-input-wrap {
   position: relative;
-  align-self: flex-start;
+  align-self: stretch;
+  max-width: 352px;
 }
 
 .code-boxes {
   display: flex;
   gap: 8px;
+  width: 100%;
 }
 
 .code-box {
-  width: 52px;
+  flex: 1 1 0;
+  max-width: 52px;
+  min-width: 0;
   height: 64px;
   display: flex;
   align-items: center;
@@ -597,6 +606,17 @@ button {
   width: 2px;
   height: 30px;
   background: var(--accent);
+}
+
+@media (max-width: 420px) {
+  .code-box {
+    height: 52px;
+    font-size: 22px;
+  }
+
+  .code-box__caret {
+    height: 24px;
+  }
 }
 
 .code-input-overlay {
