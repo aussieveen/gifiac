@@ -462,6 +462,65 @@ button {
   text-align: center;
 }
 
+/* The bordered panel the email-sign-in steps sit in (design canvas:
+   AuthLogin.dc.html / AuthCode.dc.html) — auth-shell's other screens
+   (handle picker, loading) stay panel-less, unchanged. */
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+  padding: 36px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.auth-card .back-link {
+  align-self: flex-start;
+}
+
+.auth-card .auth-form {
+  align-items: stretch;
+}
+
+.auth-card .auth-input {
+  text-align: left;
+  min-width: 0;
+}
+
+/* Houses the real Cloudflare widget, which renders its own UI (success
+   state, branding) at its own natural size — this just gives it the same
+   bordered-row treatment as the rest of the card rather than sizing or
+   restyling its (cross-origin, unstylable) contents. */
+.auth-turnstile {
+  padding: 8px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: center;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-subtle);
+  font-size: 13px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 /* Decorative stack of three tiles above the sign-in headline. Solid muted
    blocks for now (design brief §3 leaves the door open to real public
    GIFs later). */

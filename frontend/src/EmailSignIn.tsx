@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { EmailAuthError, getConfig, startEmailLogin, verifyEmailCode } from './api'
+import { useLocation } from 'react-router-dom'
+import { EmailAuthError, LOGIN_URL, getConfig, startEmailLogin, verifyEmailCode } from './api'
 import { AuthShell } from './AuthShell'
-import { ArrowLeftIcon, LogInIcon } from './icons'
+import { ArrowLeftIcon, LogInIcon, MailIcon } from './icons'
+import { saveReturnTo } from './returnTo'
 import type { CurrentUser } from './types'
 
 // Cloudflare's widget API, loaded on demand (only when `/api/config`
@@ -150,6 +152,7 @@ function EmailStep({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const turnstile = useTurnstile(turnstileSiteKey)
+  const location = useLocation()
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -169,34 +172,47 @@ function EmailStep({
 
   return (
     <AuthShell>
-      <button type="button" className="back-link" onClick={onBack}>
-        <ArrowLeftIcon size={16} />
-        Back
-      </button>
-      <h1 className="auth-heading">Continue with email</h1>
-      <p className="auth-hint">
-        Enter your email and we&rsquo;ll send you a 6-digit code. No passwords. New here? You&rsquo;ll pick a handle
-        once you&rsquo;re in.
-      </p>
-      <form className="auth-form" onSubmit={submit}>
-        <input
-          className="auth-input"
-          type="email"
-          aria-label="Email address"
-          autoComplete="email"
-          inputMode="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          disabled={sending}
-          autoFocus
-        />
-        {turnstileSiteKey && <div ref={turnstile.containerRef} aria-label="Security check" />}
-        <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-          <LogInIcon size={18} />
-          {sending ? 'Sending…' : 'Send code'}
+      <div className="auth-card">
+        <button type="button" className="back-link" onClick={onBack}>
+          <ArrowLeftIcon size={16} />
+          Back
         </button>
-      </form>
-      {error && <p className="export-error">{error}</p>}
+        <h1 className="auth-heading">Continue with email</h1>
+        <p className="auth-hint">
+          Enter your email and we&rsquo;ll send you a 6-digit code. No passwords. New here? You&rsquo;ll pick a handle
+          once you&rsquo;re in.
+        </p>
+        <form className="auth-form" onSubmit={submit}>
+          <input
+            className="auth-input"
+            type="email"
+            aria-label="Email address"
+            autoComplete="email"
+            inputMode="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={sending}
+            autoFocus
+          />
+          {turnstileSiteKey && (
+            <div className="auth-turnstile" ref={turnstile.containerRef} aria-label="Security check" />
+          )}
+          <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
+            <MailIcon size={18} />
+            {sending ? 'Sending…' : 'Send code'}
+          </button>
+        </form>
+        {error && <p className="export-error">{error}</p>}
+        <div className="auth-divider">or</div>
+        <a
+          className="btn btn-secondary"
+          href={LOGIN_URL}
+          onClick={() => saveReturnTo(location.pathname + location.search)}
+        >
+          <LogInIcon size={18} />
+          Continue with Google
+        </a>
+      </div>
     </AuthShell>
   )
 }
@@ -270,51 +286,53 @@ function CodeStep({
 
   return (
     <AuthShell>
-      <button type="button" className="back-link" onClick={onUseDifferentEmail}>
-        <ArrowLeftIcon size={16} />
-        Use a different email
-      </button>
-      <h1 className="auth-heading">Check your email</h1>
-      <p className="auth-hint">
-        If <strong>{email}</strong> can sign in, we&rsquo;ve sent a 6-digit code to it. It expires in 10 minutes.
-      </p>
-      <form
-        className="auth-form"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (code.length === 6) void submit(code)
-        }}
-      >
-        <input
-          className="auth-input"
-          aria-label="6-digit code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          value={code}
-          onChange={(e) => onCodeChange(e.target.value)}
-          disabled={submitting}
-          autoFocus
-        />
-        <button type="submit" className="btn btn-primary" disabled={code.length !== 6 || submitting}>
-          {submitting ? 'Signing in…' : 'Sign in'}
+      <div className="auth-card">
+        <button type="button" className="back-link" onClick={onUseDifferentEmail}>
+          <ArrowLeftIcon size={16} />
+          Use a different email
         </button>
-      </form>
-      {error && (
-        <p className="export-error">
-          {error}
-          {attemptsRemaining !== null && <span> You have {attemptsRemaining} tries left with this code.</span>}
+        <h1 className="auth-heading">Check your email</h1>
+        <p className="auth-hint">
+          If <strong>{email}</strong> can sign in, we&rsquo;ve sent a 6-digit code to it. It expires in 10 minutes.
         </p>
-      )}
-      <p className="auth-hint">
-        {cooldown > 0 ? (
-          <>Resend code in {formatCooldown(cooldown)}</>
-        ) : (
-          <button type="button" className="back-link" onClick={resend} disabled={resending}>
-            {resending ? 'Sending…' : 'Resend code'}
+        <form
+          className="auth-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (code.length === 6) void submit(code)
+          }}
+        >
+          <input
+            className="auth-input"
+            aria-label="6-digit code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(e) => onCodeChange(e.target.value)}
+            disabled={submitting}
+            autoFocus
+          />
+          <button type="submit" className="btn btn-primary" disabled={code.length !== 6 || submitting}>
+            {submitting ? 'Signing in…' : 'Sign in'}
           </button>
+        </form>
+        {error && (
+          <p className="export-error">
+            {error}
+            {attemptsRemaining !== null && <span> You have {attemptsRemaining} tries left with this code.</span>}
+          </p>
         )}
-      </p>
+        <p className="auth-hint">
+          {cooldown > 0 ? (
+            <>Resend code in {formatCooldown(cooldown)}</>
+          ) : (
+            <button type="button" className="back-link" onClick={resend} disabled={resending}>
+              {resending ? 'Sending…' : 'Resend code'}
+            </button>
+          )}
+        </p>
+      </div>
     </AuthShell>
   )
 }
