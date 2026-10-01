@@ -548,8 +548,15 @@ pub struct GoogleTokenResponse {
 /// `turnstile_token` is optional so a request from a dev environment with
 /// no Turnstile site key configured (nothing for the frontend to render a
 /// widget against) still deserializes — `email_auth::EmailAuthConfig`
-/// decides whether a missing token is actually an error.
+/// decides whether a missing token is actually an error. Needs
+/// `rename_all`, unlike `EmailVerifyRequest` below (whose fields are
+/// single words, so camelCase and snake_case happen to coincide): without
+/// it, the frontend's `turnstileToken` JSON key never matches this
+/// struct's `turnstile_token` field, and `#[serde(default)]` silently
+/// swallows the mismatch into `None` instead of a deserialization error —
+/// so every request looked like a legitimately missing token.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmailStartRequest {
     pub email: String,
     #[serde(default)]
@@ -599,4 +606,24 @@ pub struct NewGif {
     pub external_url: Option<String>,
     pub user_id: String,
     pub template_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression test for a real production bug: without `rename_all =
+    // "camelCase"` on EmailStartRequest, this camelCase body (exactly
+    // what the frontend sends) silently deserialized turnstile_token as
+    // None via #[serde(default)] instead of failing loudly — every
+    // real request looked like it was missing its Turnstile token.
+    #[test]
+    fn email_start_request_reads_the_frontends_camel_case_turnstile_token() {
+        let body = serde_json::json!({
+            "email": "jess@example.com",
+            "turnstileToken": "a-real-token",
+        });
+        let req: EmailStartRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(req.turnstile_token.as_deref(), Some("a-real-token"));
+    }
 }
