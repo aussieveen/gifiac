@@ -97,6 +97,13 @@ finished GIFs/clips live in R2.
 | `TEMPLATE_ASSETS_S3_BUCKET` | *(required)* | Bucket name |
 | `TEMPLATE_ASSETS_S3_REGION` | *(required)* | AWS region the bucket lives in — also used to derive the S3 endpoint URL |
 | `TEMPLATE_ASSETS_S3_ENDPOINT_URL` | *(optional)* | Overrides the derived endpoint — only set this in local dev, pointing at MinIO |
+| `LOGIN_CODE_HMAC_KEY` | *(required)* | ≥32 random bytes, base64 (e.g. `openssl rand -base64 32`) — HMACs the email login code before it's stored (SPEC-EMAIL-AUTH.md §2) |
+| `MAILER` | `log` | `log` prints the login code instead of sending it (local dev/test); `ses` sends via AWS SES and requires `EMAIL_FROM_ADDRESS`/`SES_REGION` |
+| `EMAIL_FROM_ADDRESS` | *(required if `MAILER=ses`)* | The `From:` address for login-code emails |
+| `SES_REGION` | *(required if `MAILER=ses`)* | AWS region SES sends from |
+| `TURNSTILE_SECRET_KEY` | *(optional)* | Cloudflare Turnstile secret key — unset skips Turnstile verification entirely (local dev/test only; must be set in production) |
+| `TURNSTILE_SITE_KEY` | *(optional)* | Cloudflare Turnstile site key — not secret, served to the frontend via `GET /api/config` |
+| `TRUST_CF_CONNECTING_IP` | `false` | Only set `true` if the origin accepts traffic exclusively from Cloudflare's IP ranges — otherwise `CF-Connecting-IP` is a spoofable header and per-IP rate limiting falls back to a single shared bucket |
 
 The container listens on port `8080` internally; map it to whatever host
 port you like (`docker-compose.yml` maps `8123:8080` by default).
@@ -163,6 +170,10 @@ export TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
 export TEMPLATE_ASSETS_S3_BUCKET=gifiac-template-assets-test
 export TEMPLATE_ASSETS_S3_REGION=us-east-1
 export TEMPLATE_ASSETS_S3_ENDPOINT_URL=http://localhost:19000
+# Email login (SPEC-EMAIL-AUTH.md) — MAILER defaults to `log`, which
+# prints the code instead of sending it, so this is the only one of the
+# new vars local dev actually needs.
+export LOGIN_CODE_HMAC_KEY=$(openssl rand -base64 32)
 
 cargo run
 ```

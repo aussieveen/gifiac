@@ -19,26 +19,44 @@ pub enum AppError {
     /// non-admin (SPEC-CLOUD.md §7). Every other ownership violation in
     /// this app still 404s.
     Forbidden(String),
+    /// A rate limit was exceeded (SPEC-EMAIL-AUTH.md §6) — 429 with a
+    /// standard `Retry-After` header carrying the seconds to wait, rather
+    /// than inventing a JSON field for the same information.
+    TooManyRequests(i64),
     Internal(anyhow::Error),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
-            AppError::Internal(err) => {
-                tracing::error!(error = ?err, "internal error");
+        match self {
+            AppError::TooManyRequests(retry_after_seconds) => {
+                let body = format!("Please wait {retry_after_seconds} seconds before requesting another code.");
                 (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal server error".to_string(),
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(axum::http::header::RETRY_AFTER, retry_after_seconds.to_string())],
+                    body,
                 )
+                    .into_response()
             }
-        };
-        (status, message).into_response()
+            other => {
+                let (status, message) = match other {
+                    AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+                    AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+                    AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+                    AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
+                    AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+                    AppError::Internal(err) => {
+                        tracing::error!(error = ?err, "internal error");
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal server error".to_string(),
+                        )
+                    }
+                    AppError::TooManyRequests(_) => unreachable!("handled above"),
+                };
+                (status, message).into_response()
+            }
+        }
     }
 }
 

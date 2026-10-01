@@ -54,6 +54,10 @@ resource "aws_instance" "app" {
     source_videos_s3_region   = var.aws_region
     template_assets_s3_bucket = aws_s3_bucket.template_assets.bucket
     template_assets_s3_region = var.aws_region
+    email_from_address        = var.email_from_address
+    ses_region                = var.aws_region
+    turnstile_site_key        = var.turnstile_site_key
+    trust_cf_connecting_ip    = var.trust_cf_connecting_ip
   })
 
   # `data.aws_ami.al2023` re-resolves to whatever AMI is newest at plan

@@ -2,12 +2,14 @@ pub mod ass;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod email_auth;
 pub mod error;
 pub mod exports;
 pub mod ffmpeg;
 pub mod filmstrip_layout;
 pub mod handle;
 pub mod link_check;
+pub mod mailer;
 pub mod models;
 pub mod paths;
 pub mod routes;
@@ -67,6 +69,23 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
 
     let http_client = link_check::build_client()?;
     let google_auth = auth::GoogleAuthConfig::from_env()?;
+    let email_auth = email_auth::EmailAuthConfig::from_env()?;
+    let mailer = match email_auth.mailer_kind {
+        email_auth::MailerKind::Ses => {
+            mailer::Mailer::ses(
+                email_auth.email_from_address.clone().expect("checked in EmailAuthConfig::from_env"),
+                email_auth.ses_region.clone().expect("checked in EmailAuthConfig::from_env"),
+            )
+            .await
+        }
+        email_auth::MailerKind::Log => mailer::Mailer::log(),
+    };
+    tracing::info!(mailer = ?email_auth.mailer_kind, "email mailer selected");
+    if email_auth.turnstile_secret_key.is_none() {
+        tracing::warn!("TURNSTILE_SECRET_KEY not set — Turnstile verification is disabled");
+    }
+
+    spawn_login_code_cleanup(pool.clone());
 
     Ok(Arc::new(AppState {
         pool,
@@ -76,8 +95,31 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         template_assets_storage,
         http_client,
         google_auth,
+        email_auth,
+        mailer,
         export_jobs: Default::default(),
     }))
+}
+
+/// SPEC-EMAIL-AUTH.md §8: hourly in-process cleanup of expired
+/// `login_codes` rows — no new infra (systemd timer, separate binary) for
+/// what's just tidying rows that are otherwise harmless to leave around a
+/// while longer. Rows must survive at least an hour, per the rolling
+/// per-hour rate-limit windows in `email_auth`, so this only ever deletes
+/// rows created more than a day ago.
+fn spawn_login_code_cleanup(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            let older_than = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+            match db::delete_expired_login_codes(&pool, &older_than).await {
+                Ok(deleted) if deleted > 0 => tracing::info!(deleted, "cleaned up expired login codes"),
+                Ok(_) => {}
+                Err(err) => tracing::error!(error = ?err, "failed to clean up expired login codes"),
+            }
+        }
+    });
 }
 
 pub fn build_app(state: Arc<AppState>) -> Router {

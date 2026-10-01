@@ -17,7 +17,12 @@ variable "expected_aws_account_id" {
 }
 
 variable "domain_name" {
-  description = "Domain the app is served on. DNS is not hosted in Route53 (see terraform/README.md) — this only names the ACM certificate; the user points DNS at the ALB manually."
+  description = "Domain the app is served on. DNS is not hosted in Route53 (see terraform/README.md) — this only names the ACM certificate and APP_BASE_URL; the user points DNS at the ALB manually."
+  type        = string
+}
+
+variable "ses_domain_name" {
+  description = "Domain SES sends login-code emails from — deliberately separate from domain_name: SES verification only flows parent-to-child (verifying this domain also authorizes any subdomain of it, but not the reverse), and domain_name here is a `www.` subdomain the app happens to be served on. Defaults to the apex of domain_name isn't derived automatically (fragile string-stripping); set it explicitly. email_from_address must be on this domain or a subdomain of it."
   type        = string
 }
 
@@ -93,4 +98,32 @@ variable "r2_secret_access_key" {
   description = "Cloudflare R2 secret access key for the GIF/export output bucket. Supplied via terraform.tfvars or TF_VAR_r2_secret_access_key — never committed."
   type        = string
   sensitive   = true
+}
+
+# --- Email one-time-passcode login (SPEC-EMAIL-AUTH.md) ---
+# login_code_hmac_key has no variable here — it's Terraform-generated
+# (ssm.tf's random_id.login_code_hmac_key), the same "nothing external
+# needs to know it" reasoning as db_password, rather than a human-supplied
+# secret like the ones above.
+
+variable "email_from_address" {
+  description = "The `From:` address login-code emails are sent from (non-secret) — e.g. \"StrewthGif <login@strewthgif.example.com>\". Must be on a domain SES is verified for (see ses.tf)."
+  type        = string
+}
+
+variable "turnstile_site_key" {
+  description = "Cloudflare Turnstile site key (non-secret — exposed to the frontend via GET /api/config). The matching secret key is turnstile_secret_key below."
+  type        = string
+}
+
+variable "turnstile_secret_key" {
+  description = "Cloudflare Turnstile secret key (SPEC-EMAIL-AUTH.md §6). Supplied via terraform.tfvars or TF_VAR_turnstile_secret_key — never committed."
+  type        = string
+  sensitive   = true
+}
+
+variable "trust_cf_connecting_ip" {
+  description = "Whether the origin accepts traffic exclusively from Cloudflare's IP ranges — only then is the CF-Connecting-IP header safe to trust for per-IP rate limiting (SPEC-EMAIL-AUTH.md §6)."
+  type        = bool
+  default     = false
 }

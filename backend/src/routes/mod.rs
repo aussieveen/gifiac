@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod config;
 mod exports;
 pub(crate) mod gifs;
 mod preferences;
@@ -23,6 +24,9 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/auth/email/start", post(auth::email_start))
+        .route("/auth/email/verify", post(auth::email_verify))
+        .route("/config", get(config::get_config))
         .route("/users/me/handle", put(profiles::set_handle))
         .route("/profiles/{handle}", get(profiles::get_profile))
         .route("/library", get(gifs::list_library))

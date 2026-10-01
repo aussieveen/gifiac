@@ -476,11 +476,16 @@ pub struct CurrentUserView {
 
 impl CurrentUserView {
     pub fn from_user_and_preferences(user: User, preferences: PreferencesView) -> Self {
-        let suggested_handle = user
-            .handle
-            .is_none()
-            .then(|| user.display_name.as_deref().map(crate::handle::slugify))
-            .flatten();
+        // Google signups get a suggested slug from `display_name`; email
+        // signups have none, so fall back to the address's local part
+        // (SPEC-EMAIL-AUTH.md §4) — everything before `@`, slugified the
+        // same way.
+        let suggested_handle = user.handle.is_none().then(|| {
+            user.display_name
+                .as_deref()
+                .or_else(|| user.email.as_deref().and_then(|e| e.split('@').next()))
+                .map(crate::handle::slugify)
+        }).flatten();
         Self {
             id: user.id,
             handle: user.handle,
@@ -521,10 +526,15 @@ pub struct Session {
 }
 
 /// The subset of Google's OIDC `userinfo` response this app actually uses.
+/// `email_verified` (SPEC-EMAIL-AUTH.md §5) gates whether `email` is
+/// trusted enough to link a Google identity to an email-login account, or
+/// vice versa — Google returns it as part of the standard OIDC claim set.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GoogleUserInfo {
     pub sub: String,
     pub email: Option<String>,
+    #[serde(default)]
+    pub email_verified: bool,
     pub picture: Option<String>,
     pub name: Option<String>,
 }
@@ -532,6 +542,48 @@ pub struct GoogleUserInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GoogleTokenResponse {
     pub access_token: String,
+}
+
+/// `POST /api/auth/email/start` body (SPEC-EMAIL-AUTH.md §4).
+/// `turnstile_token` is optional so a request from a dev environment with
+/// no Turnstile site key configured (nothing for the frontend to render a
+/// widget against) still deserializes — `email_auth::EmailAuthConfig`
+/// decides whether a missing token is actually an error.
+#[derive(Debug, Deserialize)]
+pub struct EmailStartRequest {
+    pub email: String,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
+}
+
+/// `POST /api/auth/email/verify` body.
+#[derive(Debug, Deserialize)]
+pub struct EmailVerifyRequest {
+    pub email: String,
+    pub code: String,
+}
+
+/// A `login_codes` row (SPEC-EMAIL-AUTH.md §2).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LoginCode {
+    pub id: String,
+    pub email: String,
+    pub code_hash: String,
+    pub attempts: i32,
+    pub request_ip: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub consumed_at: Option<String>,
+}
+
+/// `GET /api/config` — the small set of public, non-secret runtime values
+/// the frontend needs before it's signed in (SPEC-EMAIL-AUTH.md §6/§9).
+/// Deliberately minimal: add a field here only when the frontend actually
+/// needs another one, not as a general settings bag.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicConfig {
+    pub turnstile_site_key: Option<String>,
 }
 
 pub struct NewGif {

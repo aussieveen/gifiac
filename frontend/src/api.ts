@@ -39,6 +39,78 @@ export function getCurrentUser(): Promise<CurrentUser | null> {
   return request<CurrentUser | null>('/api/auth/me')
 }
 
+// SPEC-EMAIL-AUTH.md §6/§9: public, non-secret runtime config the sign-in
+// screen needs before there's any session — today just whether Turnstile
+// is configured (it isn't in local dev/test, where the widget is simply
+// not rendered).
+export interface AppConfig {
+  turnstileSiteKey: string | null
+}
+
+export function getConfig(): Promise<AppConfig> {
+  return request<AppConfig>('/api/config')
+}
+
+// The email routes' error bodies are plain text (SPEC-EMAIL-AUTH.md §4:
+// the body *is* the machine-readable code, e.g. "invalid_or_expired"),
+// with a numeric `Retry-After` header on a 429 and an
+// `X-Attempts-Remaining` header on a wrong-code 400 — so these need their
+// own error type carrying that structured info, rather than the plain
+// `Error`/message string `throwIfNotOk` produces for every other route.
+export class EmailAuthError extends Error {
+  code: string
+  retryAfterSeconds?: number
+  attemptsRemaining?: number
+
+  constructor(code: string, retryAfterSeconds?: number, attemptsRemaining?: number) {
+    super(code)
+    this.name = 'EmailAuthError'
+    this.code = code
+    this.retryAfterSeconds = retryAfterSeconds
+    this.attemptsRemaining = attemptsRemaining
+  }
+}
+
+async function readEmailAuthError(response: Response): Promise<EmailAuthError> {
+  const code = (await response.text().catch(() => '')) || response.statusText
+  const retryAfter = response.headers.get('Retry-After')
+  const attemptsRemaining = response.headers.get('X-Attempts-Remaining')
+  return new EmailAuthError(
+    code,
+    retryAfter ? Number(retryAfter) : undefined,
+    attemptsRemaining ? Number(attemptsRemaining) : undefined,
+  )
+}
+
+// Starts (or resends) an email-passcode sign-in — 200 on success
+// regardless of whether the address is known, disabled, or brand new
+// (SPEC-EMAIL-AUTH.md §4). Throws `EmailAuthError` on failure, notably a
+// 429 (`retryAfterSeconds`) when the resend cooldown or an hourly limit
+// is hit.
+export async function startEmailLogin(email: string, turnstileToken: string): Promise<void> {
+  const response = await fetch('/api/auth/email/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, turnstileToken }),
+  })
+  if (!response.ok) throw await readEmailAuthError(response)
+}
+
+// Submits the 6-digit code; resolves to the now-signed-in user on
+// success (same shape `getCurrentUser` returns). Throws `EmailAuthError`
+// with `code` `"invalid_or_expired"` or `"too_many_attempts"` on failure —
+// the former carries `attemptsRemaining` when it's a wrong (rather than
+// expired/reused) code.
+export async function verifyEmailCode(email: string, code: string): Promise<CurrentUser> {
+  const response = await fetch('/api/auth/email/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, code }),
+  })
+  if (!response.ok) throw await readEmailAuthError(response)
+  return (await response.json()) as CurrentUser
+}
+
 export async function logout(): Promise<void> {
   const input = '/api/auth/logout'
   await throwIfNotOk(await fetch(input, { method: 'POST' }))

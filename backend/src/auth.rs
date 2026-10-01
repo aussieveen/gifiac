@@ -14,8 +14,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum_extra::extract::cookie::CookieJar;
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Utc};
+use cookie::time::Duration as CookieMaxAge;
+use uuid::Uuid;
 
 use crate::db;
 use crate::error::AppError;
@@ -120,6 +122,31 @@ pub async fn fetch_userinfo(http_client: &reqwest::Client, access_token: &str) -
         .json()
         .await
         .context("parsing google userinfo response")
+}
+
+/// Creates a session row and adds its cookie to `jar` — the one real path
+/// every login provider ends in (Google's callback, the email-passcode
+/// verify handler, and the local-dev bypass), so a session created any of
+/// those ways is indistinguishable to the rest of the app. Previously this
+/// was duplicated inline in `routes::auth::callback` and `::dev_login`;
+/// consolidated here so a third copy didn't need writing for email login.
+pub async fn create_session_and_set_cookie(
+    pool: &sqlx::PgPool,
+    cookies_require_https: bool,
+    jar: CookieJar,
+    user_id: &str,
+) -> Result<CookieJar, AppError> {
+    let session_id = Uuid::new_v4().to_string();
+    db::create_session(pool, &session_id, user_id, &Utc::now().to_rfc3339()).await?;
+
+    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, session_id))
+        .http_only(true)
+        .secure(cookies_require_https)
+        .same_site(SameSite::Lax)
+        .path("/")
+        .max_age(CookieMaxAge::days(SESSION_TTL_DAYS));
+
+    Ok(jar.add(session_cookie))
 }
 
 /// The signed-in user for a request — extracted from the session cookie,

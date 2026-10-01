@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminUserView, Gif, LibrarySort, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload,
-    TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
+    AdminUserView, Gif, LibrarySort, LoginCode, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template,
+    TemplatePayload, TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -713,6 +713,33 @@ pub async fn create_user_with_identity(
         .ok_or_else(|| anyhow::anyhow!("user row vanished immediately after insert"))
 }
 
+/// SPEC-EMAIL-AUTH.md §4/§5: resolves an email-login account, and lets the
+/// Google callback find an existing email-login user to link to. Exact
+/// match against the normalized, unique `users.email` column (migration
+/// 0017).
+pub async fn find_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE email = $1");
+    sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(email)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// SPEC-EMAIL-AUTH.md §4 step 6 / §5: attaches a new provider identity to
+/// an *existing* user — an email-login user's first Google sign-in, or a
+/// Google user's first email sign-in, both resolve to the same account
+/// rather than creating a second one.
+pub async fn add_identity(pool: &PgPool, provider: &str, provider_user_id: &str, user_id: &str) -> Result<()> {
+    sqlx::query("INSERT INTO identities (provider, provider_user_id, user_id) VALUES ($1, $2, $3)")
+        .bind(provider)
+        .bind(provider_user_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Refreshes the profile fields captured from the OAuth payload (§2/§5) —
 /// called on every login, not just the first, since a display name or
 /// avatar can change on Google's side over time.
@@ -1070,6 +1097,133 @@ pub async fn delete_session(pool: &PgPool, id: &str) -> Result<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+// --- Email login codes (SPEC-EMAIL-AUTH.md §2) ---
+
+const LOGIN_CODE_COLUMNS: &str = "id, email, code_hash, attempts, request_ip, created_at, expires_at, consumed_at";
+
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_login_code(
+    pool: &PgPool,
+    id: &str,
+    email: &str,
+    code_hash: &str,
+    request_ip: &str,
+    created_at: &str,
+    expires_at: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO login_codes (id, email, code_hash, attempts, request_ip, created_at, expires_at) \
+         VALUES ($1, $2, $3, 0, $4, $5, $6)",
+    )
+    .bind(id)
+    .bind(email)
+    .bind(code_hash)
+    .bind(request_ip)
+    .bind(created_at)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `/start` step 4: marks every outstanding (unconsumed, unexpired) code
+/// for this email consumed before issuing a new one, so only the
+/// most-recently-sent code is ever valid.
+pub async fn invalidate_outstanding_login_codes(pool: &PgPool, email: &str, now: &str) -> Result<()> {
+    sqlx::query("UPDATE login_codes SET consumed_at = $2 WHERE email = $1 AND consumed_at IS NULL AND expires_at > $2")
+        .bind(email)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn count_login_codes_for_email_since(pool: &PgPool, email: &str, since: &str) -> Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM login_codes WHERE email = $1 AND created_at > $2")
+        .bind(email)
+        .bind(since)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn count_login_codes_for_ip_since(pool: &PgPool, request_ip: &str, since: &str) -> Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM login_codes WHERE request_ip = $1 AND created_at > $2")
+        .bind(request_ip)
+        .bind(since)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// The resend-cooldown check (SPEC-EMAIL-AUTH.md §6: 1 per 60s per email)
+/// needs the exact timestamp of the most recent code, not just a count —
+/// so it can report how many seconds are left rather than a flat retry.
+pub async fn latest_login_code_for_email(pool: &PgPool, email: &str) -> Result<Option<LoginCode>> {
+    let sql = format!("SELECT {LOGIN_CODE_COLUMNS} FROM login_codes WHERE email = $1 ORDER BY created_at DESC LIMIT 1");
+    sqlx::query_as::<_, LoginCode>(sqlx::AssertSqlSafe(sql))
+        .bind(email)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_login_code(pool: &PgPool, id: &str) -> Result<Option<LoginCode>> {
+    let sql = format!("SELECT {LOGIN_CODE_COLUMNS} FROM login_codes WHERE id = $1");
+    sqlx::query_as::<_, LoginCode>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// `/verify` steps 2+3 combined into one atomic statement (SPEC-EMAIL-
+/// AUTH.md §4: "in the same statement as the check, to avoid races") — a
+/// `login_codes` row exists, matches `email`, isn't consumed, and isn't
+/// expired, and its `attempts` counter is bumped in the same write. `None`
+/// covers every "this attempt is invalid" case at once: missing row,
+/// wrong email, already consumed, or expired — all rendered identically
+/// (`invalid_or_expired`) by the caller regardless of which one it was.
+pub async fn increment_login_code_attempts(pool: &PgPool, id: &str, email: &str, now: &str) -> Result<Option<LoginCode>> {
+    let sql = format!(
+        "UPDATE login_codes SET attempts = attempts + 1 \
+         WHERE id = $1 AND email = $2 AND consumed_at IS NULL AND expires_at > $3 \
+         RETURNING {LOGIN_CODE_COLUMNS}"
+    );
+    sqlx::query_as::<_, LoginCode>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(email)
+        .bind(now)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// `/verify` step 5 (and the too-many-attempts lockout): atomically
+/// consumes the code, returning `false` if it was already consumed by a
+/// concurrent request — the caller treats that race as `invalid_or_expired`
+/// too.
+pub async fn consume_login_code(pool: &PgPool, id: &str, now: &str) -> Result<bool> {
+    let result = sqlx::query("UPDATE login_codes SET consumed_at = $2 WHERE id = $1 AND consumed_at IS NULL")
+        .bind(id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// The hourly cleanup interval task's one query (SPEC-EMAIL-AUTH.md §8) —
+/// rows must survive at least an hour for the rolling rate limits above to
+/// work, so this only ever removes rows old enough that no rate-limit
+/// window could still be counting them.
+pub async fn delete_expired_login_codes(pool: &PgPool, older_than: &str) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM login_codes WHERE created_at < $1")
+        .bind(older_than)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 #[cfg(test)]
