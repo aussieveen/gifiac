@@ -172,10 +172,14 @@ actual usage (6GB/40GB) didn't make a strong case for the ~$1.76/mo
 difference being worth the resize risk. This is why the final total
 landed at ~$14.37/mo rather than the original ~$12.60/mo estimate.
 
-**Open item:** `t4g.micro`'s 1GiB RAM (+ 2GiB swap) hasn't been
-exercised by a real ffmpeg export yet. Test with a real clip under
-real load before trusting this size long-term; `t4g.small`
-($13.43/mo, pushing the total to ~$21/mo) is the fallback if it OOMs.
+**Resolved:** real ffmpeg export tested on `t4g.micro`. No OOM kills
+(checked `dmesg`/kernel journal) — swap usage rose from a ~63MB
+baseline to ~191MB during the export, confirming the 2GB swap file is
+doing real work rather than sitting idle. Noticeably slower than
+`t3.medium` was, which tracks: this is memory pressure being absorbed
+by swap instead of crashing, not a free lunch. Acceptable tradeoff for
+a personal project; `t4g.small` ($13.43/mo, ~$21/mo total) remains the
+fallback if a heavier export ever does OOM.
 
 ## Suggested order
 
