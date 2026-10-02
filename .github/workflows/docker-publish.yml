@@ -18,6 +18,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Required for the linux/arm64 leg below — ubuntu-latest runners are
+      # amd64, so building for arm64 (COST-REDUCTION-PLAN.md step 3, the
+      # move to a t4g.micro/Graviton instance) runs under QEMU emulation.
+      # Noticeably slower than the amd64-only build was, since the whole
+      # Rust compile now runs emulated rather than on bare metal.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -45,7 +53,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
