@@ -11,6 +11,20 @@ Current run rate (on-demand, eu-west-1, confirmed via AWS Pricing API):
 | S3 / Route53 / misc | <$1 |
 | **Total** | **~$65-70/mo** |
 
+Current run rate after steps 1 and 2 (no ALB, no RDS — EC2 still
+`t3.medium` pending step 3):
+
+| Resource | Cost/mo |
+|---|---|
+| EC2 `t3.medium` | ~$33.30 |
+| EBS 40GB gp3 root volume | ~$3.52 |
+| 1 public IPv4 | ~$3.65 |
+| S3 / Route53 / misc | <$1 |
+| **Total** | **~$41.50/mo** |
+
+Already down from ~$65-70/mo to ~$41.50/mo. Step 3 (EC2 resize) is what
+gets this to the final target.
+
 Target: $8-12/mo. Decided floor: **~$12.60/mo on-demand** (user declined Spot
 pricing to avoid interruption risk):
 
@@ -65,7 +79,22 @@ App/instance changes:
   `www.strewthgif.com`, pointed at the instance's Elastic IP — replacing
   today's "point DNS at the ALB" step.
 
-## Step 2 — drop RDS, run Postgres on the instance
+## Step 2 — drop RDS, run Postgres on the instance ✅ done (2026-10-02)
+
+Executed as three safe sub-phases rather than one shot: (1) local
+`postgres:16-alpine` container + nightly `pg_dump`-to-S3 systemd timer
+stood up alongside RDS, app still pointed at RDS; (2) data copied via
+`pg_dump | psql` run on the instance (RDS isn't publicly reachable) and
+row counts verified identical across all 10 tables; (3) `DATABASE_URL`
+flipped to the local container, verified end-to-end on the live
+domain, then RDS destroyed (final snapshot `gifiac-final` taken
+automatically, plus 7 days of prior automated snapshots still exist).
+A manual pre-migration backup was also run and verified (valid gzip,
+correct `COPY` count) before the destroy, on top of RDS's own
+snapshot. `random_password.db`, `/gifiac/db_password`, the `rds`
+security group, the private subnets, and the `db_instance_class`/
+`db_allocated_storage` variables were all removed as dead config.
+
 
 Terraform changes:
 - Delete `terraform/rds.tf` (`aws_db_subnet_group.main`, `random_password.db`,
