@@ -9,8 +9,25 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  # Built as a per-arch matrix on NATIVE runners, then merged into one
+  # multi-arch manifest below — not a single buildx call with
+  # `platforms: linux/amd64,linux/arm64`, which builds the arm64 leg under
+  # QEMU emulation. For this image (Rust + ffmpeg-sys-next's clang/bindgen
+  # step) that emulation was bad enough to make the build effectively
+  # never finish (COST-REDUCTION-PLAN.md step 3 — cancelled after over an
+  # hour stuck on it). `ubuntu-24.04-arm` is a real arm64 runner, free for
+  # public repos, so the arm64 leg compiles natively instead.
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
       packages: write
@@ -18,13 +35,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Required for the linux/arm64 leg below — ubuntu-latest runners are
-      # amd64, so building for arm64 (COST-REDUCTION-PLAN.md step 3, the
-      # move to a t4g.micro/Graviton instance) runs under QEMU emulation.
-      # Noticeably slower than the amd64-only build was, since the whole
-      # Rust compile now runs emulated rather than on bare metal.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by digest only, no tags yet — `merge` below is what
+      # actually tags `latest`/the timestamp, once both arches exist.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.suffix }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -49,19 +109,15 @@ jobs:
             type=raw,value=latest
             type=raw,value=${{ steps.timestamp.outputs.tag }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create multi-arch manifest from the two digests
+        working-directory: /tmp/digests
+        run: |
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${{ steps.meta.outputs.json }}")
+          docker buildx imagetools create $tags \
+            $(for f in *; do echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:$f"; done)
 
   deploy:
-    needs: build-and-push
+    needs: merge
     runs-on: ubuntu-latest
     permissions:
       id-token: write
