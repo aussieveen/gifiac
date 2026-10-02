@@ -46,3 +46,17 @@ resource "aws_ssm_parameter" "turnstile_secret_key" {
   type  = "SecureString"
   value = var.turnstile_secret_key
 }
+
+# Caddy's TLS files, not env vars — deploy.sh writes these straight to
+# disk for the caddy container to mount (COST-REDUCTION-PLAN.md step 1).
+resource "aws_ssm_parameter" "cloudflare_origin_cert" {
+  name  = "/gifiac/cloudflare_origin_cert"
+  type  = "SecureString"
+  value = var.cloudflare_origin_cert
+}
+
+resource "aws_ssm_parameter" "cloudflare_origin_key" {
+  name  = "/gifiac/cloudflare_origin_key"
+  type  = "SecureString"
+  value = var.cloudflare_origin_key
+}

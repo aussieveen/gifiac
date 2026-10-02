@@ -43,6 +43,7 @@ resource "aws_instance" "app" {
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
     docker_compose_yml        = file("${path.module}/../docker-compose.yml")
+    caddyfile                 = file("${path.module}/../Caddyfile")
     deploy_sh                 = file("${path.module}/files/deploy.sh")
     rds_endpoint              = aws_db_instance.main.endpoint
     r2_account_id             = var.r2_account_id

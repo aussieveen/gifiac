@@ -21,6 +21,11 @@ R2_SECRET_ACCESS_KEY="$(get_param r2_secret_access_key)"
 LOGIN_CODE_HMAC_KEY="$(get_param login_code_hmac_key)"
 TURNSTILE_SECRET_KEY="$(get_param turnstile_secret_key)"
 
+mkdir -p certs
+get_param cloudflare_origin_cert > certs/origin.pem
+get_param cloudflare_origin_key > certs/origin.key
+chmod 600 certs/origin.pem certs/origin.key
+
 cat > .env <<EOF
 DATABASE_URL=postgres://gifiac:${DB_PASSWORD}@${RDS_ENDPOINT}/gifiac?sslmode=require
 R2_ACCOUNT_ID=${R2_ACCOUNT_ID}

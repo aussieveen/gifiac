@@ -127,3 +127,39 @@ variable "trust_cf_connecting_ip" {
   type        = bool
   default     = false
 }
+
+# --- Cloudflare-fronted origin, no ALB (COST-REDUCTION-PLAN.md step 1) ---
+
+variable "cloudflare_ipv4_ranges" {
+  description = "Cloudflare's published IPv4 ranges (https://www.cloudflare.com/ips-v4) — the security group only accepts 80/443 from these, since Cloudflare (not an AWS ALB) is the public-facing proxy now. Re-check the published list occasionally; it changes rarely."
+  type        = list(string)
+  default = [
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+  ]
+}
+
+variable "cloudflare_origin_cert" {
+  description = "PEM certificate from Cloudflare's Origin CA (dashboard: SSL/TLS -> Origin Server -> Create Certificate). Not secret on its own, but kept alongside the key via the same SSM mechanism for simplicity. Supplied via terraform.tfvars or TF_VAR_cloudflare_origin_cert — never committed."
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_origin_key" {
+  description = "PEM private key matching cloudflare_origin_cert. Supplied via terraform.tfvars or TF_VAR_cloudflare_origin_key — never committed."
+  type        = string
+  sensitive   = true
+}

@@ -71,24 +71,26 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-west-1
 
-      # terraform/files/deploy.sh and docker-compose.yml are BOTH only
-      # written once, at first boot, by user_data.sh.tftpl — and deploy.sh
-      # never touches either of them again. So both get re-pushed here on
-      # every deploy; without it, edits to either file in this repo (new
-      # env vars, ports, volumes, or deploy logic itself) would silently
-      # never reach the running instance, which is exactly what happened
-      # to the email-auth feature's deploy.sh changes before this fix:
-      # the instance kept running the pre-feature deploy.sh, which never
-      # wrote LOGIN_CODE_HMAC_KEY/MAILER/etc. into .env at all. Both sent
-      # as base64 over SSM's shorthand `commands=[...]` param to dodge
-      # quoting each file's own syntax.
+      # terraform/files/deploy.sh, docker-compose.yml, and Caddyfile are ALL
+      # only written once, at first boot, by user_data.sh.tftpl — and
+      # deploy.sh never touches any of them again. So all three get
+      # re-pushed here on every deploy; without it, edits to any of them in
+      # this repo (new env vars, ports, volumes, deploy logic, or Caddy
+      # config) would silently never reach the running instance, which is
+      # exactly what happened to the email-auth feature's deploy.sh changes
+      # before this fix: the instance kept running the pre-feature
+      # deploy.sh, which never wrote LOGIN_CODE_HMAC_KEY/MAILER/etc. into
+      # .env at all. All three sent as base64 over SSM's shorthand
+      # `commands=[...]` param to dodge quoting each file's own syntax.
       - name: Trigger deploy via SSM
         run: |
           compose_b64="$(base64 -w0 docker-compose.yml)"
+          caddyfile_b64="$(base64 -w0 Caddyfile)"
           deploy_sh_b64="$(base64 -w0 terraform/files/deploy.sh)"
-          params="$(jq -n --arg compose_b64 "$compose_b64" --arg deploy_sh_b64 "$deploy_sh_b64" \
+          params="$(jq -n --arg compose_b64 "$compose_b64" --arg caddyfile_b64 "$caddyfile_b64" --arg deploy_sh_b64 "$deploy_sh_b64" \
             '{commands: [
               "echo " + $compose_b64 + " | base64 -d > /opt/gifiac/docker-compose.yml",
+              "echo " + $caddyfile_b64 + " | base64 -d > /opt/gifiac/Caddyfile",
               "echo " + $deploy_sh_b64 + " | base64 -d > /opt/gifiac/deploy.sh",
               "bash /opt/gifiac/deploy.sh"
             ]}')"

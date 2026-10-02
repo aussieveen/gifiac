@@ -21,6 +21,10 @@ cat > docker-compose.yml <<'GIFIAC_COMPOSE_EOF'
 ${docker_compose_yml}
 GIFIAC_COMPOSE_EOF
 
+cat > Caddyfile <<'GIFIAC_CADDYFILE_EOF'
+${caddyfile}
+GIFIAC_CADDYFILE_EOF
+
 # Non-secret config, baked in at instance creation — genuine secrets
 # (SPEC-CLOUD.md §10) are fetched from SSM by deploy.sh instead, on every
 # deploy, not just this first boot. Every value is double-quoted: deploy.sh

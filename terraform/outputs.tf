@@ -1,22 +1,6 @@
-output "alb_dns_name" {
-  description = "Point the domain's DNS (CNAME or ALIAS, wherever it's hosted) at this."
-  value       = aws_lb.app.dns_name
-}
-
-output "acm_validation_records" {
-  description = "DNS validation record(s) to add wherever the domain's DNS is hosted — required before ACM issues the certificate. See terraform/README.md for the two-phase apply this implies."
-  value = [
-    for o in aws_acm_certificate.app.domain_validation_options : {
-      name  = o.resource_record_name
-      type  = o.resource_record_type
-      value = o.resource_record_value
-    }
-  ]
-}
-
-output "acm_certificate_arn" {
-  description = "The ACM certificate's ARN — check its status with `aws acm describe-certificate` while waiting for it to become ISSUED (see terraform/README.md)."
-  value       = aws_acm_certificate.app.arn
+output "app_elastic_ip" {
+  description = "Point the domain's DNS at this in Cloudflare, with the record proxied (orange-cloud) — no ALB any more (COST-REDUCTION-PLAN.md step 1)."
+  value       = aws_eip.app.public_ip
 }
 
 output "rds_endpoint" {

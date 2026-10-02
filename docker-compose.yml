@@ -1,12 +1,30 @@
 services:
+  caddy:
+    # No ALB any more (COST-REDUCTION-PLAN.md step 1) — Caddy terminates
+    # TLS straight on the instance using a Cloudflare Origin CA cert
+    # (deploy.sh writes /opt/gifiac/certs/* from SSM), with Cloudflare set
+    # to Full (Strict) in front. The security group only lets Cloudflare's
+    # ranges reach 80/443 at all.
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/gifiac/certs:/certs:ro
+    depends_on:
+      - gifiac
+
   gifiac:
     # Built and published by .github/workflows/docker-publish.yml on every push to main.
     # Pin to a specific build instead of :latest by swapping in a yyyy.mm.dd.hh.mm tag.
     image: ghcr.io/aussieveen/gifiac:latest
     container_name: gifiac
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     volumes:
       - /opt/gifiac/data:/data
     environment:

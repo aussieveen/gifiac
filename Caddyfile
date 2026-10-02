@@ -1,0 +1,8 @@
+:443 {
+	tls /certs/origin.pem /certs/origin.key
+	reverse_proxy gifiac:8080
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}
