@@ -34,7 +34,13 @@ EIP cleanup step; they go away automatically as part of Step 1 below when
 the ALB is deleted. Their cost is already folded into the ALB line above,
 not counted separately.
 
-## Step 1 — drop the ALB, move TLS to Cloudflare + Caddy
+## Step 1 — drop the ALB, move TLS to Cloudflare + Caddy ✅ done (2026-10-02)
+
+Verified end-to-end: DNS resolves to Cloudflare, Full (Strict) TLS
+validates the Origin CA cert, `https://www.strewthgif.com/` returns 200
+with `via: 1.1 Caddy`. ALB, its listeners, target group, and the ACM
+cert are destroyed; `terraform plan` shows no drift.
+
 
 Terraform changes:
 - Delete `terraform/alb.tf` entirely (`aws_lb.app`, `aws_lb_target_group.app`,
