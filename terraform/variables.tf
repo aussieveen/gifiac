@@ -39,9 +39,9 @@ variable "github_oidc_subject" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type. ffmpeg transcoding is CPU/memory-hungry enough that the cheapest t3.micro risks OOM-killing an export."
+  description = "EC2 instance type — must be an arm64/Graviton family (t4g.*) to match data.aws_ami.al2023 (ec2.tf). COST-REDUCTION-PLAN.md step 3: t4g.micro has only 1GiB RAM, same OOM-during-ffmpeg-export risk the previous t3.medium default was sized to avoid — user_data.sh.tftpl adds a swap file as a safety net, but watch real export memory usage before trusting this size long-term."
   type        = string
-  default     = "t3.medium"
+  default     = "t4g.micro"
 }
 
 variable "ec2_root_volume_size" {

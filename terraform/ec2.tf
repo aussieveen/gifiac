@@ -1,12 +1,20 @@
 # Amazon Linux 2023 ships the SSM agent preinstalled — nothing to
 # bootstrap for SSM access (see security_groups.tf: no SSH at all).
+# arm64, not x86_64(COST-REDUCTION-PLAN.md step 3 — t4g.micro is
+# Graviton/arm64; an x86_64 AMI simply fails to launch on a t4g instance
+# type, architecture mismatch).
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-*-arm64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
   }
 
   filter {

@@ -25,16 +25,18 @@ Current run rate after steps 1 and 2 (no ALB, no RDS — EC2 still
 Already down from ~$65-70/mo to ~$41.50/mo. Step 3 (EC2 resize) is what
 gets this to the final target.
 
-Target: $8-12/mo. Decided floor: **~$12.60/mo on-demand** (user declined Spot
-pricing to avoid interruption risk):
+Target: $8-12/mo. Decided floor, on-demand (user declined Spot pricing to
+avoid interruption risk) — **~$14.37/mo actual**, slightly above the
+original ~$12.60/mo estimate because the EBS volume stayed at 40GB
+rather than shrinking to 20GB (see step 3 below for why):
 
 | Resource | Cost/mo |
 |---|---|
 | EC2 `t4g.micro` (ARM, on-demand) | $6.72 |
-| EBS 20GB gp3 root volume | $1.76 |
+| EBS 40GB gp3 root volume | $3.52 |
 | 1 public IPv4 (unavoidable — AWS bills all public IPv4s since Feb 2024, attached or not) | $3.65 |
 | S3 / Route53 / misc | ~$0.50 |
-| **Total** | **~$12.60/mo** |
+| **Total** | **~$14.37/mo** |
 
 No ALB, no RDS.
 
@@ -125,43 +127,58 @@ App/instance changes:
    snapshot (`skip_final_snapshot = false` already does this on destroy)
    and `terraform apply` the RDS removal.
 
-## Step 3 — right-size EC2 to `t4g.micro` (ARM)
+## Step 3 — right-size EC2 to `t4g.micro` (ARM) ✅ done (2026-10-02)
 
-This is the one with the most moving parts since it's an architecture
-change (x86_64 → aarch64), not just a terraform edit:
+Executed as: (1) multi-arch Docker build — first attempt used a single
+buildx call with `platforms: linux/amd64,linux/arm64` under QEMU
+emulation, which made the arm64 leg effectively never finish
+(`ffmpeg-sys-next`'s clang/bindgen step emulates terribly; cancelled
+after over an hour stuck on it). Fixed by switching to a build-matrix
+pattern: each arch builds **natively** (arm64 on GitHub's free
+`ubuntu-24.04-arm` runner — this repo is public — amd64 on the usual
+runner), pushed by digest, then merged into one multi-arch manifest.
+Hit one bug along the way: the merge step's `imagetools create` used
+metadata-action's `.json` output (full of embedded double quotes)
+inside a double-quoted bash heredoc, breaking the quoting; fixed by
+switching to the plain newline-separated `.tags` output. (2) AMI
+filter switched to arm64, `instance_type` default → `t4g.micro`,
+Docker Compose plugin download made arch-aware (`uname -m` happens to
+match docker/compose's own release-asset naming exactly), 2GiB swap
+file added as an OOM safety net. (3) Took a fresh Postgres backup,
+ran `terraform apply` (replaced the instance — EIP reassociated
+automatically, same public IP, no DNS change needed), then restored
+the backup into the new empty Postgres container.
 
-- `.github/workflows/docker-publish.yml`: change
-  `platforms: linux/amd64` → `platforms: linux/amd64,linux/arm64` (keep
-  amd64 too, cheap with buildx cache, in case of rollback to an x86
-  instance). All three Dockerfile base images (`node:22-slim`,
-  `rust:1-slim-bookworm`, `debian:bookworm-slim`) ship official arm64
-  manifests, and `ffmpeg` is available via `apt` on arm64 Debian bookworm,
-  so no source changes expected — just slower CI (QEMU or native arm64
-  runner).
-- `terraform/user_data.sh.tftpl`: the Docker Compose plugin download is
-  hardcoded to `docker-compose-linux-x86_64` — change to resolve `uname -m`
-  (`x86_64` → `x86_64`, `aarch64` → `aarch64`) or just hardcode
-  `docker-compose-linux-aarch64` once committed to Graviton.
-- `terraform/variables.tf`: `instance_type` default → `t4g.micro`.
-- Add a swap file in `user_data.sh.tftpl` (e.g. 2GB on the EBS root volume)
-  as an OOM safety net — `t4g.micro` has only 1GiB RAM and the existing
-  code comment on `instance_type` already flags transcoding as
-  memory-hungry even on `t3.micro` (1GiB too, but x86).
-- This forces instance replacement (AMI stays the same family but
-  `instance_type` change doesn't need `-replace`; just changes the running
-  instance type — no data loss, brief restart).
+**The restore needed a second pass.** The first attempt lost every
+row in a foreign-key-referencing table (`favourites`, `gifs`,
+`identities`, `sessions`, `templates`, `user_preferences` all came
+back empty) — `users`/`videos` loaded fine. Cause: unlike step 2's
+migration (restoring into a genuinely empty database), this time the
+app's own `sqlx` migrations had already created the full schema
+*with FK constraints active* the moment the fresh containers booted,
+before the restore ran. `pg_dump`'s plain-SQL `COPY` statements load
+in alphabetical table order, which isn't FK-dependency order — most
+child tables sort before `users` alphabetically, so their `COPY`
+hit a live FK constraint against an empty parent table and silently
+no-opped. Fixed by truncating the partial data and re-running the
+restore wrapped in `SET session_replication_role = replica` (defers
+FK checks for that session) — row counts matched exactly on the
+second attempt, verified against the pre-replacement dump.
 
-Watch one real risk here: if an export genuinely needs more than ~1GiB +
-swap, `t4g.micro` will be too tight. Test with your largest real-world
-clip before committing to this size; `t4g.small` ($13.43/mo) is the
-fallback if `t4g.micro` OOMs under load, which would put the total around
-$19/mo instead of $12.60.
+EBS stayed at 40GB rather than shrinking to the originally-planned
+20GB — Postgres's data now also lives on this disk (step 2) on top of
+the original "Docker images + video cache" sizing reasoning, and
+actual usage (6GB/40GB) didn't make a strong case for the ~$1.76/mo
+difference being worth the resize risk. This is why the final total
+landed at ~$14.37/mo rather than the original ~$12.60/mo estimate.
+
+**Open item:** `t4g.micro`'s 1GiB RAM (+ 2GiB swap) hasn't been
+exercised by a real ffmpeg export yet. Test with a real clip under
+real load before trusting this size long-term; `t4g.small`
+($13.43/mo, pushing the total to ~$21/mo) is the fallback if it OOMs.
 
 ## Suggested order
 
-Step 1 (ALB→Cloudflare, no data risk, test HTTPS works end-to-end) →
-Step 2 (RDS→local Postgres, the one with actual data-loss risk, needs the
-dump/restore/verify sequence above) → Step 3 (EC2 resize + arch switch,
-test ffmpeg memory headroom before committing). Each step is
-independently revertible via `git revert` + `terraform apply` until Step
-2's final RDS destroy, which is the only irreversible one.
+All three steps are done, applied in order: Step 1 (ALB→Cloudflare) →
+Step 2 (RDS→local Postgres) → Step 3 (EC2 resize + arch switch). Final
+run rate: **~$14.37/mo**, down from ~$65-70/mo.
