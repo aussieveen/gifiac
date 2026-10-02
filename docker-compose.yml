@@ -1,4 +1,21 @@
 services:
+  # COST-REDUCTION-PLAN.md step 2 — runs alongside RDS during migration.
+  # `gifiac`'s DATABASE_URL still points at RDS until the data is copied
+  # over and verified (see deploy.sh / the plan doc for the cutover
+  # sequence); this container just needs to exist and be reachable first.
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gifiac
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: gifiac
+    volumes:
+      - /opt/gifiac/data/postgres:/var/lib/postgresql/data
+    expose:
+      - "5432"
+
   caddy:
     # No ALB any more (COST-REDUCTION-PLAN.md step 1) — Caddy terminates
     # TLS straight on the instance using a Cloudflare Origin CA cert

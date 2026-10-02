@@ -60,3 +60,20 @@ resource "aws_ssm_parameter" "cloudflare_origin_key" {
   type  = "SecureString"
   value = var.cloudflare_origin_key
 }
+
+# Password for the Postgres container running on the instance itself
+# (COST-REDUCTION-PLAN.md step 2). Deliberately a separate secret from
+# random_password.db/db_password (RDS's password) rather than reusing
+# it — the two databases are unrelated once migration finishes, and
+# keeping them distinct means nothing has to change here when RDS and
+# its password are eventually destroyed.
+resource "random_password" "postgres_local" {
+  length  = 32
+  special = false
+}
+
+resource "aws_ssm_parameter" "postgres_local_password" {
+  name  = "/gifiac/postgres_local_password"
+  type  = "SecureString"
+  value = random_password.postgres_local.result
+}
