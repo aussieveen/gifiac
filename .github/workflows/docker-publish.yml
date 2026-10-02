@@ -111,9 +111,19 @@ jobs:
 
       - name: Create multi-arch manifest from the two digests
         working-directory: /tmp/digests
+        # steps.meta.outputs.tags (not .json) on purpose — it's a plain
+        # newline-separated list with no embedded quote characters, safe
+        # to drop straight into a bash heredoc. .json's value is a JSON
+        # object full of double quotes, which broke this exact line the
+        # first time around: substituted verbatim into `<<< "..."`, its
+        # own quotes closed the heredoc's string early and jq choked on
+        # the truncated remainder ("Invalid literal at line 1, column 6").
         run: |
-          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${{ steps.meta.outputs.json }}")
-          docker buildx imagetools create $tags \
+          tag_args=""
+          while IFS= read -r t; do
+            [ -n "$t" ] && tag_args="$tag_args -t $t"
+          done <<< "${{ steps.meta.outputs.tags }}"
+          docker buildx imagetools create $tag_args \
             $(for f in *; do echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:$f"; done)
 
   deploy:
