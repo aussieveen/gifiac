@@ -3,11 +3,6 @@ output "app_elastic_ip" {
   value       = aws_eip.app.public_ip
 }
 
-output "rds_endpoint" {
-  description = "RDS connection endpoint (host:port)."
-  value       = aws_db_instance.main.endpoint
-}
-
 output "source_videos_bucket_name" {
   description = "The private S3 bucket name for SOURCE_VIDEOS_S3_BUCKET."
   value       = aws_s3_bucket.source_videos.bucket

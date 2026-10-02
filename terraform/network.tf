@@ -20,7 +20,11 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# Public subnets host the EC2 instance and the ALB (which needs 2 AZs).
+# Two AZs is a leftover from the ALB era (COST-REDUCTION-PLAN.md step 1
+# removed it) — only subnet [0] is actually used (ec2.tf), but kept at 2
+# rather than resized down, since shrinking would force-replace both
+# subnets for no real benefit (subnets are free; it's not costing anything
+# idle).
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
@@ -30,20 +34,6 @@ resource "aws_subnet" "public" {
 
   tags = {
     Name = "gifiac-public-${count.index}"
-  }
-}
-
-# Private subnets host only RDS, which never initiates outbound traffic —
-# no NAT gateway, so these stay on the VPC's default (no-internet-route)
-# table.
-resource "aws_subnet" "private" {
-  count             = 2
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.${count.index + 10}.0/24"
-  availability_zone = data.aws_availability_zones.available.names[count.index]
-
-  tags = {
-    Name = "gifiac-private-${count.index}"
   }
 }
 

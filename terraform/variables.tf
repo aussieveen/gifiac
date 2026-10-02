@@ -44,18 +44,6 @@ variable "instance_type" {
   default     = "t3.medium"
 }
 
-variable "db_instance_class" {
-  description = "RDS instance class."
-  type        = string
-  default     = "db.t4g.micro"
-}
-
-variable "db_allocated_storage" {
-  description = "RDS allocated storage, in GiB."
-  type        = number
-  default     = 20
-}
-
 variable "ec2_root_volume_size" {
   description = "EC2 root volume size, in GiB. Docker images plus the lazy source-video disk cache need headroom beyond the AMI default."
   type        = number

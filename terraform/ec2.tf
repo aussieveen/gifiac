@@ -45,7 +45,6 @@ resource "aws_instance" "app" {
     docker_compose_yml        = file("${path.module}/../docker-compose.yml")
     caddyfile                 = file("${path.module}/../Caddyfile")
     deploy_sh                 = file("${path.module}/files/deploy.sh")
-    rds_endpoint              = aws_db_instance.main.endpoint
     r2_account_id             = var.r2_account_id
     r2_bucket_name            = var.r2_bucket_name
     r2_public_base_url        = var.r2_public_base_url

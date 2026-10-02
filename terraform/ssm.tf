@@ -2,12 +2,6 @@
 # secret names exactly. Non-secret config stays as plain env vars in
 # docker-compose.yml, unchanged.
 
-resource "aws_ssm_parameter" "db_password" {
-  name  = "/gifiac/db_password"
-  type  = "SecureString"
-  value = random_password.db.result
-}
-
 resource "aws_ssm_parameter" "google_client_secret" {
   name  = "/gifiac/google_client_secret"
   type  = "SecureString"
@@ -29,8 +23,8 @@ resource "aws_ssm_parameter" "r2_secret_access_key" {
 # SPEC-EMAIL-AUTH.md §2/§12 — purely internal to the app (HMACs the email
 # login code before it's stored; nothing external ever needs to know or
 # match this value), so it's Terraform-generated straight into SSM, the
-# same as random_password.db above, rather than a human-supplied tfvar
-# like google_client_secret/r2_*.
+# same as random_password.postgres_local below, rather than a
+# human-supplied tfvar like google_client_secret/r2_*.
 resource "random_id" "login_code_hmac_key" {
   byte_length = 32
 }
@@ -62,11 +56,7 @@ resource "aws_ssm_parameter" "cloudflare_origin_key" {
 }
 
 # Password for the Postgres container running on the instance itself
-# (COST-REDUCTION-PLAN.md step 2). Deliberately a separate secret from
-# random_password.db/db_password (RDS's password) rather than reusing
-# it — the two databases are unrelated once migration finishes, and
-# keeping them distinct means nothing has to change here when RDS and
-# its password are eventually destroyed.
+# (COST-REDUCTION-PLAN.md step 2, now RDS's replacement).
 resource "random_password" "postgres_local" {
   length  = 32
   special = false

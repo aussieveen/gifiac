@@ -43,28 +43,3 @@ resource "aws_security_group" "ec2" {
     Name = "gifiac-ec2"
   }
 }
-
-resource "aws_security_group" "rds" {
-  name        = "gifiac-rds"
-  description = "gifiac RDS Postgres - from the app instance only."
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description     = "Postgres from the app instance"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ec2.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "gifiac-rds"
-  }
-}
