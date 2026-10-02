@@ -14,7 +14,6 @@ get_param() {
   aws ssm get-parameter --name "/gifiac/$1" --with-decryption --query 'Parameter.Value' --output text
 }
 
-DB_PASSWORD="$(get_param db_password)"
 GOOGLE_CLIENT_SECRET="$(get_param google_client_secret)"
 R2_ACCESS_KEY_ID="$(get_param r2_access_key_id)"
 R2_SECRET_ACCESS_KEY="$(get_param r2_secret_access_key)"
@@ -28,7 +27,7 @@ get_param cloudflare_origin_key > certs/origin.key
 chmod 600 certs/origin.pem certs/origin.key
 
 cat > .env <<EOF
-DATABASE_URL=postgres://gifiac:${DB_PASSWORD}@${RDS_ENDPOINT}/gifiac?sslmode=require
+DATABASE_URL=postgres://gifiac:${POSTGRES_PASSWORD}@postgres:5432/gifiac?sslmode=disable
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
 R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}

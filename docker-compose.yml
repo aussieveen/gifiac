@@ -40,6 +40,8 @@ services:
     image: ghcr.io/aussieveen/gifiac:latest
     container_name: gifiac
     restart: unless-stopped
+    depends_on:
+      - postgres
     expose:
       - "8080"
     volumes:
