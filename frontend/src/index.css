@@ -3524,7 +3524,7 @@ button {
 .home-ia-cta-compact {
   display: flex;
   gap: 8px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 /* Variant A — unified: a thin banner above the untouched Library grid */
@@ -3647,4 +3647,27 @@ button {
 .home-ia-switcher-label {
   font-family: var(--font-mono);
   white-space: nowrap;
+}
+
+@media (max-width: 479.98px) {
+  .home-ia-page {
+    padding: 20px 16px 100px;
+  }
+
+  .home-ia-cta,
+  .home-ia-cta-compact {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .home-ia-cta .btn,
+  .home-ia-cta-compact .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .home-ia-header-b {
+    justify-content: center;
+    text-align: center;
+  }
 }
