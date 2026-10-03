@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+#
+# Container images for the ingest/export Lambda functions (wayfinder
+# gifiac#32, piece 2). Mirrors the main `Dockerfile`'s cargo-chef
+# dependency-caching setup rather than sharing stages with it across
+# files (Docker has no cross-Dockerfile `FROM <stage>`) — kept in sync by
+# hand if that file's build steps change.
+#
+# Stays on debian:bookworm-slim (not an AWS `provided`/AL2023 base) for
+# the same reason the main Dockerfile does: ffmpeg-sys-next needs system
+# FFmpeg shared libraries, and Amazon Linux's default repos have
+# historically lacked a usable ffmpeg build. AWS Lambda's container-image
+# support works with any base image that implements the Lambda Runtime
+# API, which `lambda_runtime`'s `run(service_fn(handler))` does directly
+# in the binary — no AWS-provided base image is required.
+#
+# Build with `--target ingest-lambda` / `--target export-lambda`, context
+# `.` (repo root, same as the main Dockerfile).
+
+# ---------- backend dependency planning (cargo-chef) ----------
+FROM rust:1-slim-bookworm AS chef
+RUN cargo install cargo-chef --locked
+WORKDIR /app/backend
+
+FROM chef AS planner
+COPY backend/ .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---------- backend build ----------
+FROM chef AS builder
+# ffmpeg-sys-next builds bindings against the system FFmpeg libs via
+# pkg-config + bindgen (needs clang/libclang) — build-time only, not
+# carried into the runtime stages below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    clang \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libavfilter-dev \
+    libavdevice-dev \
+    libswscale-dev \
+    libswresample-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=planner /app/backend/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY backend/ .
+RUN cargo build --release --bin ingest_lambda --bin export_lambda
+
+# ---------- lambda runtime base (same apt-get block as the main Dockerfile's runtime stage) ----------
+FROM debian:bookworm-slim AS lambda-base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    fontconfig \
+    ca-certificates \
+    webp \
+    && rm -rf /var/lib/apt/lists/*
+COPY frontend/public/fonts/Anton-Regular.ttf /usr/local/share/fonts/Anton-Regular.ttf
+RUN fc-cache -f
+
+FROM lambda-base AS ingest-lambda
+COPY --from=builder /app/backend/target/release/ingest_lambda /var/task/bootstrap
+ENTRYPOINT ["/var/task/bootstrap"]
+
+FROM lambda-base AS export-lambda
+COPY --from=builder /app/backend/target/release/export_lambda /var/task/bootstrap
+ENTRYPOINT ["/var/task/bootstrap"]

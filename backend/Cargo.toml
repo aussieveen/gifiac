@@ -21,6 +21,12 @@ ffmpeg-next = "9.0.0"
 reqwest = { version = "0.13.4", features = ["json", "form"] }
 futures-util = "0.3.34"
 hmac = "0.12"
+# ingest_lambda/export_lambda only (wayfinder gifiac#32, piece 2) —
+# implements the Lambda Runtime API directly in the binary, which is what
+# lets the Lambda container image stay on a plain debian:bookworm-slim
+# base (same as the EC2 runtime image) instead of needing an AWS-provided
+# base image.
+lambda_runtime = "0.13"
 rand = "0.9"
 sha2 = "0.10"
 # Constant-time comparison for login-code HMAC verification
