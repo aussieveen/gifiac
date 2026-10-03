@@ -3351,3 +3351,221 @@ button {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
+/* ===== PROTOTYPE — wayfinder gifiac#38, dev-only. Delete this whole
+   block with frontend/src/prototype/IngestModalPrototype.tsx once a
+   variant wins or the losing ones are folded away. ===== */
+
+@keyframes proto-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.proto-ingest-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: proto-spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+/* Variant A — centered overlay modal + vertical stepper */
+
+.proto-ingest-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.proto-ingest-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  min-width: 320px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.proto-ingest-modal-title {
+  font-size: 16px;
+  margin: 0 0 18px;
+  color: var(--text);
+}
+
+.proto-ingest-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.proto-ingest-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-subtle);
+}
+
+.proto-ingest-step-active {
+  color: var(--text);
+}
+
+.proto-ingest-step-done {
+  color: var(--text-muted);
+}
+
+.proto-ingest-step-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Variant B — the upload tile morphs in place */
+
+.proto-ingest-tile-b {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.proto-ingest-tile-b-done {
+  background: color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+.proto-ingest-tile-b-trail {
+  display: flex;
+  gap: 6px;
+}
+
+.proto-ingest-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.proto-ingest-dot.filled {
+  background: var(--accent);
+}
+
+/* Variant C — bottom-corner toast, page stays usable */
+
+.proto-ingest-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  min-width: 220px;
+}
+
+.proto-ingest-toast-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.proto-ingest-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.proto-ingest-toast-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.proto-ingest-toast-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.proto-ingest-toast-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+/* Prototype chrome — switcher bar + preview trigger */
+
+.proto-switcher {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #000;
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  z-index: 300;
+}
+
+.proto-switcher-arrow {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.proto-switcher-label {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.proto-switcher-replay {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.proto-ingest-preview-btn {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 300;
+}
