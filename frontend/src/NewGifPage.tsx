@@ -11,7 +11,6 @@ import {
   uploadVideo,
 } from './api'
 import { PencilIcon, PlusIcon, TrashIcon, XIcon } from './icons'
-import { IngestModalPrototype, IngestPrototypeSwitcher, type VariantKey } from './prototype/IngestModalPrototype'
 import type { TemplateDetail, TemplateSummary, Video } from './types'
 
 interface Props {
@@ -66,11 +65,6 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
-
-  // PROTOTYPE — wayfinder gifiac#38. Dev-only; see frontend/src/prototype/.
-  const protoVariant = (searchParams.get('variant') as VariantKey) ?? 'A'
-  const [protoReplayKey, setProtoReplayKey] = useState(0)
-  const [protoPreviewing, setProtoPreviewing] = useState(false)
 
   const mine: DisplayTemplate[] = myTemplates.map((t) => ({ ...t, isOwn: true }))
   const shared: DisplayTemplate[] = otherTemplates.map((t) => ({ ...t, isOwn: false }))
@@ -276,28 +270,6 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
       {loadError && <p className="export-error">{loadError}</p>}
       {uploadError && <p className="export-error">{uploadError}</p>}
 
-      {/* PROTOTYPE — wayfinder gifiac#38, dev-only. Delete with the rest of frontend/src/prototype/. */}
-      {import.meta.env.DEV && (
-        <>
-          <button
-            type="button"
-            className="proto-ingest-preview-btn"
-            onClick={() => {
-              setProtoReplayKey((k) => k + 1)
-              setProtoPreviewing(true)
-              setTimeout(() => setProtoPreviewing(false), 5000)
-            }}
-          >
-            ▶ Preview ingest modal (variant {protoVariant})
-          </button>
-          <IngestPrototypeSwitcher
-            variant={protoVariant}
-            onChange={(v) => setSearchParams((prev) => ({ ...Object.fromEntries(prev), variant: v }), { replace: true })}
-            onReplay={() => setProtoReplayKey((k) => k + 1)}
-          />
-        </>
-      )}
-
       <div className="newgif-layout">
         <div className="newgif-grid">
           <div
@@ -308,9 +280,7 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
               handleFiles(e.dataTransfer.files)
             }}
           >
-            {import.meta.env.DEV && (uploading || protoPreviewing) && protoVariant === 'B' ? (
-              <IngestModalPrototype key={protoReplayKey} variant="B" active={true} />
-            ) : uploading ? (
+            {uploading ? (
               <span className="newgif-upload-title">Uploading…</span>
             ) : (
               <label className="newgif-upload-label">
@@ -472,11 +442,6 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
           </div>
         )}
       </div>
-
-      {/* PROTOTYPE — wayfinder gifiac#38. Variants A/C render as overlays above everything else; variant B replaces the tile's own content instead (wired above). */}
-      {import.meta.env.DEV && (uploading || protoPreviewing) && (protoVariant === 'A' || protoVariant === 'C') && (
-        <IngestModalPrototype key={protoReplayKey} variant={protoVariant} active={true} />
-      )}
     </div>
   )
 }
