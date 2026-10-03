@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, createTemplateExport, getTemplate, subscribeExportProgress, templateClipUrl, videoFileUrl } from './api'
 import mark from './assets/brand/strewthgif-mark.svg'
+import { ExportModalPrototype, ExportPrototypeSwitcher, type VariantKey as ExportVariantKey } from './prototype/ExportModalPrototype'
 import {
   AlignCenterIcon,
   AlignLeftIcon,
@@ -277,6 +278,16 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
+
+  // PROTOTYPE — wayfinder gifiac#39. Dev-only; see frontend/src/prototype/.
+  // Plain URL read/write (not react-router's useSearchParams) so this
+  // component doesn't start requiring a Router in tests that render it
+  // standalone.
+  const [exportProtoVariant, setExportProtoVariant] = useState<ExportVariantKey>(
+    () => (new URLSearchParams(window.location.search).get('exportVariant') as ExportVariantKey) ?? 'A',
+  )
+  const [exportProtoReplayKey, setExportProtoReplayKey] = useState(0)
+  const [exportProtoPreviewing, setExportProtoPreviewing] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   // The "Make GIF" dialog's own state — opens for both flows (naming is
   // universal now), but the "Also save as a template" card only ever
@@ -1012,9 +1023,43 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
                 </div>
               </div>
             )}
+            {/* PROTOTYPE — wayfinder gifiac#39, dev-only. Variants A/C anchor here; variant B is a page-level overlay rendered below. */}
+            {import.meta.env.DEV && (exportProtoPreviewing || submitting) && (exportProtoVariant === 'A' || exportProtoVariant === 'C') && (
+              <ExportModalPrototype key={exportProtoReplayKey} variant={exportProtoVariant} active={true} />
+            )}
           </div>
         </div>
       </header>
+
+      {/* PROTOTYPE — wayfinder gifiac#39, dev-only. Delete with the rest of frontend/src/prototype/. */}
+      {import.meta.env.DEV && (
+        <>
+          <button
+            type="button"
+            className="export-proto-preview-btn"
+            onClick={() => {
+              setExportProtoReplayKey((k) => k + 1)
+              setExportProtoPreviewing(true)
+              setTimeout(() => setExportProtoPreviewing(false), 3500)
+            }}
+          >
+            ▶ Preview export modal (variant {exportProtoVariant})
+          </button>
+          <ExportPrototypeSwitcher
+            variant={exportProtoVariant}
+            onChange={(v) => {
+              setExportProtoVariant(v)
+              const url = new URL(window.location.href)
+              url.searchParams.set('exportVariant', v)
+              window.history.replaceState(null, '', url)
+            }}
+            onReplay={() => setExportProtoReplayKey((k) => k + 1)}
+          />
+          {(exportProtoPreviewing || submitting) && exportProtoVariant === 'B' && (
+            <ExportModalPrototype key={exportProtoReplayKey} variant="B" active={true} />
+          )}
+        </>
+      )}
 
       {exportProgress && (
         <div className="editor-toast">
