@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminUserView, Gif, LibrarySort, LoginCode, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template,
-    TemplatePayload, TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
+    AdminUserView, ExportFormat, ExportJob, Gif, IngestJob, LibrarySort, LoginCode, NewGif, NewVideo,
+    PreferencesView, PublicGif, Session, Template, TemplatePayload, TemplateSummary, UpdatePreferencesRequest, User,
+    Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -1226,6 +1227,185 @@ pub async fn delete_expired_login_codes(pool: &PgPool, older_than: &str) -> Resu
     Ok(result.rows_affected())
 }
 
+// --- Ingest/export jobs (wayfinder gifiac#32) ---
+
+const INGEST_JOB_COLUMNS: &str = "id, video_id, stage, error, created_at, updated_at";
+const INGEST_JOB_TERMINAL_STAGES: &str = "'complete', 'failed', 'timed_out'";
+
+pub async fn insert_ingest_job(pool: &PgPool, id: &str, video_id: &str, now: &str) -> Result<IngestJob> {
+    let sql = format!(
+        "INSERT INTO ingest_jobs (id, video_id, stage, created_at, updated_at) \
+         VALUES ($1, $2, 'uploading', $3, $3) \
+         RETURNING {INGEST_JOB_COLUMNS}"
+    );
+    sqlx::query_as::<_, IngestJob>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(video_id)
+        .bind(now)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_ingest_job(pool: &PgPool, id: &str) -> Result<Option<IngestJob>> {
+    let sql = format!("SELECT {INGEST_JOB_COLUMNS} FROM ingest_jobs WHERE id = $1");
+    sqlx::query_as::<_, IngestJob>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Moves `stage` forward only if the row isn't already terminal — the
+/// "a late Lambda callback after the sweep marked a job `timed_out` gets
+/// dropped" rule (gifiac#43) lives here once, not duplicated at every call
+/// site. Returns `false` if the id doesn't exist OR the row is already
+/// terminal; the caller distinguishes those via a prior `get_ingest_job`
+/// read when it needs to log which.
+pub async fn update_ingest_stage(pool: &PgPool, id: &str, stage: &str, error: Option<&str>, now: &str) -> Result<bool> {
+    let sql = format!(
+        "UPDATE ingest_jobs SET stage = $2, error = $3, updated_at = $4 \
+         WHERE id = $1 AND stage NOT IN ({INGEST_JOB_TERMINAL_STAGES})"
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(stage)
+        .bind(error)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Backfills probe results once the ingest Lambda's callback reports them
+/// — `videos.duration_seconds`/`width`/`height` are nullable precisely so
+/// this can happen after the row already exists (piece 3 inserts it with
+/// NULLs at upload time).
+pub async fn fill_in_video_probe(pool: &PgPool, video_id: &str, duration_seconds: f64, width: i64, height: i64) -> Result<()> {
+    sqlx::query("UPDATE videos SET duration_seconds = $2, width = $3, height = $4 WHERE id = $1")
+        .bind(video_id)
+        .bind(duration_seconds)
+        .bind(width)
+        .bind(height)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The stuck-job sweep's (gifiac#43) one query: non-terminal rows whose
+/// last update is older than that job type's Lambda timeout + grace
+/// buffer.
+pub async fn find_stale_ingest_jobs(pool: &PgPool, older_than: &str) -> Result<Vec<IngestJob>> {
+    let sql = format!(
+        "SELECT {INGEST_JOB_COLUMNS} FROM ingest_jobs \
+         WHERE stage NOT IN ({INGEST_JOB_TERMINAL_STAGES}) AND updated_at < $1"
+    );
+    sqlx::query_as::<_, IngestJob>(sqlx::AssertSqlSafe(sql))
+        .bind(older_than)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn mark_ingest_job_timed_out(pool: &PgPool, id: &str, now: &str) -> Result<bool> {
+    update_ingest_stage(pool, id, "timed_out", None, now).await
+}
+
+const EXPORT_JOB_COLUMNS: &str = "id, request_json, gif_status, gif_percent, gif_error, mp4_status, mp4_percent, mp4_error, webm_status, webm_percent, webm_error, created_at, updated_at";
+const EXPORT_JOB_TERMINAL_STATUSES: &str = "'done', 'failed', 'timed_out'";
+
+pub async fn insert_export_job(pool: &PgPool, id: &str, request_json: &str, now: &str) -> Result<ExportJob> {
+    let sql = format!(
+        "INSERT INTO export_jobs (id, request_json, created_at, updated_at) \
+         VALUES ($1, $2, $3, $3) \
+         RETURNING {EXPORT_JOB_COLUMNS}"
+    );
+    sqlx::query_as::<_, ExportJob>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(request_json)
+        .bind(now)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_export_job(pool: &PgPool, id: &str) -> Result<Option<ExportJob>> {
+    let sql = format!("SELECT {EXPORT_JOB_COLUMNS} FROM export_jobs WHERE id = $1");
+    sqlx::query_as::<_, ExportJob>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Same terminal-lock semantics as `update_ingest_stage`, generalized
+/// over `ExportFormat`'s 3 column triples.
+pub async fn update_export_format_status(
+    pool: &PgPool,
+    id: &str,
+    format: ExportFormat,
+    status: &str,
+    percent: i32,
+    error: Option<&str>,
+    now: &str,
+) -> Result<bool> {
+    let (status_col, percent_col, error_col) = match format {
+        ExportFormat::Gif => ("gif_status", "gif_percent", "gif_error"),
+        ExportFormat::Mp4 => ("mp4_status", "mp4_percent", "mp4_error"),
+        ExportFormat::Webm => ("webm_status", "webm_percent", "webm_error"),
+    };
+    let sql = format!(
+        "UPDATE export_jobs SET {status_col} = $2, {percent_col} = $3, {error_col} = $4, updated_at = $5 \
+         WHERE id = $1 AND {status_col} NOT IN ({EXPORT_JOB_TERMINAL_STATUSES})"
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(status)
+        .bind(percent)
+        .bind(error)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// The stuck-job sweep's export-side query: a job is non-terminal (and
+/// thus a sweep candidate) as long as at least one of its 3 formats
+/// hasn't reached a terminal status.
+pub async fn find_stale_export_jobs(pool: &PgPool, older_than: &str) -> Result<Vec<ExportJob>> {
+    let sql = format!(
+        "SELECT {EXPORT_JOB_COLUMNS} FROM export_jobs \
+         WHERE updated_at < $1 \
+           AND (gif_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) \
+            OR mp4_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) \
+            OR webm_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}))"
+    );
+    sqlx::query_as::<_, ExportJob>(sqlx::AssertSqlSafe(sql))
+        .bind(older_than)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Marks every still-non-terminal format `timed_out` in one statement —
+/// the whole job is being abandoned, not one format in isolation.
+pub async fn mark_export_job_timed_out(pool: &PgPool, id: &str, now: &str) -> Result<bool> {
+    let sql = format!(
+        "UPDATE export_jobs SET \
+           gif_status = CASE WHEN gif_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) THEN 'timed_out' ELSE gif_status END, \
+           mp4_status = CASE WHEN mp4_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) THEN 'timed_out' ELSE mp4_status END, \
+           webm_status = CASE WHEN webm_status NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) THEN 'timed_out' ELSE webm_status END, \
+           updated_at = $2 \
+         WHERE id = $1"
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2224,5 +2404,231 @@ mod tests {
         let gifs = list_public_gifs_by_user(&pool, &owner).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["public"]);
+    }
+
+    async fn seed_video(pool: &PgPool, id: &str, user_id: &str) -> String {
+        insert_video(pool, &sample_video(id, user_id), "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        id.to_string()
+    }
+
+    #[tokio::test]
+    async fn ingest_job_insert_then_get_round_trips() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        let video_id = seed_video(&pool, "v1", &user).await;
+
+        let job = insert_ingest_job(&pool, "job1", &video_id, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(job.stage, "uploading");
+
+        let fetched = get_ingest_job(&pool, "job1").await.unwrap().unwrap();
+        assert_eq!(fetched.video_id, video_id);
+        assert_eq!(fetched.stage, "uploading");
+    }
+
+    #[tokio::test]
+    async fn update_ingest_stage_respects_terminal_lock() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        let video_id = seed_video(&pool, "v1", &user).await;
+        insert_ingest_job(&pool, "job1", &video_id, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        let moved = update_ingest_stage(&pool, "job1", "analyzing", None, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        assert!(moved);
+
+        let terminated = update_ingest_stage(&pool, "job1", "complete", None, "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+        assert!(terminated);
+
+        // A late callback after the job is already terminal is dropped —
+        // gifiac#43's "never resurrect" rule.
+        let late = update_ingest_stage(&pool, "job1", "failed", Some("too late"), "2026-08-22T00:00:03Z")
+            .await
+            .unwrap();
+        assert!(!late);
+        let job = get_ingest_job(&pool, "job1").await.unwrap().unwrap();
+        assert_eq!(job.stage, "complete");
+    }
+
+    #[tokio::test]
+    async fn fill_in_video_probe_writes_through_nullable_columns() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        sqlx::query(
+            "INSERT INTO videos (id, original_filename, extension, file_size_bytes, uploaded_at, user_id) \
+             VALUES ('v1', 'clip.mp4', 'mp4', 1024, $1, $2)",
+        )
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        fill_in_video_probe(&pool, "v1", 12.5, 1920, 1080).await.unwrap();
+
+        let video = get_video(&pool, "v1", &user).await.unwrap().unwrap();
+        assert_eq!(video.duration_seconds, 12.5);
+        assert_eq!(video.width, 1920);
+        assert_eq!(video.height, 1080);
+    }
+
+    #[tokio::test]
+    async fn find_stale_ingest_jobs_only_returns_non_terminal_and_old() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        let video_id = seed_video(&pool, "v1", &user).await;
+
+        insert_ingest_job(&pool, "stale", &video_id, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_ingest_job(&pool, "fresh", &video_id, "2026-08-22T00:10:00Z")
+            .await
+            .unwrap();
+        insert_ingest_job(&pool, "already-done", &video_id, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        update_ingest_stage(&pool, "already-done", "complete", None, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        let stale = find_stale_ingest_jobs(&pool, "2026-08-22T00:05:00Z").await.unwrap();
+        let ids: Vec<&str> = stale.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["stale"]);
+    }
+
+    #[tokio::test]
+    async fn mark_ingest_job_timed_out_sets_distinct_status() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        let video_id = seed_video(&pool, "v1", &user).await;
+        insert_ingest_job(&pool, "job1", &video_id, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        assert!(
+            mark_ingest_job_timed_out(&pool, "job1", "2026-08-22T00:02:00Z")
+                .await
+                .unwrap()
+        );
+        let job = get_ingest_job(&pool, "job1").await.unwrap().unwrap();
+        assert_eq!(job.stage, "timed_out");
+    }
+
+    #[tokio::test]
+    async fn export_job_insert_then_get_round_trips() {
+        let pool = test_pool().await;
+        let job = insert_export_job(&pool, "exp1", "{\"owner_id\":\"u1\"}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(job.gif_status, "pending");
+        assert_eq!(job.request_json, "{\"owner_id\":\"u1\"}");
+
+        let fetched = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(fetched.mp4_status, "pending");
+    }
+
+    #[tokio::test]
+    async fn update_export_format_status_is_independent_per_format() {
+        let pool = test_pool().await;
+        insert_export_job(&pool, "exp1", "{}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        update_export_format_status(&pool, "exp1", ExportFormat::Gif, "done", 100, None, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        update_export_format_status(
+            &pool,
+            "exp1",
+            ExportFormat::Mp4,
+            "failed",
+            40,
+            Some("boom"),
+            "2026-08-22T00:00:02Z",
+        )
+        .await
+        .unwrap();
+
+        let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(job.gif_status, "done");
+        assert_eq!(job.mp4_status, "failed");
+        assert_eq!(job.mp4_error.as_deref(), Some("boom"));
+        assert_eq!(job.webm_status, "pending");
+    }
+
+    #[tokio::test]
+    async fn update_export_format_status_respects_terminal_lock() {
+        let pool = test_pool().await;
+        insert_export_job(&pool, "exp1", "{}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        update_export_format_status(&pool, "exp1", ExportFormat::Gif, "done", 100, None, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        let late = update_export_format_status(
+            &pool,
+            "exp1",
+            ExportFormat::Gif,
+            "failed",
+            0,
+            Some("too late"),
+            "2026-08-22T00:00:02Z",
+        )
+        .await
+        .unwrap();
+        assert!(!late);
+
+        let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(job.gif_status, "done");
+    }
+
+    #[tokio::test]
+    async fn find_stale_export_jobs_only_returns_non_terminal_and_old() {
+        let pool = test_pool().await;
+        insert_export_job(&pool, "stale", "{}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        insert_export_job(&pool, "fresh", "{}", "2026-08-22T00:10:00Z")
+            .await
+            .unwrap();
+        insert_export_job(&pool, "already-done", "{}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        for format in [ExportFormat::Gif, ExportFormat::Mp4, ExportFormat::Webm] {
+            update_export_format_status(&pool, "already-done", format, "done", 100, None, "2026-08-22T00:00:00Z")
+                .await
+                .unwrap();
+        }
+
+        let stale = find_stale_export_jobs(&pool, "2026-08-22T00:05:00Z").await.unwrap();
+        let ids: Vec<&str> = stale.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["stale"]);
+    }
+
+    #[tokio::test]
+    async fn mark_export_job_timed_out_only_touches_non_terminal_formats() {
+        let pool = test_pool().await;
+        insert_export_job(&pool, "exp1", "{}", "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+        update_export_format_status(&pool, "exp1", ExportFormat::Gif, "done", 100, None, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+
+        mark_export_job_timed_out(&pool, "exp1", "2026-08-22T00:02:00Z").await.unwrap();
+
+        let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(job.gif_status, "done", "already-terminal format must not be overwritten");
+        assert_eq!(job.mp4_status, "timed_out");
+        assert_eq!(job.webm_status, "timed_out");
     }
 }
