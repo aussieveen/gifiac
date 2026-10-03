@@ -29,9 +29,20 @@ fn parse_sse_events(body: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> serde_json::Value {
+/// Uploads a video and drives its ingest job to completion (no real
+/// ingest Lambda runs in tests — see `common::complete_ingest_job`'s doc
+/// comment). Returns the finished `videos` row plus the local fixture
+/// path (kept alive, since the backend's own copy is deleted right after
+/// upload per SPEC-CLOUD.md §6) — callers that go on to export need it to
+/// drive the export Lambda's real ffmpeg work via
+/// `common::complete_export_job_with_real_files`.
+async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> (serde_json::Value, std::path::PathBuf) {
     let fixture_dir = TempDir::new().unwrap();
     let video_path = make_test_video(fixture_dir.path(), duration_seconds);
+    // Leaked deliberately — `fixture_dir` would otherwise delete this
+    // file on drop at the end of this function, before the caller gets
+    // to use it for the export step.
+    std::mem::forget(fixture_dir);
     let video_bytes = std::fs::read(&video_path).unwrap();
     let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
 
@@ -51,11 +62,33 @@ async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> serd
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let video_id = accepted["video_id"].as_str().unwrap();
+    let job_id = accepted["job_id"].as_str().unwrap();
+
+    let probe = gifiac_backend::ffmpeg::probe_video(&video_path).unwrap();
+    common::complete_ingest_job(test_app, job_id, probe.duration_seconds, probe.width, probe.height).await;
+
+    let get_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(test_app, Request::builder())
+                .uri(format!("/api/videos/{video_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    serde_json::from_slice(&bytes).unwrap()
+    let video: serde_json::Value =
+        serde_json::from_slice(&axum::body::to_bytes(get_response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (video, video_path)
 }
 
 /// Doubles as the export pipeline's coverage of SPEC-CLOUD.md §6's local
@@ -67,7 +100,7 @@ async fn upload_video(test_app: &common::TestApp, duration_seconds: f64) -> serd
 #[tokio::test]
 async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     let test_app = spawn_app().await;
-    let video = upload_video(&test_app, 6.0).await;
+    let (video, video_path) = upload_video(&test_app, 6.0).await;
     let video_id = video["id"].as_str().unwrap();
 
     let request_body = json!({
@@ -111,9 +144,17 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
 
-    // Drive the SSE stream to completion (it closes once the job's
-    // broadcast sender is dropped) with a generous timeout so a real bug
-    // that hangs the pipeline fails the test instead of the suite.
+    // No real export Lambda runs in tests — run the same ffmpeg pipeline
+    // it would have (`transcode_and_upload`, real encode + real R2
+    // upload) directly, then simulate its "done" callbacks, before
+    // opening the progress stream (wayfinder gifiac#32's terminal-replay
+    // path, taken once the job is already done).
+    let captions: Vec<gifiac_backend::models::Caption> = serde_json::from_value(request_body["captions"].clone()).unwrap();
+    let (output_width, output_height) =
+        gifiac_backend::scale::scaled_dimensions(video["width"].as_i64().unwrap(), video["height"].as_i64().unwrap());
+    let ass_content = gifiac_backend::ass::generate_ass(&captions, 0.0, 3.0, output_width, output_height);
+    common::complete_export_job_with_real_files(&test_app, &export_id, &video_path, &ass_content, 0.0, 3.0).await;
+
     let progress_response = tokio::time::timeout(
         Duration::from_secs(60),
         test_app.app.clone().oneshot(
@@ -139,19 +180,6 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     let events = parse_sse_events(&body_text);
 
     assert!(!events.is_empty(), "expected at least one SSE event");
-    let stage_names: Vec<&str> = events.iter().map(|(event, _)| event.as_str()).collect();
-    for expected_stage in [
-        "palette_gen",
-        "encoding_gif",
-        "encoding_mp4",
-        "encoding_webm",
-        "uploading",
-    ] {
-        assert!(
-            stage_names.contains(&expected_stage),
-            "expected a {expected_stage} event among {stage_names:?}"
-        );
-    }
 
     let (last_event, last_data) = events.last().unwrap();
     assert_eq!(
@@ -160,7 +188,14 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
     );
     let gif: serde_json::Value = serde_json::from_str(last_data).unwrap();
     assert_eq!(gif["name"], "test export"); // trimmed
-    assert_eq!(gif["video_id"], video_id);
+    // Not asserting `gif["video_id"] == video_id` here: the source video
+    // is untemplated scratch space, auto-cleaned-up as part of this same
+    // export (see videos_api.rs's
+    // `making_a_gif_from_an_untemplated_video_cleans_it_up_automatically`,
+    // which is what actually covers that behavior) — `ON DELETE SET
+    // NULL` has already nulled it in the DB by the time this reads back
+    // via `export_progress`'s terminal-replay path (the job was already
+    // complete before this stream opened).
     assert_eq!(gif["caption_text"], "Just testing.");
     assert!(gif["width"].as_i64().unwrap() > 0);
     assert!(gif["height"].as_i64().unwrap() > 0);
@@ -222,7 +257,7 @@ async fn export_pipeline_produces_a_gif_and_uploads_all_three_formats() {
 #[tokio::test]
 async fn save_as_template_during_export_preserves_the_video_and_creates_a_working_template() {
     let test_app = spawn_app().await;
-    let video = upload_video(&test_app, 6.0).await;
+    let (video, video_path) = upload_video(&test_app, 6.0).await;
     let video_id = video["id"].as_str().unwrap().to_string();
 
     let request_body = json!({
@@ -255,6 +290,14 @@ async fn save_as_template_during_export_preserves_the_video_and_creates_a_workin
     )
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
+    let _ = &video_path; // this test doesn't inspect real encoded output
+    common::complete_export_job(
+        &test_app,
+        &export_id,
+        video["width"].as_i64().unwrap(),
+        video["height"].as_i64().unwrap(),
+    )
+    .await;
 
     let progress_response = tokio::time::timeout(
         Duration::from_secs(60),
@@ -323,7 +366,7 @@ async fn export_output_duration_matches_the_requested_range_not_the_source_video
     // A source clearly longer than the requested range, so a regression
     // (falling back to full source length) is unmistakable rather than
     // hidden by a source that's already close to the range.
-    let video = upload_video(&test_app, 10.0).await;
+    let (video, video_path) = upload_video(&test_app, 10.0).await;
     let video_id = video["id"].as_str().unwrap();
 
     let request_body = json!({
@@ -353,6 +396,14 @@ async fn export_output_duration_matches_the_requested_range_not_the_source_video
     )
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
+
+    // Real ffmpeg pipeline (no Lambda runs in tests) — this test's whole
+    // point is checking the real output's duration, so it needs the real
+    // encode, not a simulated callback alone.
+    let (output_width, output_height) =
+        gifiac_backend::scale::scaled_dimensions(video["width"].as_i64().unwrap(), video["height"].as_i64().unwrap());
+    let ass_content = gifiac_backend::ass::generate_ass(&[], 1.0, 3.5, output_width, output_height);
+    common::complete_export_job_with_real_files(&test_app, &export_id, &video_path, &ass_content, 1.0, 2.5).await;
 
     let progress_response = tokio::time::timeout(
         Duration::from_secs(60),
@@ -406,7 +457,7 @@ async fn export_output_duration_matches_the_requested_range_not_the_source_video
 #[tokio::test]
 async fn export_with_empty_name_is_rejected() {
     let test_app = spawn_app().await;
-    let video = upload_video(&test_app, 3.0).await;
+    let (video, _video_path) = upload_video(&test_app, 3.0).await;
 
     let request_body = json!({
         "video_id": video["id"],
@@ -468,7 +519,7 @@ async fn export_for_unknown_video_returns_404() {
 #[tokio::test]
 async fn export_from_another_users_video_returns_404() {
     let test_app = spawn_app().await;
-    let video = upload_video(&test_app, 3.0).await;
+    let (video, _video_path) = upload_video(&test_app, 3.0).await;
     let other_cookie = login_as(&test_app, "other@example.com").await;
 
     let request_body = json!({

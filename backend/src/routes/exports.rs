@@ -11,11 +11,14 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::ass::generate_ass;
 use crate::auth::CurrentUser;
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{self, ExportEvent};
-use crate::models::{ExportRequest, TemplateExportRequest};
+use crate::lambda_jobs;
+use crate::models::{ExportFormat, ExportJobContext, ExportRequest, TemplateExportRequest, TemplatePayload};
+use crate::paths;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -49,24 +52,35 @@ pub async fn create_export(
     let video = db::get_video(&state.pool, &request.video_id, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
+    // The one place the ingest/export split (wayfinder gifiac#32)
+    // actually needs a runtime check: the export pipeline requires real
+    // dimensions/duration, which don't exist until the ingest Lambda's
+    // callback backfills them.
+    let (Some(duration), Some(width), Some(height)) = (video.duration_seconds, video.width, video.height) else {
+        return Err(AppError::BadRequest(
+            "video is still being processed, try again shortly".to_string(),
+        ));
+    };
+    let _ = duration; // not needed below, but destructured for the single combined check
 
     let export_id = Uuid::new_v4();
-    let (tx, _rx) = broadcast::channel(32);
-    state
-        .export_jobs
-        .lock()
-        .unwrap()
-        .insert(export_id, tx.clone());
+    let clip_duration = request.gif_range_end - request.gif_range_start;
+    let (output_width, output_height) = crate::scale::scaled_dimensions(width, height);
+    let ass_content = generate_ass(
+        &request.captions,
+        request.gif_range_start,
+        request.gif_range_end,
+        output_width,
+        output_height,
+    );
+    let source_key = paths::video_object_key(&Uuid::parse_str(&video.id)?, &video.extension);
 
-    // Captured before spawning — this is a detached background task with
-    // no request to re-extract `CurrentUser` from later (SPEC-CLOUD.md
-    // §3: the resulting `gifs` row still needs an owner).
-    let owner_id = user.id.clone();
-    let job_state = state.clone();
-    tokio::spawn(async move {
-        exports::run_export_job(&job_state, export_id, video, request, &owner_id, tx).await;
-        job_state.export_jobs.lock().unwrap().remove(&export_id);
-    });
+    let context = ExportJobContext::Video {
+        video_id: video.id.clone(),
+        owner_id: user.id.clone(),
+        request: request.clone(),
+    };
+    start_export_job(&state, export_id, &context, &source_key, &ass_content, request.gif_range_start, clip_duration).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -98,17 +112,20 @@ pub async fn create_template_export(
     let template = db::get_template_for_use(&state.pool, &id, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
+    let payload: TemplatePayload = serde_json::from_str(&template.payload_json).map_err(anyhow::Error::from)?;
+    let clip_duration = payload.gif_range_end - payload.gif_range_start;
+    let template_uuid = Uuid::parse_str(&template.id)?;
 
     let export_id = Uuid::new_v4();
-    let (tx, _rx) = broadcast::channel(32);
-    state.export_jobs.lock().unwrap().insert(export_id, tx.clone());
+    let ass_content = generate_ass(&request.captions, 0.0, clip_duration, payload.width, payload.height);
+    let source_key = paths::template_clip_object_key(&template_uuid);
 
-    let owner_id = user.id.clone();
-    let job_state = state.clone();
-    tokio::spawn(async move {
-        exports::run_template_export_job(&job_state, export_id, template, request, &owner_id, tx).await;
-        job_state.export_jobs.lock().unwrap().remove(&export_id);
-    });
+    let context = ExportJobContext::Template {
+        template_id: template.id.clone(),
+        owner_id: user.id.clone(),
+        request: request.clone(),
+    };
+    start_export_job(&state, export_id, &context, &source_key, &ass_content, 0.0, clip_duration).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -118,29 +135,88 @@ pub async fn create_template_export(
     ))
 }
 
+/// Shared by both export entry points: inserts the DB job row (with
+/// `request_json` stashed for the callback-driven finalize step, gifiac#32),
+/// registers a broadcast channel, and fires off all 3 per-format Lambda
+/// invocations. Fire-and-forget past this point — the only way either
+/// caller learns the outcome is via `export_progress`'s SSE stream,
+/// matching the pre-Lambda pipeline's "broadcast-only outcome" contract.
+async fn start_export_job(
+    state: &Arc<AppState>,
+    export_id: Uuid,
+    context: &ExportJobContext,
+    source_key: &str,
+    ass_content: &str,
+    range_start: f64,
+    clip_duration: f64,
+) -> Result<(), AppError> {
+    let request_json = serde_json::to_string(context).map_err(anyhow::Error::from)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    db::insert_export_job(&state.pool, &export_id.to_string(), &request_json, &now).await?;
+
+    let (tx, _rx) = broadcast::channel(32);
+    state.export_jobs.lock().unwrap().insert(export_id, tx);
+
+    for format in [ExportFormat::Gif, ExportFormat::Mp4, ExportFormat::Webm] {
+        let output_key = match format {
+            ExportFormat::Gif => paths::gif_object_key(&export_id),
+            ExportFormat::Mp4 => paths::mp4_object_key(&export_id),
+            ExportFormat::Webm => paths::webm_object_key(&export_id),
+        };
+        if let Err(err) = lambda_jobs::invoke_export(state, export_id, format, source_key, ass_content, range_start, clip_duration, &output_key).await
+        {
+            tracing::error!(export_id = %export_id, format = format.as_str(), error = ?err, "failed to invoke export lambda");
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn export_progress(
     State(state): State<Arc<AppState>>,
     _current_user: CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
+    let job = db::get_export_job(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+
+    if exports::export_job_is_terminal(&job) {
+        let event = if exports::export_job_failed(&job) {
+            ExportEvent::Failed {
+                message: job.gif_error.unwrap_or_else(|| "export failed".to_string()),
+            }
+        } else {
+            // A terminal, non-failed job always has a `gifs` row by the
+            // time `finalize_export_job` removed its live channel — look
+            // it up fresh rather than keeping a second copy of "the last
+            // known Gif" anywhere.
+            let gif = db::get_gif_unscoped(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+            ExportEvent::Complete { gif: Box::new(gif) }
+        };
+        let stream = futures_util::stream::once(async move { Ok(to_sse_event(&event)) });
+        return Ok(Sse::new(stream.boxed()).keep_alive(KeepAlive::default()));
+    }
 
     let rx = {
-        let jobs = state.export_jobs.lock().unwrap();
-        jobs.get(&uuid).ok_or(AppError::NotFound)?.subscribe()
+        let mut jobs = state.export_jobs.lock().unwrap();
+        jobs.entry(uuid).or_insert_with(|| broadcast::channel(32).0).subscribe()
     };
+    let stream = BroadcastStream::new(rx).filter_map(|msg| async move { msg.ok().map(|event| Ok(to_sse_event(&event))) });
 
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|msg| async move { msg.ok().map(|event| Ok(to_sse_event(&event))) });
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(stream.boxed()).keep_alive(KeepAlive::default()))
 }
 
 fn to_sse_event(event: &ExportEvent) -> Event {
     match event {
-        ExportEvent::Progress { stage, percent } => Event::default()
-            .event(*stage)
-            .data(serde_json::json!({ "percent": percent }).to_string()),
+        ExportEvent::Progress { format, percent } => Event::default()
+            .event("progress")
+            .data(serde_json::json!({ "format": format, "percent": percent }).to_string()),
+        ExportEvent::FormatDone { format } => Event::default()
+            .event("format_done")
+            .data(serde_json::json!({ "format": format }).to_string()),
+        ExportEvent::FormatFailed { format, message } => Event::default()
+            .event("format_failed")
+            .data(serde_json::json!({ "format": format, "message": message }).to_string()),
         ExportEvent::Complete { gif } => Event::default()
             .event("complete")
             .data(serde_json::to_string(gif).unwrap_or_default()),

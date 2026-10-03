@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod exports;
 pub(crate) mod gifs;
+mod internal;
 mod preferences;
 mod profiles;
 mod templates;
@@ -38,6 +39,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             "/videos/{id}",
             get(videos::get_video).delete(videos::delete_video),
         )
+        .route("/videos/{job_id}/ingest-progress", get(videos::ingest_progress))
         .route("/videos/{id}/file", get(videos::get_video_file))
         .route("/videos/{id}/thumbnail", get(videos::get_thumbnail))
         .route("/videos/{id}/filmstrip", get(videos::get_filmstrip_meta))
@@ -53,6 +55,8 @@ pub fn api_router() -> Router<Arc<AppState>> {
         )
         .route("/exports", post(exports::create_export))
         .route("/exports/{id}/progress", get(exports::export_progress))
+        .route("/internal/callbacks/ingest", post(internal::ingest_callback))
+        .route("/internal/callbacks/export", post(internal::export_callback))
         .route("/templates/mine", get(templates::list_mine))
         .route("/templates/others", get(templates::list_others))
         .route(

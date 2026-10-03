@@ -10,6 +10,10 @@ default-run = "gifiac-backend"
 [dependencies]
 anyhow = "1.0.104"
 aws-config = "1"
+# Direct async invocation of the ingest/export Lambda functions
+# (wayfinder gifiac#32) — `aws-sdk-*` directly, no separate abstraction
+# crate, same approach as aws-sdk-s3/aws-sdk-sesv2 below.
+aws-sdk-lambda = "1"
 aws-sdk-s3 = "1.143.0"
 # Email-passcode login (SPEC-EMAIL-AUTH.md §7) — sends the sign-in code via
 # SES, same "aws-sdk-* directly, no separate abstraction crate" approach as
