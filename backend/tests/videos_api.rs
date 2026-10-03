@@ -4,41 +4,17 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 mod common;
-use common::{authed, create_gif, login_as, make_large_test_video, make_test_video, multipart_body, spawn_app};
+use common::{authed, create_gif, login_as, make_large_test_video, make_test_video, multipart_body, spawn_app, upload_test_video};
 
 #[tokio::test]
 async fn upload_probes_generates_thumbnail_and_lists_the_video() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
+    // `upload_test_video` drives the upload through the real (202 +
+    // async ingest-job) flow, simulating the ingest Lambda's callbacks —
+    // see its doc comment (wayfinder gifiac#32).
+    let video = upload_test_video(&test_app).await;
 
-    let (boundary, body) = multipart_body("file", "my-clip.mp4", "video/mp4", video_bytes);
-
-    let response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-
-    assert_eq!(video["original_filename"], "my-clip.mp4");
+    assert_eq!(video["original_filename"], "clip.mp4");
     assert_eq!(video["extension"], "mp4");
     assert_eq!(video["width"], 320);
     assert_eq!(video["height"], 240);
@@ -79,7 +55,8 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
         .unwrap();
     assert_eq!(get_response.status(), StatusCode::OK);
 
-    // GET /api/videos/{id}/thumbnail — poster frame generated synchronously at upload.
+    // GET /api/videos/{id}/thumbnail — fetched from the source bucket
+    // key the (simulated) ingest Lambda wrote it to.
     let thumb_response = test_app
         .app
         .clone()
@@ -117,7 +94,8 @@ async fn upload_probes_generates_thumbnail_and_lists_the_video() {
     assert_eq!(meta["imageUrl"], format!("/api/videos/{id}/filmstrip.jpg"));
     assert!(meta["frameCount"].as_u64().unwrap() >= 1);
 
-    // GET /api/videos/{id}/filmstrip.jpg — generated on demand.
+    // GET /api/videos/{id}/filmstrip.jpg — same fetch-from-S3 path as
+    // the thumbnail above.
     let filmstrip_image_response = test_app
         .app
         .clone()
@@ -162,14 +140,14 @@ async fn upload_pushes_the_video_to_object_storage_and_removes_the_local_copy() 
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let video: serde_json::Value = serde_json::from_slice(
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    let id = video["id"].as_str().unwrap();
+    let id = accepted["video_id"].as_str().unwrap();
 
     assert!(
         !test_app.video_dir.join(format!("{id}.mp4")).exists(),
@@ -216,7 +194,7 @@ async fn get_video_file_still_works_after_the_local_copy_is_gone() {
             .unwrap(),
     )
     .unwrap();
-    let id = uploaded["id"].as_str().unwrap();
+    let id = uploaded["video_id"].as_str().unwrap();
 
     let response = test_app
         .app
@@ -238,44 +216,32 @@ async fn get_video_file_still_works_after_the_local_copy_is_gone() {
     );
 }
 
-/// The upload-time thumbnail is a plain local file, never pushed to S3 —
-/// if it's missing (e.g. after an instance replacement), `GET /thumbnail`
-/// regenerates it from the source video instead of 404ing, the same
-/// generate-if-missing pattern `get_filmstrip_image` already uses.
+/// The thumbnail is cached locally once fetched, but its real home is the
+/// source bucket (written there by the ingest Lambda, wayfinder
+/// gifiac#32) — if the local cache copy is missing (e.g. after an
+/// instance replacement), `GET /thumbnail` re-fetches it from S3 instead
+/// of 404ing, the same fetch-or-404 pattern `get_filmstrip_image` uses.
 #[tokio::test]
-async fn get_thumbnail_regenerates_if_the_local_copy_is_missing() {
+async fn get_thumbnail_refetches_from_object_storage_if_the_local_copy_is_missing() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
+    let video = upload_test_video(&test_app).await;
+    let id = video["id"].as_str().unwrap();
 
-    let upload_response = test_app
+    let first_response = test_app
         .app
         .clone()
         .oneshot(
             authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
+                .uri(format!("/api/videos/{id}/thumbnail"))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    let uploaded: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let id = uploaded["id"].as_str().unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
 
     let thumb_path = test_app.video_dir.join(format!("{id}_thumb.jpg"));
-    assert!(thumb_path.exists(), "expected the upload-time thumbnail to exist");
+    assert!(thumb_path.exists(), "expected the first thumbnail fetch to cache locally");
     std::fs::remove_file(&thumb_path).unwrap();
 
     let response = test_app
@@ -292,7 +258,7 @@ async fn get_thumbnail_regenerates_if_the_local_copy_is_missing() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert!(!bytes.is_empty());
-    assert!(thumb_path.exists(), "expected the thumbnail to be regenerated on disk");
+    assert!(thumb_path.exists(), "expected the thumbnail to be re-cached locally");
 }
 
 /// SPEC-CLOUD.md §6: deleting a video removes its object storage copy too.
@@ -326,7 +292,7 @@ async fn delete_video_removes_the_object_storage_copy() {
             .unwrap(),
     )
     .unwrap();
-    let id = uploaded["id"].as_str().unwrap();
+    let id = uploaded["video_id"].as_str().unwrap();
     let key = format!("raw/{id}.mp4");
 
     let scratch = TempDir::new().unwrap();
@@ -391,7 +357,7 @@ async fn upload_accepts_a_file_well_over_axums_default_2mb_body_limit() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
 }
 
 #[tokio::test]
@@ -418,14 +384,14 @@ async fn video_file_serves_full_content_and_honors_range_requests() {
         )
         .await
         .unwrap();
-    assert_eq!(upload_response.status(), StatusCode::CREATED);
+    assert_eq!(upload_response.status(), StatusCode::ACCEPTED);
     let uploaded: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    let id = uploaded["id"].as_str().unwrap();
+    let id = uploaded["video_id"].as_str().unwrap();
 
     // No Range header -> the whole file, 200.
     let full_response = test_app
@@ -574,32 +540,7 @@ async fn upload_of_unparseable_video_is_rejected_and_leaves_no_file_behind() {
 #[tokio::test]
 async fn delete_video_removes_the_row_and_its_files() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     // Touch the filmstrip endpoint so a sprite file actually exists on
@@ -710,32 +651,7 @@ async fn making_a_gif_from_an_untemplated_video_cleans_it_up_automatically() {
 #[tokio::test]
 async fn making_a_gif_from_a_templated_video_leaves_it_in_place() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 3.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let video_id = video["id"].as_str().unwrap();
 
     let template_body = serde_json::json!({
@@ -790,6 +706,7 @@ async fn making_a_gif_from_a_templated_video_leaves_it_in_place() {
     )
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap();
+    common::complete_export_job(&test_app, export_id, 320, 240).await;
 
     let progress_response = tokio::time::timeout(
         std::time::Duration::from_secs(60),
@@ -833,32 +750,7 @@ async fn making_a_gif_from_a_templated_video_leaves_it_in_place() {
 #[tokio::test]
 async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_survives() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     let template_body = serde_json::json!({
@@ -924,32 +816,7 @@ async fn deleting_a_video_succeeds_even_with_a_saved_template_and_the_template_s
 #[tokio::test]
 async fn get_template_returns_404_when_none_is_saved() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     let response = test_app
@@ -971,32 +838,7 @@ async fn get_template_returns_404_when_none_is_saved() {
 #[tokio::test]
 async fn put_template_upserts_and_list_videos_reports_has_template() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     let list_before = test_app
@@ -1195,32 +1037,7 @@ async fn put_template_upserts_and_list_videos_reports_has_template() {
 #[tokio::test]
 async fn get_template_is_owner_scoped() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     let get_before_response = test_app
@@ -1386,32 +1203,7 @@ async fn list_and_get_video_with_no_session_cookie_is_rejected() {
 #[tokio::test]
 async fn a_second_user_cannot_see_or_fetch_the_first_users_video() {
     let test_app = spawn_app().await;
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 2.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let id = video["id"].as_str().unwrap();
 
     let other_cookie = login_as(&test_app, "other@example.com").await;

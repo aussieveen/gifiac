@@ -7,11 +7,42 @@ use gifiac_backend::auth::{GoogleAuthConfig, SESSION_COOKIE_NAME};
 use gifiac_backend::config::Config;
 use gifiac_backend::db;
 use gifiac_backend::email_auth::{EmailAuthConfig, MailerKind};
+use gifiac_backend::lambda_jobs::LambdaConfig;
 use gifiac_backend::mailer::Mailer;
 use gifiac_backend::state::AppState;
 use gifiac_backend::storage::{SourceStorageConfig, Storage, TemplateAssetsConfig};
 use sqlx::PgPool;
 use tempfile::TempDir;
+
+/// The ingest/export Lambda functions never actually run in tests — a
+/// real invocation would need real AWS infra. `AppState::export_jobs`'s
+/// fire-and-forget `invoke_ingest`/`invoke_export` calls are allowed to
+/// fail (logged, not propagated — see their call sites), so pointing the
+/// client at a closed local port (nothing listens on `:1`) just makes
+/// that failure fast instead of a real network timeout. Tests drive jobs
+/// to completion themselves by POSTing directly to the internal callback
+/// endpoints — see `simulate_ingest_callback`/`simulate_export_callback`
+/// — exactly mirroring what the real Lambda functions would POST.
+pub const TEST_CALLBACK_TOKEN: &str = "test-callback-token";
+
+fn test_lambda_config() -> LambdaConfig {
+    LambdaConfig {
+        ingest_function_name: "test-ingest".to_string(),
+        export_function_name: "test-export".to_string(),
+        callback_base_url: "http://127.0.0.1:1".to_string(),
+        callback_token: TEST_CALLBACK_TOKEN.to_string(),
+    }
+}
+
+fn test_lambda_client() -> aws_sdk_lambda::Client {
+    let config = aws_sdk_lambda::Config::builder()
+        .behavior_version(aws_sdk_lambda::config::BehaviorVersion::latest())
+        .credentials_provider(aws_sdk_lambda::config::Credentials::new("test", "test", None, None, "test"))
+        .region(aws_sdk_lambda::config::Region::new("us-east-1"))
+        .endpoint_url("http://127.0.0.1:1")
+        .build();
+    aws_sdk_lambda::Client::from_conf(config)
+}
 
 /// Never actually used to call Google — real OAuth can't run in tests, so
 /// `login_as` bypasses the flow entirely by writing `users`/`sessions`
@@ -101,6 +132,13 @@ pub async fn test_template_assets_storage() -> Storage {
 #[allow(dead_code)]
 pub struct TestApp {
     pub app: Router,
+    /// The same `Arc<AppState>` the router was built from (cloning the
+    /// `Arc`, not the state itself — `AppState` isn't `Clone`). No real
+    /// ingest/export Lambda runs in tests; this is what lets a test call
+    /// `exports::transcode_and_upload` directly to produce real encoded
+    /// output at the real R2 keys, standing in for what the real export
+    /// Lambda would have done, before simulating its "done" callback.
+    pub state: std::sync::Arc<AppState>,
     pub video_dir: PathBuf,
     pub storage: Storage,
     pub source_storage: Storage,
@@ -157,10 +195,14 @@ pub async fn spawn_app() -> TestApp {
         email_auth: test_email_auth(),
         mailer,
         export_jobs: Default::default(),
+        ingest_jobs: Default::default(),
+        lambda_client: test_lambda_client(),
+        lambda_config: test_lambda_config(),
     });
-    let app = gifiac_backend::build_app(state);
+    let app = gifiac_backend::build_app(state.clone());
 
     TestApp {
+        state,
         app,
         video_dir,
         storage,
@@ -313,17 +355,156 @@ pub fn parse_sse_events(body: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Uploads a synthetic test video and returns the created `videos` row —
-/// the shared first step of `create_gif` and any test that needs a video
-/// to `PUT` a template against without also running a full export.
+/// POSTs directly to `/api/internal/callbacks/ingest` with the shared
+/// test bearer token — simulates what the real ingest Lambda
+/// (`bin/ingest_lambda.rs`) would POST, since no real Lambda runs in
+/// tests (see `TEST_CALLBACK_TOKEN`'s doc comment).
+#[allow(dead_code)]
+pub async fn simulate_ingest_callback(test_app: &TestApp, job_id: &str, body: serde_json::Value) {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let mut body = body;
+    body["job_id"] = serde_json::Value::String(job_id.to_string());
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/internal/callbacks/ingest")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {TEST_CALLBACK_TOKEN}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Drives an ingest job all the way to `complete` with one `analyzing`
+/// callback (carrying the probe the frontend/`gifs` row needs) followed
+/// by a `complete` callback — the two stages every test that just needs a
+/// finished video actually cares about; `building_filmstrip` is skipped
+/// since nothing here asserts on it.
+#[allow(dead_code)]
+pub async fn complete_ingest_job(test_app: &TestApp, job_id: &str, duration_seconds: f64, width: i64, height: i64) {
+    simulate_ingest_callback(
+        test_app,
+        job_id,
+        serde_json::json!({
+            "stage": "analyzing",
+            "probe": { "duration_seconds": duration_seconds, "width": width, "height": height }
+        }),
+    )
+    .await;
+    simulate_ingest_callback(test_app, job_id, serde_json::json!({ "stage": "complete" })).await;
+}
+
+/// POSTs directly to `/api/internal/callbacks/export` — see
+/// `simulate_ingest_callback`'s matching doc comment.
+#[allow(dead_code)]
+pub async fn simulate_export_callback(test_app: &TestApp, job_id: &str, body: serde_json::Value) {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let mut body = body;
+    body["job_id"] = serde_json::Value::String(job_id.to_string());
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/internal/callbacks/export")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {TEST_CALLBACK_TOKEN}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Like `complete_export_job`, but actually runs the real ffmpeg
+/// pipeline first (`exports::transcode_and_upload`, the same function
+/// bulk import still uses in-process) to produce real gif/mp4/webm files
+/// at the real R2 keys the export Lambda would have written to — for
+/// tests that need to inspect the actual encoded output, not just the
+/// job-row bookkeeping. `video_path` must still exist locally (the
+/// caller's own fixture file, not the backend's post-upload copy, which
+/// gets deleted).
+#[allow(dead_code)]
+pub async fn complete_export_job_with_real_files(
+    test_app: &TestApp,
+    export_id: &str,
+    video_path: &std::path::Path,
+    ass_content: &str,
+    range_start: f64,
+    clip_duration: f64,
+) -> (i64, i64) {
+    use gifiac_backend::exports::{ExportEvent, transcode_and_upload};
+
+    let export_uuid = uuid::Uuid::parse_str(export_id).unwrap();
+    let result = transcode_and_upload(
+        &test_app.state,
+        export_uuid,
+        video_path,
+        ass_content,
+        range_start,
+        clip_duration,
+        &|_: ExportEvent| {},
+    )
+    .await
+    .expect("transcode_and_upload failed");
+
+    complete_export_job(test_app, export_id, result.width, result.height).await;
+    (result.width, result.height)
+}
+
+/// Drives an export job to completion with one "done" callback per format
+/// — gif carries the output dimensions real `export_lambda` would have
+/// probed, mp4/webm just report done (their dimensions aren't used).
+#[allow(dead_code)]
+pub async fn complete_export_job(test_app: &TestApp, job_id: &str, gif_width: i64, gif_height: i64) {
+    simulate_export_callback(
+        test_app,
+        job_id,
+        serde_json::json!({ "format": "gif", "status": "done", "percent": 100, "width": gif_width, "height": gif_height }),
+    )
+    .await;
+    simulate_export_callback(test_app, job_id, serde_json::json!({ "format": "mp4", "status": "done", "percent": 100 })).await;
+    simulate_export_callback(test_app, job_id, serde_json::json!({ "format": "webm", "status": "done", "percent": 100 })).await;
+}
+
+/// Uploads a synthetic test video, drives its ingest job to completion
+/// (simulating the ingest Lambda's callbacks — see
+/// `complete_ingest_job`), and returns the finished `videos` row. The
+/// shared first step of `create_gif` and any test that needs a fully-
+/// ingested video to `PUT` a template against or export from.
 #[allow(dead_code)]
 pub async fn upload_test_video(test_app: &TestApp) -> serde_json::Value {
+    upload_test_video_with_path(test_app).await.0
+}
+
+/// Same as `upload_test_video`, but also returns the local fixture path
+/// (kept alive — the backend's own copy is deleted right after upload,
+/// per SPEC-CLOUD.md §6) for callers that go on to run a real export via
+/// `complete_export_job_with_real_files`.
+async fn upload_test_video_with_path(test_app: &TestApp) -> (serde_json::Value, PathBuf) {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
     let fixture_dir = TempDir::new().unwrap();
     let video_path = make_test_video(fixture_dir.path(), 3.0);
+    // Leaked deliberately so the file outlives this function — see
+    // `exports_api.rs`'s `upload_video` helper for the same pattern.
+    std::mem::forget(fixture_dir);
     let video_bytes = std::fs::read(&video_path).unwrap();
     let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
     let upload_response = test_app
@@ -343,13 +524,62 @@ pub async fn upload_test_video(test_app: &TestApp) -> serde_json::Value {
         )
         .await
         .unwrap();
-    assert_eq!(upload_response.status(), StatusCode::CREATED);
-    serde_json::from_slice(
+    assert_eq!(upload_response.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
-    .unwrap()
+    .unwrap();
+    let video_id = accepted["video_id"].as_str().unwrap();
+    let job_id = accepted["job_id"].as_str().unwrap();
+
+    // No real ingest Lambda runs in tests — generate the thumbnail/
+    // filmstrip the same way `bin/ingest_lambda.rs` does (real ffmpeg,
+    // same functions) and upload them to the same source-bucket keys, so
+    // `GET .../thumbnail` and `.../filmstrip.jpg` have something real to
+    // serve once the job completes below.
+    let video_uuid = uuid::Uuid::parse_str(video_id).unwrap();
+    let probe = gifiac_backend::ffmpeg::probe_video(&video_path).unwrap();
+    let assets_dir = TempDir::new().unwrap();
+    let thumb_path = assets_dir.path().join("thumb.jpg");
+    gifiac_backend::ffmpeg::generate_thumbnail(&video_path, &thumb_path, probe.duration_seconds)
+        .await
+        .unwrap();
+    test_app
+        .source_storage
+        .upload_file(&gifiac_backend::paths::video_thumbnail_object_key(&video_uuid), &thumb_path, "image/jpeg")
+        .await
+        .unwrap();
+    let layout = gifiac_backend::filmstrip_layout::compute_filmstrip_layout(probe.duration_seconds, probe.width, probe.height);
+    let filmstrip_path = assets_dir.path().join("filmstrip.jpg");
+    gifiac_backend::ffmpeg::generate_filmstrip_sprite(&video_path, &filmstrip_path, &layout)
+        .await
+        .unwrap();
+    test_app
+        .source_storage
+        .upload_file(&gifiac_backend::paths::video_filmstrip_object_key(&video_uuid), &filmstrip_path, "image/jpeg")
+        .await
+        .unwrap();
+
+    complete_ingest_job(test_app, job_id, probe.duration_seconds, probe.width, probe.height).await;
+
+    let get_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/videos/{video_id}"))
+                .header("cookie", &test_app.owner_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let video: serde_json::Value =
+        serde_json::from_slice(&axum::body::to_bytes(get_response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (video, video_path)
 }
 
 /// Uploads a synthetic test video, then runs a real export job to
@@ -363,34 +593,7 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    let fixture_dir = TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 3.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/videos")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .header("cookie", &test_app.owner_cookie)
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(upload_response.status(), StatusCode::CREATED);
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let (video, video_path) = upload_test_video_with_path(test_app).await;
 
     let captions = if caption_text.is_empty() {
         serde_json::json!([])
@@ -411,7 +614,7 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
     let request_body = serde_json::json!({
         "video_id": video["id"],
         "name": name,
-        "captions": captions,
+        "captions": captions.clone(),
         "gif_range_start": 0.0,
         "gif_range_end": 1.0
     });
@@ -438,6 +641,19 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
 
+    // No real export Lambda runs in tests — run the real ffmpeg pipeline
+    // directly (`complete_export_job_with_real_files`) so callers of this
+    // helper get real gif/mp4/webm objects in R2, not just a DB row —
+    // several (e.g. gifs_api.rs's delete test) check real object
+    // existence. Must happen before reading progress, so
+    // `export_progress` takes its terminal-replay path (gifiac#32) and
+    // returns the `complete` event immediately.
+    let captions_vec: Vec<gifiac_backend::models::Caption> = serde_json::from_value(captions).unwrap();
+    let (output_width, output_height) =
+        gifiac_backend::scale::scaled_dimensions(video["width"].as_i64().unwrap(), video["height"].as_i64().unwrap());
+    let ass_content = gifiac_backend::ass::generate_ass(&captions_vec, 0.0, 1.0, output_width, output_height);
+    complete_export_job_with_real_files(test_app, &export_id, &video_path, &ass_content, 0.0, 1.0).await;
+
     let progress_response = tokio::time::timeout(
         std::time::Duration::from_secs(60),
         test_app.app.clone().oneshot(
@@ -462,7 +678,18 @@ pub async fn create_gif(test_app: &TestApp, name: &str, caption_text: &str) -> s
     let events = parse_sse_events(&body_text);
     let (last_event, last_data) = events.last().expect("expected at least one SSE event");
     assert_eq!(last_event, "complete", "export did not complete: {events:?}");
-    serde_json::from_str(last_data).unwrap()
+    let mut gif: serde_json::Value = serde_json::from_str(last_data).unwrap();
+    // The export's own automatic cleanup of an untemplated source video
+    // (wayfinder gifiac#32's `finalize_video_export`) may have already
+    // nulled `gifs.video_id` by the time this reads back from the DB
+    // (`export_progress`'s terminal-replay path, taken since the export
+    // was already completed above before this stream was even opened) —
+    // restore the value as of creation, which every caller of this
+    // helper actually wants (e.g. to then assert the video *is* gone).
+    if gif["video_id"].is_null() {
+        gif["video_id"] = video["id"].clone();
+    }
+    gif
 }
 
 /// Generates a tiny synthetic GIF fixture with the system `ffmpeg` binary —
