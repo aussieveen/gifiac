@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -117,9 +117,13 @@ const otherVideo: Video = { ...video, id: 'v2', original_filename: 'other.mp4' }
 // SPEC-CLOUD.md §9: App's own header now uses <Link> (the avatar/handle
 // button to /u/:handle), which needs a Router context to render — in
 // production that's main.tsx's BrowserRouter, here a MemoryRouter.
+// Starts at /library, not the default `/`: since wayfinder gifiac#41,
+// `/` is the Global Library (shared with logged-out visitors) rather
+// than a redirect to My Library, so the many tests below that assume a
+// My-Library baseline need an explicit entry point.
 function renderApp() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/library']}>
       <App />
     </MemoryRouter>,
   )
@@ -137,7 +141,7 @@ beforeEach(() => {
   vi.mocked(uploadVideo).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(getVideo).mockReset()
-  vi.mocked(listGifs).mockReset()
+  vi.mocked(listGifs).mockReset().mockResolvedValue([])
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
@@ -153,6 +157,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
   vi.unstubAllGlobals()
   resizeTo(1440)
 })
@@ -305,11 +310,34 @@ describe('App', () => {
     await screen.findByText(/no gifs yet/i)
   })
 
-  it('starts on my library', async () => {
+  it('/library shows my library', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    renderApp()
+    renderAppAt('/library')
     await screen.findByText(/no gifs yet/i)
     expect(screen.getByRole('link', { name: 'My Library' })).toHaveClass('active')
+  })
+
+  // wayfinder gifiac#41: `/` is now the Global Library (shared with
+  // logged-out visitors, see below), not a redirect to My Library.
+  it('/ shows the Global Library for a logged-in user, with the Global Library tab active', async () => {
+    renderAppAt('/')
+    await screen.findByText(/no public gifs yet/i)
+    expect(screen.getByRole('link', { name: 'Global Library' })).toHaveClass('active')
+    expect(screen.getByRole('link', { name: 'My Library' })).not.toHaveClass('active')
+  })
+
+  it('/explore redirects to /', async () => {
+    renderAppAt('/explore')
+    await screen.findByText(/no public gifs yet/i)
+    expect(screen.getByRole('link', { name: 'Global Library' })).toHaveClass('active')
+  })
+
+  it('/ shows the public home page (hero + Global Library, no header/count) for a logged-out visitor', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    renderAppAt('/')
+    await screen.findByText('Continue with Google')
+    await screen.findByText(/no public gifs yet/i)
+    expect(screen.queryByRole('heading', { name: 'Global Library' })).not.toBeInTheDocument()
   })
 
   it('does not show an Admin tab for a plain user', async () => {

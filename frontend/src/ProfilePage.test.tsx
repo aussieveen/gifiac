@@ -17,6 +17,7 @@ import { favouriteGif, getCurrentUser, getProfile, unfavouriteGif } from './api'
 
 const profile: Profile = {
   handle: 'simon',
+  displayName: null,
   avatarUrl: 'https://example.com/avatar.jpg',
   gifs: [],
 }
@@ -39,12 +40,20 @@ beforeEach(() => {
 })
 
 describe('ProfilePage', () => {
-  it('renders the handle and avatar', async () => {
+  it('renders the handle and avatar when no display name is set', async () => {
     vi.mocked(getProfile).mockResolvedValue(profile)
     renderAt('simon')
 
     expect(await screen.findByText('simon')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: "simon's avatar" })).toHaveAttribute('src', profile.avatarUrl)
+  })
+
+  it('renders the display name instead of the handle when set', async () => {
+    vi.mocked(getProfile).mockResolvedValue({ ...profile, displayName: 'Simon McWhinnie' })
+    renderAt('simon')
+
+    expect(await screen.findByText('Simon McWhinnie')).toBeInTheDocument()
+    expect(screen.queryByText('simon', { selector: 'h1' })).not.toBeInTheDocument()
   })
 
   it('shows an empty state when there are no public gifs', async () => {

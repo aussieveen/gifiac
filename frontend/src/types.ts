@@ -117,6 +117,7 @@ export interface CurrentUser {
 // camelCase, matching the backend's `ProfileResponse`.
 export interface Profile {
   handle: string
+  displayName: string | null
   avatarUrl: string | null
   gifs: Gif[]
 }
