@@ -1,14 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+/// `duration_seconds`/`width`/`height` are `None` until the ingest
+/// Lambda's "analyzing" callback backfills them (wayfinder gifiac#32) —
+/// probing moved off the synchronous upload request, so a video row can
+/// now exist before they're known.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Video {
     pub id: String,
     pub original_filename: String,
     pub extension: String,
     pub file_size_bytes: i64,
-    pub duration_seconds: f64,
-    pub width: i64,
-    pub height: i64,
+    pub duration_seconds: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
     pub uploaded_at: String,
 }
 
@@ -17,9 +21,9 @@ pub struct NewVideo {
     pub original_filename: String,
     pub extension: String,
     pub file_size_bytes: i64,
-    pub duration_seconds: f64,
-    pub width: i64,
-    pub height: i64,
+    pub duration_seconds: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
     pub user_id: String,
 }
 
@@ -32,9 +36,9 @@ pub struct VideoListItem {
     pub original_filename: String,
     pub extension: String,
     pub file_size_bytes: i64,
-    pub duration_seconds: f64,
-    pub width: i64,
-    pub height: i64,
+    pub duration_seconds: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
     pub uploaded_at: String,
     pub has_template: bool,
 }
@@ -148,7 +152,10 @@ pub enum CaptionAlign {
 
 /// POST /api/exports body per SPEC.md §5 — snake_case top level (matching
 /// the `gifs` table columns), camelCase `captions` (matching §4).
-#[derive(Debug, Deserialize)]
+/// Also `Clone`/`Serialize` so a `create_export` request can be stashed
+/// verbatim into `export_jobs.request_json` (wayfinder gifiac#32) and
+/// read back once the job's Lambda callbacks all land.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExportRequest {
     pub video_id: String,
     pub name: String,
@@ -359,7 +366,8 @@ pub struct TemplateDetail {
 /// template's own saved values, read server-side from the `templates` row
 /// itself (see `routes::templates::create_export`) — there is nothing for
 /// a client to spoof because the type doesn't carry those fields at all.
-#[derive(Debug, Deserialize)]
+/// Also `Clone`/`Serialize` — see `ExportRequest`'s matching doc comment.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TemplateExportRequest {
     pub name: String,
     pub captions: Vec<Caption>,
@@ -646,15 +654,51 @@ pub struct ExportJob {
     pub webm_status: String,
     pub webm_percent: i32,
     pub webm_error: Option<String>,
+    /// The gif output's actual post-scale dimensions, reported by the
+    /// export Lambda's "done" callback — `None` until that callback
+    /// arrives, populated only for the `gif` format.
+    pub gif_width: Option<i64>,
+    pub gif_height: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Everything `export_jobs.request_json` stashes between `create_export`/
+/// `create_template_export` and the callback handler that finalizes the
+/// job once all 3 formats go terminal (wayfinder gifiac#32) — enough to
+/// rebuild what `run_pipeline`/`run_template_pipeline` used to do inline
+/// after a direct, in-process `transcode_and_upload` call returned.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind")]
+pub enum ExportJobContext {
+    Video {
+        video_id: String,
+        owner_id: String,
+        request: ExportRequest,
+    },
+    Template {
+        template_id: String,
+        owner_id: String,
+        request: TemplateExportRequest,
+    },
+}
+
+/// `POST /api/videos` response shape once ingest moved off the
+/// synchronous upload path (wayfinder gifiac#32) — 202-style, mirroring
+/// export's existing `ExportAccepted` shape. `job_id` is what `GET
+/// /api/videos/{job_id}/ingest-progress` subscribes to.
+#[derive(Debug, Serialize)]
+pub struct UploadAccepted {
+    pub video_id: String,
+    pub job_id: String,
 }
 
 /// Addresses `export_jobs`' 3 per-format column triples generically — the
 /// Lambda callback endpoint and the stuck-job sweep both need to update
 /// "the format param says gif" without a match arm per format at every
 /// call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
     Gif,
     Mp4,

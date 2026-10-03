@@ -1,104 +1,105 @@
-//! Orchestrates one export job: burns captions into the source clip and
-//! produces GIF + MP4 + WebM (SPEC.md §6), uploads all three to R2, and
-//! records the result as a `gifs` row. Runs as a detached background task
-//! kicked off by `POST /api/exports`; progress is broadcast over
-//! [`ExportEvent`]s for `GET /api/exports/{id}/progress` (SSE) to relay.
+//! The export side of the Lambda migration (wayfinder gifiac#32): ffmpeg
+//! encoding itself now runs in the export Lambda (`bin/export_lambda.rs`),
+//! one invocation per format (gif/mp4/webm). This module holds what's
+//! left on the backend — the SSE event shape relayed from the Lambda's
+//! callbacks (`routes::internal::export_callback`), the terminal-state
+//! rules those callbacks and the stuck-job sweep both need, and
+//! `finalize_export_job`, which does what the old in-process pipeline
+//! used to do after its ffmpeg calls returned: build the `gifs` row,
+//! handle the "save as template" checkbox, and clean up the source
+//! video.
+//!
+//! `transcode_and_upload` is the one piece of the pre-Lambda pipeline
+//! that's *not* going away — bulk import (SPEC.md §7,
+//! `routes::gifs::import_gifs`) is out of this map's scope and still runs
+//! ffmpeg in-process on the backend.
 
 use chrono::Utc;
 use serde::Serialize;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::ass::generate_ass;
-use crate::ffmpeg::export as ffmpeg_export;
-use crate::models::{ExportRequest, Gif, NewGif, Template, TemplateExportRequest, TemplatePayload, Video};
+use crate::models::{ExportFormat, ExportJob, ExportJobContext, Gif, NewGif};
 use crate::state::AppState;
-use crate::template_assets::{self, TemplateAssetKind};
-use crate::{db, paths, source_video};
+use crate::{db, paths};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum ExportEvent {
-    Progress { stage: &'static str, percent: u8 },
+    Progress { format: ExportFormat, percent: u8 },
+    FormatDone { format: ExportFormat },
+    FormatFailed { format: ExportFormat, message: String },
+    /// The whole job succeeded — at minimum the gif format, which is
+    /// load-bearing (gifiac#36).
     Complete { gif: Box<Gif> },
+    /// The whole job failed — gif failed or timed out, regardless of
+    /// mp4/webm's own outcome (gifiac#36: "gif failure fails the whole
+    /// export job even if mp4/webm succeeded").
     Failed { message: String },
 }
 
-/// Runs the full pipeline and broadcasts its outcome. Never returns an
-/// `Err` itself — failures are reported as an `ExportEvent::Failed` so the
-/// only way a caller learns the outcome is via the event stream (matching
-/// how the SSE endpoint is the sole way a client observes this job).
-pub async fn run_export_job(
-    state: &AppState,
-    export_id: Uuid,
-    video: Video,
-    request: ExportRequest,
-    owner_id: &str,
-    events: broadcast::Sender<ExportEvent>,
-) {
-    let send = |event: ExportEvent| {
-        let _ = events.send(event);
-    };
-
-    match run_pipeline(state, export_id, &video, &request, owner_id, &send).await {
-        Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
-        Err(err) => {
-            tracing::error!(export_id = %export_id, error = ?err, "export job failed");
-            send(ExportEvent::Failed {
-                message: err.to_string(),
-            });
-        }
-    }
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "done" | "failed" | "timed_out")
 }
 
-async fn run_pipeline(
-    state: &AppState,
-    export_id: Uuid,
-    video: &Video,
-    request: &ExportRequest,
-    owner_id: &str,
-    send: &impl Fn(ExportEvent),
-) -> anyhow::Result<Gif> {
-    let clip_duration = request.gif_range_end - request.gif_range_start;
+/// A job is terminal once every format has reached a terminal status —
+/// what the callback handler and the stuck-job sweep both check before
+/// deciding the job's overall outcome.
+pub fn export_job_is_terminal(job: &ExportJob) -> bool {
+    is_terminal_status(&job.gif_status) && is_terminal_status(&job.mp4_status) && is_terminal_status(&job.webm_status)
+}
 
-    // The captions are burned in *after* the video is scaled down (see
-    // captioned_scale_filter's doc comment), so the ASS file's
-    // PlayResX/PlayResY — and thus caption font size and \pos() placement
-    // — must be the scaled output size, not the source's native
-    // resolution, to match what the frontend's live preview (built from
-    // the same scaled_dimensions) shows.
-    let video_uuid = Uuid::parse_str(&video.id)?;
-    // SPEC-CLOUD.md §6: the source video's persistent home is a private
-    // S3 bucket, not local disk — re-fetches it if this instance doesn't
-    // already have a local copy cached.
-    let media_path = source_video::ensure_on_disk(state, &video_uuid, &video.extension).await?;
-    let (output_width, output_height) = crate::scale::scaled_dimensions(video.width, video.height);
+/// gif is the only shareable output today (gifiac#36) — its failure (or
+/// timeout) fails the whole job even if mp4/webm succeeded. mp4/webm
+/// failing on their own doesn't fail the job: `finalize_export_job` still
+/// builds a `gifs` row from gif's output alone.
+pub fn export_job_failed(job: &ExportJob) -> bool {
+    matches!(job.gif_status.as_str(), "failed" | "timed_out")
+}
 
-    let ass = generate_ass(
-        &request.captions,
-        request.gif_range_start,
-        request.gif_range_end,
-        output_width,
-        output_height,
+/// Builds the `gifs` row (plus the "save as template" checkbox and source
+/// video cleanup, for a video export) once an export job has reached a
+/// non-`export_job_failed` terminal state. Takes over from
+/// `run_pipeline`/`run_template_pipeline`'s post-`transcode_and_upload`
+/// half — the ffmpeg work itself now already happened in the export
+/// Lambda, independently, before any of this runs.
+pub async fn finalize_export_job(state: &AppState, job: &ExportJob) -> anyhow::Result<()> {
+    let export_id = Uuid::parse_str(&job.id)?;
+    let context: ExportJobContext = serde_json::from_str(&job.request_json)?;
+    let (gif_width, gif_height) = (
+        job.gif_width.ok_or_else(|| anyhow::anyhow!("export job {} terminal without gif dimensions", job.id))?,
+        job.gif_height.ok_or_else(|| anyhow::anyhow!("export job {} terminal without gif dimensions", job.id))?,
     );
 
-    let result = transcode_and_upload(
-        state,
-        export_id,
-        &media_path,
-        &ass,
-        request.gif_range_start,
-        clip_duration,
-        send,
-    )
-    .await?;
+    let gif = match context {
+        ExportJobContext::Video { video_id, owner_id, request } => {
+            finalize_video_export(state, export_id, &video_id, &owner_id, &request, gif_width, gif_height).await?
+        }
+        ExportJobContext::Template { template_id, owner_id, request } => {
+            finalize_template_export(state, export_id, &template_id, &owner_id, &request, gif_width, gif_height).await?
+        }
+    };
 
-    let caption_text = request
-        .captions
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    if let Some(tx) = state.export_jobs.lock().unwrap().remove(&export_id) {
+        let _ = tx.send(ExportEvent::Complete { gif: Box::new(gif) });
+    }
+    Ok(())
+}
+
+async fn finalize_video_export(
+    state: &AppState,
+    export_id: Uuid,
+    video_id: &str,
+    owner_id: &str,
+    request: &crate::models::ExportRequest,
+    gif_width: i64,
+    gif_height: i64,
+) -> anyhow::Result<Gif> {
+    let video = db::get_video(&state.pool, video_id, owner_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("video {video_id} missing at export finalize time"))?;
+    let video_uuid = Uuid::parse_str(&video.id)?;
+
+    let caption_text = request.captions.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
     let new_gif = NewGif {
         id: export_id.to_string(),
         video_id: Some(video.id.clone()),
@@ -107,31 +108,25 @@ async fn run_pipeline(
         captions_json: Some(serde_json::to_string(&request.captions)?),
         gif_range_start: Some(request.gif_range_start),
         gif_range_end: Some(request.gif_range_end),
-        width: Some(result.width),
-        height: Some(result.height),
+        width: Some(gif_width),
+        height: Some(gif_height),
         external_url: None,
         user_id: owner_id.to_string(),
-        // Unset at insert time — Flow A's `save_as_template` checkbox
-        // below backfills this via `db::set_gif_template_id` once the
-        // template row actually exists, since the template's id isn't
-        // known yet here.
         template_id: None,
     };
     let mut gif = db::insert_gif(&state.pool, &new_gif, &Utc::now().to_rfc3339()).await?;
 
-    // SPEC.md §12's "Create template" checkbox — must happen inside this
-    // same request, before the cleanup below, or that cleanup would
-    // delete the video out from under a separate follow-up save (see
-    // `ExportRequest::save_as_template`'s doc comment).
-    // `template_name` is validated non-empty at the route layer
-    // (`routes::exports::create_export`) before this job is even spawned —
-    // this is a defensive fallback, not the primary check, so a missing
-    // name here just skips the save rather than failing an export whose
-    // `gifs` row has already been created above.
+    // SPEC.md §12's "Create template" checkbox — see
+    // `ExportRequest::save_as_template`'s doc comment for why this must
+    // happen before the cleanup below, in the same job.
     if request.save_as_template
         && let Some(template_name) = request.template_name.as_deref().filter(|n| !n.is_empty())
     {
-        let template_payload = TemplatePayload {
+        let (output_width, output_height) = crate::scale::scaled_dimensions(
+            video.width.ok_or_else(|| anyhow::anyhow!("video {video_id} has no probed dimensions"))?,
+            video.height.ok_or_else(|| anyhow::anyhow!("video {video_id} has no probed dimensions"))?,
+        );
+        let template_payload = crate::models::TemplatePayload {
             captions: request.captions.clone(),
             gif_range_start: request.gif_range_start,
             gif_range_end: request.gif_range_end,
@@ -152,26 +147,15 @@ async fn run_pipeline(
         {
             tracing::warn!(video_id = %video.id, error = ?err, "failed to save template requested alongside export");
         } else if let Some(template_id) = db::get_template_id(&state.pool, &video.id).await? {
-            // The gif that *produced* the template gets remix lineage to
-            // it too, same as any later gif started from it (Flow B) —
-            // otherwise "Remix this GIF" never shows on the one gif that
-            // made this template possible in the first place.
             db::set_gif_template_id(&state.pool, &gif.id, &template_id).await?;
             gif.template_id = Some(template_id);
         }
     }
 
-    // A video that was never turned into a template is scratch space, not
-    // a persistent asset — once a gif's been made from it, keep it around
-    // no longer. This makes that immediate instead of waiting on the
-    // 7-day S3 lifecycle rule (SPEC-CLOUD.md §6), and stops
-    // `ensure_on_disk` from re-caching it locally forever the moment
-    // anything touches it. Deliberately loses the ability to make a
-    // second, different gif from the same upload later without
-    // re-uploading — templating first (including via the checkbox above)
-    // is the supported way to keep a video's footage around for that.
-    // Best-effort: a cleanup failure here doesn't undo the export that
-    // already succeeded.
+    // A video that was never turned into a template is scratch space —
+    // see `routes::videos::delete_video_and_its_assets`'s call site
+    // comment for the full reasoning (unchanged from the pre-Lambda
+    // pipeline).
     if db::get_template_id(&state.pool, &video.id).await?.is_none()
         && let Err(err) = crate::routes::videos::delete_video_and_its_assets(state, &video.id, owner_id).await
     {
@@ -181,77 +165,32 @@ async fn run_pipeline(
     Ok(gif)
 }
 
-/// Flow B's counterpart to `run_export_job` — exporting from a template
-/// (own or someone else's public one) rather than a video directly. Never
-/// returns an `Err` itself, same broadcast-only-outcome contract.
-pub async fn run_template_export_job(
+async fn finalize_template_export(
     state: &AppState,
     export_id: Uuid,
-    template: Template,
-    request: TemplateExportRequest,
+    template_id: &str,
     owner_id: &str,
-    events: broadcast::Sender<ExportEvent>,
-) {
-    let send = |event: ExportEvent| {
-        let _ = events.send(event);
-    };
-
-    match run_template_pipeline(state, export_id, &template, &request, owner_id, &send).await {
-        Ok(gif) => send(ExportEvent::Complete { gif: Box::new(gif) }),
-        Err(err) => {
-            tracing::error!(export_id = %export_id, error = ?err, "template export job failed");
-            send(ExportEvent::Failed {
-                message: err.to_string(),
-            });
-        }
-    }
-}
-
-/// The server-side enforcement point for the public-templates design's
-/// "trim range and output dimensions are always locked" rule: every value
-/// that matters here — `clip_duration`, `width`, `height` — comes from
-/// `template.payload_json`, never from `request` (`TemplateExportRequest`
-/// has no such fields at all, so there is nothing for a client to
-/// smuggle). The clip itself is already scaled to those exact dimensions
-/// and starts at t=0 (`routes::videos::save_template`'s `ffmpeg::trim_video`
-/// call), so unlike `run_pipeline` there's no separate `scaled_dimensions`
-/// step and the export always spans the clip's full `[0, duration]`.
-async fn run_template_pipeline(
-    state: &AppState,
-    export_id: Uuid,
-    template: &Template,
-    request: &TemplateExportRequest,
-    owner_id: &str,
-    send: &impl Fn(ExportEvent),
+    request: &crate::models::TemplateExportRequest,
+    gif_width: i64,
+    gif_height: i64,
 ) -> anyhow::Result<Gif> {
-    let payload: TemplatePayload = serde_json::from_str(&template.payload_json)?;
+    let template = db::get_template_for_use(&state.pool, template_id, owner_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("template {template_id} missing at export finalize time"))?;
+    let payload: crate::models::TemplatePayload = serde_json::from_str(&template.payload_json)?;
     let clip_duration = payload.gif_range_end - payload.gif_range_start;
-    let template_uuid = Uuid::parse_str(&template.id)?;
 
-    let media_path = template_assets::ensure_on_disk(state, &template_uuid, TemplateAssetKind::Clip).await?;
-
-    let ass = generate_ass(&request.captions, 0.0, clip_duration, payload.width, payload.height);
-
-    let result = transcode_and_upload(state, export_id, &media_path, &ass, 0.0, clip_duration, send).await?;
-
-    let caption_text = request
-        .captions
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let caption_text = request.captions.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
     let new_gif = NewGif {
         id: export_id.to_string(),
-        // Flow B never has an associated `videos` row — it may not even
-        // be the caller's own source footage.
         video_id: None,
         name: request.name.clone(),
         caption_text,
         captions_json: Some(serde_json::to_string(&request.captions)?),
         gif_range_start: Some(0.0),
         gif_range_end: Some(clip_duration),
-        width: Some(result.width),
-        height: Some(result.height),
+        width: Some(gif_width),
+        height: Some(gif_height),
         external_url: None,
         user_id: owner_id.to_string(),
         template_id: Some(template.id.clone()),
@@ -262,12 +201,10 @@ async fn run_template_pipeline(
 
 /// The R2 object keys a `transcode_and_upload` run produced, plus the
 /// output GIF's actual post-scale dimensions — everything a caller needs
-/// to build its own `NewGif` row, whether that's an export (captions,
-/// tied to a `videos` row) or a bulk import (no captions, no source
-/// `videos` row at all). Pulled out of `run_pipeline` because bulk import
-/// (SPEC.md §7) needs the exact same burn-in-scale-down-two-pass-GIF-then-
-/// MP4-then-WebM-then-upload sequence, just fed a different source file
-/// and an empty ASS (no captions to burn in).
+/// to build its own `NewGif` row. Still used directly by bulk import
+/// (SPEC.md §7, `routes::gifs::import_gifs`) — unlike the captioned
+/// export flow above, that one path stays running in-process on the
+/// backend; it's out of this map's scope.
 pub struct TranscodeResult {
     pub width: i64,
     pub height: i64,
@@ -290,40 +227,40 @@ pub async fn transcode_and_upload(
     let webm_path = tmp_dir.path().join("out.webm");
     tokio::fs::write(&ass_path, ass_content).await?;
 
-    let clip = ffmpeg_export::ClipSource {
+    let clip = crate::ffmpeg::export::ClipSource {
         video_path,
         ass_path: &ass_path,
         range_start,
         clip_duration,
     };
 
-    ffmpeg_export::generate_palette(clip, &palette_path, |percent| {
+    crate::ffmpeg::export::generate_palette(clip, &palette_path, |percent| {
         send(ExportEvent::Progress {
-            stage: "palette_gen",
+            format: ExportFormat::Gif,
             percent,
         })
     })
     .await?;
 
-    ffmpeg_export::encode_gif(clip, &palette_path, &gif_path, |percent| {
+    crate::ffmpeg::export::encode_gif(clip, &palette_path, &gif_path, |percent| {
         send(ExportEvent::Progress {
-            stage: "encoding_gif",
+            format: ExportFormat::Gif,
             percent,
         })
     })
     .await?;
 
-    ffmpeg_export::encode_mp4(clip, &mp4_path, |percent| {
+    crate::ffmpeg::export::encode_mp4(clip, &mp4_path, |percent| {
         send(ExportEvent::Progress {
-            stage: "encoding_mp4",
+            format: ExportFormat::Mp4,
             percent,
         })
     })
     .await?;
 
-    ffmpeg_export::encode_webm(clip, &webm_path, |percent| {
+    crate::ffmpeg::export::encode_webm(clip, &webm_path, |percent| {
         send(ExportEvent::Progress {
-            stage: "encoding_webm",
+            format: ExportFormat::Webm,
             percent,
         })
     })
@@ -351,18 +288,9 @@ pub async fn transcode_and_upload(
             "video/webm",
         ),
     ];
-    let total = uploads.len();
-    for (i, (key, path, content_type)) in uploads.iter().enumerate() {
-        send(ExportEvent::Progress {
-            stage: "uploading",
-            percent: (i * 100 / total) as u8,
-        });
+    for (key, path, content_type) in uploads.iter() {
         state.storage.upload_file(key, path, content_type).await?;
     }
-    send(ExportEvent::Progress {
-        stage: "uploading",
-        percent: 100,
-    });
 
     Ok(TranscodeResult {
         width: probe.width,

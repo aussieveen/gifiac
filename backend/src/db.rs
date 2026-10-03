@@ -103,6 +103,19 @@ pub async fn get_video(pool: &PgPool, id: &str, owner_id: &str) -> Result<Option
         .map_err(Into::into)
 }
 
+/// Unscoped by owner — only for the ingest Lambda's callback handler
+/// (`routes::internal::ingest_callback`), which has no user session to
+/// scope by at all (Lambda has no `CurrentUser`), only the `video_id`
+/// its own `ingest_jobs` row already ties it to.
+pub async fn get_video_unscoped(pool: &PgPool, id: &str) -> Result<Option<Video>> {
+    let sql = format!("SELECT {VIDEO_COLUMNS} FROM videos WHERE id = $1");
+    sqlx::query_as::<_, Video>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
 /// `has_template` is resolved at the join level (SPEC.md §12) rather than
 /// with a per-video follow-up query.
 pub async fn list_videos(pool: &PgPool, owner_id: &str) -> Result<Vec<VideoListItem>> {
@@ -261,6 +274,20 @@ pub async fn get_gif(pool: &PgPool, id: &str, owner_id: &str) -> Result<Option<G
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Unscoped by owner — only for `export_progress`'s terminal-replay path,
+/// which was already unscoped before it (its `CurrentUser` extractor is
+/// present but unused, same pre-existing posture this doesn't change):
+/// the export id is a random UUID, not guessable, which is the whole
+/// endpoint's existing security model.
+pub async fn get_gif_unscoped(pool: &PgPool, id: &str) -> Result<Option<Gif>> {
+    let sql = format!("SELECT {GIF_COLUMNS} FROM gifs WHERE id = $1");
+    sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
         .fetch_optional(pool)
         .await
         .map_err(Into::into)
@@ -1311,7 +1338,7 @@ pub async fn mark_ingest_job_timed_out(pool: &PgPool, id: &str, now: &str) -> Re
     update_ingest_stage(pool, id, "timed_out", None, now).await
 }
 
-const EXPORT_JOB_COLUMNS: &str = "id, request_json, gif_status, gif_percent, gif_error, mp4_status, mp4_percent, mp4_error, webm_status, webm_percent, webm_error, created_at, updated_at";
+const EXPORT_JOB_COLUMNS: &str = "id, request_json, gif_status, gif_percent, gif_error, mp4_status, mp4_percent, mp4_error, webm_status, webm_percent, webm_error, gif_width, gif_height, created_at, updated_at";
 const EXPORT_JOB_TERMINAL_STATUSES: &str = "'done', 'failed', 'timed_out'";
 
 pub async fn insert_export_job(pool: &PgPool, id: &str, request_json: &str, now: &str) -> Result<ExportJob> {
@@ -1367,6 +1394,20 @@ pub async fn update_export_format_status(
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Persists the gif format's probed output dimensions, reported by the
+/// export Lambda's "done" callback — see `ExportJob::gif_width`'s doc
+/// comment for why these need to survive on the row rather than being a
+/// local variable at the point the callback arrives.
+pub async fn set_export_job_gif_dimensions(pool: &PgPool, id: &str, width: i64, height: i64) -> Result<()> {
+    sqlx::query("UPDATE export_jobs SET gif_width = $2, gif_height = $3 WHERE id = $1")
+        .bind(id)
+        .bind(width)
+        .bind(height)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// The stuck-job sweep's export-side query: a job is non-terminal (and
@@ -1434,9 +1475,9 @@ mod tests {
             original_filename: "clip.mp4".to_string(),
             extension: "mp4".to_string(),
             file_size_bytes: 1024,
-            duration_seconds: 12.5,
-            width: 1920,
-            height: 1080,
+            duration_seconds: Some(12.5),
+            width: Some(1920),
+            height: Some(1080),
             user_id: user_id.to_string(),
         }
     }
@@ -1450,11 +1491,11 @@ mod tests {
             .unwrap();
         assert_eq!(inserted.id, "v1");
         assert_eq!(inserted.original_filename, "clip.mp4");
-        assert_eq!(inserted.width, 1920);
+        assert_eq!(inserted.width, Some(1920));
 
         let fetched = get_video(&pool, "v1", &user).await.unwrap().unwrap();
         assert_eq!(fetched.id, inserted.id);
-        assert_eq!(fetched.duration_seconds, 12.5);
+        assert_eq!(fetched.duration_seconds, Some(12.5));
     }
 
     #[tokio::test]
@@ -2475,9 +2516,9 @@ mod tests {
         fill_in_video_probe(&pool, "v1", 12.5, 1920, 1080).await.unwrap();
 
         let video = get_video(&pool, "v1", &user).await.unwrap().unwrap();
-        assert_eq!(video.duration_seconds, 12.5);
-        assert_eq!(video.width, 1920);
-        assert_eq!(video.height, 1080);
+        assert_eq!(video.duration_seconds, Some(12.5));
+        assert_eq!(video.width, Some(1920));
+        assert_eq!(video.height, Some(1080));
     }
 
     #[tokio::test]
