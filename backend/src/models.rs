@@ -608,6 +608,82 @@ pub struct NewGif {
     pub template_id: Option<String>,
 }
 
+// --- Lambda ingest/export jobs (wayfinder gifiac#32) ---
+
+/// Tracks the probe+thumbnail+filmstrip pipeline that runs in the ingest
+/// Lambda. Stage-only (no percent column) — the 3 stages are coarse
+/// enough that a percent bar would be fake precision.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct IngestJob {
+    pub id: String,
+    pub video_id: String,
+    pub stage: String,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// One row per export, with 3 fixed per-format column triples instead of
+/// a child table — simpler reads/writes for a fixed, small set of
+/// formats (gif/mp4/webm) not expected to grow casually. No stored
+/// overall status: callers derive it (gif failure fails the whole job
+/// even if mp4/webm succeeded; mp4/webm otherwise fail independently).
+///
+/// `request_json` stashes the original export request (video/template,
+/// captions, owner, save-as-template flag) so the callback handler that
+/// finalizes the job once all 3 formats go terminal has what it needs,
+/// surviving a backend restart mid-export.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ExportJob {
+    pub id: String,
+    pub request_json: String,
+    pub gif_status: String,
+    pub gif_percent: i32,
+    pub gif_error: Option<String>,
+    pub mp4_status: String,
+    pub mp4_percent: i32,
+    pub mp4_error: Option<String>,
+    pub webm_status: String,
+    pub webm_percent: i32,
+    pub webm_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Addresses `export_jobs`' 3 per-format column triples generically — the
+/// Lambda callback endpoint and the stuck-job sweep both need to update
+/// "the format param says gif" without a match arm per format at every
+/// call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Gif,
+    Mp4,
+    Webm,
+}
+
+impl ExportFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExportFormat::Gif => "gif",
+            ExportFormat::Mp4 => "mp4",
+            ExportFormat::Webm => "webm",
+        }
+    }
+}
+
+impl std::str::FromStr for ExportFormat {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "gif" => Ok(ExportFormat::Gif),
+            "mp4" => Ok(ExportFormat::Mp4),
+            "webm" => Ok(ExportFormat::Webm),
+            other => Err(anyhow::anyhow!("unknown export format: {other}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

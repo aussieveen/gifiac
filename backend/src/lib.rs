@@ -86,6 +86,7 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     }
 
     spawn_login_code_cleanup(pool.clone());
+    spawn_job_sweep(pool.clone());
 
     Ok(Arc::new(AppState {
         pool,
@@ -117,6 +118,60 @@ fn spawn_login_code_cleanup(pool: sqlx::PgPool) {
                 Ok(deleted) if deleted > 0 => tracing::info!(deleted, "cleaned up expired login codes"),
                 Ok(_) => {}
                 Err(err) => tracing::error!(error = ?err, "failed to clean up expired login codes"),
+            }
+        }
+    });
+}
+
+/// Stuck-job detection (wayfinder gifiac#43): a non-terminal ingest or
+/// export job whose Lambda invocation never calls back at all — as
+/// opposed to one that calls back with an error — would otherwise leave
+/// its DB row (and the browser's SSE connection) waiting forever. Mirrors
+/// `spawn_login_code_cleanup`'s in-process interval-loop pattern, one
+/// combined task scanning both tables each tick rather than two separate
+/// loops. The grace windows are each job type's Lambda timeout (ingest
+/// 90s, export 5min, per gifiac#34) plus a fixed buffer.
+///
+/// This piece (DB migration/queries only) has no `AppState`/broadcast
+/// access yet, so a row marked `timed_out` here doesn't yet push an SSE
+/// event to a live subscriber — piece 3 (backend wiring) extends this
+/// function to take the full `AppState` and do that, once the ingest/
+/// export broadcast-channel maps exist.
+fn spawn_job_sweep(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now();
+            let ingest_cutoff = (now - chrono::Duration::seconds(120)).to_rfc3339();
+            let export_cutoff = (now - chrono::Duration::seconds(360)).to_rfc3339();
+
+            match db::find_stale_ingest_jobs(&pool, &ingest_cutoff).await {
+                Ok(jobs) if !jobs.is_empty() => {
+                    for job in &jobs {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        if let Err(err) = db::mark_ingest_job_timed_out(&pool, &job.id, &now).await {
+                            tracing::error!(job_id = %job.id, error = ?err, "failed to mark ingest job timed out");
+                        }
+                    }
+                    tracing::info!(count = jobs.len(), "marked stale ingest jobs as timed_out");
+                }
+                Ok(_) => {}
+                Err(err) => tracing::error!(error = ?err, "failed to sweep for stale ingest jobs"),
+            }
+
+            match db::find_stale_export_jobs(&pool, &export_cutoff).await {
+                Ok(jobs) if !jobs.is_empty() => {
+                    for job in &jobs {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        if let Err(err) = db::mark_export_job_timed_out(&pool, &job.id, &now).await {
+                            tracing::error!(job_id = %job.id, error = ?err, "failed to mark export job timed out");
+                        }
+                    }
+                    tracing::info!(count = jobs.len(), "marked stale export jobs as timed_out");
+                }
+                Ok(_) => {}
+                Err(err) => tracing::error!(error = ?err, "failed to sweep for stale export jobs"),
             }
         }
     });
