@@ -14,6 +14,7 @@ import { ChevronDownIcon, LogInIcon, MailIcon, PlusIcon } from './icons'
 import { Library } from './Library'
 import { NewGifPage } from './NewGifPage'
 import { Preferences } from './Preferences'
+import { PublicHomePage } from './PublicHomePage'
 import { consumeReturnTo, saveReturnTo } from './returnTo'
 import type { CurrentUser, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
 import { useCanEdit } from './useCanEdit'
@@ -301,6 +302,9 @@ export default function App() {
   }
 
   if (!user) {
+    if (!showEmailSignIn && location.pathname === '/') {
+      return <PublicHomePage onShowEmailSignIn={() => setShowEmailSignIn(true)} />
+    }
     if (showEmailSignIn) {
       return (
         <EmailSignIn
@@ -396,8 +400,7 @@ function AuthenticatedApp({
   // second, redundant one stacked above it.
   const isEditorRoute = location.pathname.startsWith('/edit/') || location.pathname.startsWith('/from-template/')
 
-  const libraryActive =
-    location.pathname === '/' || location.pathname.startsWith('/library') || location.pathname === '/new' || isEditorRoute
+  const libraryActive = location.pathname.startsWith('/library') || location.pathname === '/new' || isEditorRoute
 
   const nav = (
     <header className="app-header">
@@ -422,7 +425,7 @@ function AuthenticatedApp({
             Mine
           </span>
         </Link>
-        <Link className={`app-header-tab ${location.pathname.startsWith('/explore') ? 'active' : ''}`} to="/explore">
+        <Link className={`app-header-tab ${location.pathname === '/' ? 'active' : ''}`} to="/">
           <span className="app-header-tab-full">Global Library</span>
           <span className="app-header-tab-short" aria-hidden="true">
             Global
@@ -444,10 +447,10 @@ function AuthenticatedApp({
     <>
       {!isEditorRoute && nav}
       <Routes>
-        <Route path="/" element={<Navigate to="/library" replace />} />
+        <Route path="/" element={<Library />} />
         <Route path="/library" element={<ArchiveRoute />} />
         <Route path="/library/:gifId" element={<ArchiveRoute />} />
-        <Route path="/explore" element={<Library />} />
+        <Route path="/explore" element={<Navigate to="/" replace />} />
         <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />
         <Route path="/new" element={<NewGifRoute />} />
         <Route path="/edit/:videoId" element={<EditRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />} />

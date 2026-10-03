@@ -60,7 +60,15 @@ function formatUseCount(useCount: number): string {
 // independently of sign-in is a later milestone). Design brief §5: reuses
 // My Library's grid + detail-panel layout and CSS (Archive.tsx) so the two
 // screens read as one product, rather than the old per-tile action row.
-export function Library() {
+interface Props {
+  /** Omits the "Global Library" title + GIF count row — for contexts
+   * (like the logged-out home page) where that heading would be
+   * redundant with the page's own framing. Defaults to showing it,
+   * unchanged from today's `/explore` usage. */
+  hideHeader?: boolean
+}
+
+export function Library({ hideHeader = false }: Props = {}) {
   const { user } = useCurrentUser()
   const [items, setItems] = useState<LibraryEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -190,12 +198,14 @@ export function Library() {
 
   return (
     <div className="page">
-      <div className="archive-title-row">
-        <div className="archive-title-group">
-          <h1 className="page-title">Global Library</h1>
-          <span className="archive-count">{items.length === 1 ? '1 GIF' : `${items.length} GIFs`}</span>
+      {!hideHeader && (
+        <div className="archive-title-row">
+          <div className="archive-title-group">
+            <h1 className="page-title">Global Library</h1>
+            <span className="archive-count">{items.length === 1 ? '1 GIF' : `${items.length} GIFs`}</span>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="archive-toolbar">
         <div className="archive-search-wrap">

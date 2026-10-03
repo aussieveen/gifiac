@@ -3507,85 +3507,18 @@ button {
   color: var(--text);
 }
 
-/* ===== PROTOTYPE — wayfinder gifiac#41, throwaway. Delete this whole
-   block with frontend/src/prototype/HomeIaPrototype.tsx once a variant
-   wins or the losing ones are folded away. ===== */
+/* ---------- public home page (wayfinder gifiac#41) ---------- */
 
-.home-ia-page {
-  padding: 32px 32px 100px;
-}
-
-.home-ia-cta {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.home-ia-cta-compact {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Variant A — unified: a thin banner above the untouched Library grid */
-
-.home-ia-variant-a {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.home-ia-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 20px;
-  flex-wrap: wrap;
-}
-
-.home-ia-banner-text {
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-/* Variant B — twin page: its own header, same grid component below */
-
-.home-ia-variant-b {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.home-ia-header-b {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-/* Variant C — marketing landing: hero first, full library below the fold */
-
-.home-ia-variant-c {
-  display: flex;
-  flex-direction: column;
-  gap: 40px;
-}
-
-.home-ia-hero {
+.public-home-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
   text-align: center;
-  padding: 48px 16px;
+  padding: 48px 16px 40px;
 }
 
-.home-ia-hero-headline {
+.public-home-hero-headline {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3594,80 +3527,40 @@ button {
   margin: 0;
 }
 
-.home-ia-hero-line1 {
+.public-home-hero-line1 {
   font-size: clamp(40px, 10vw, 72px);
   color: var(--accent);
 }
 
-.home-ia-hero-line2 {
+.public-home-hero-line2 {
   font-size: clamp(16px, 4vw, 32px);
   white-space: nowrap;
 }
 
-.home-ia-hero-subline {
+.public-home-hero-subline {
   font-size: 16px;
   color: var(--text-muted);
   margin: 0;
   max-width: 480px;
 }
 
-/* Prototype chrome — switcher bar */
-
-.home-ia-switcher {
-  position: fixed;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #000;
-  color: #fff;
-  border-radius: 999px;
-  padding: 8px 14px;
+.public-home-hero-ctas {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  z-index: 300;
-}
-
-.home-ia-switcher-exit,
-.home-ia-switcher-arrow {
-  background: rgba(255, 255, 255, 0.12);
-  border: none;
-  color: #fff;
-  border-radius: 50%;
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   justify-content: center;
 }
 
-.home-ia-switcher-label {
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
 @media (max-width: 479.98px) {
-  .home-ia-page {
-    padding: 20px 16px 100px;
-  }
-
-  .home-ia-cta,
-  .home-ia-cta-compact {
+  .public-home-hero-ctas {
     flex-direction: column;
     align-items: stretch;
+    width: 100%;
+    max-width: 320px;
   }
 
-  .home-ia-cta .btn,
-  .home-ia-cta-compact .btn {
+  .public-home-hero-ctas .btn {
     width: 100%;
     justify-content: center;
-  }
-
-  .home-ia-header-b {
-    justify-content: center;
-    text-align: center;
   }
 }
