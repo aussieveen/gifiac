@@ -2620,6 +2620,12 @@ button {
   border-radius: 50%;
 }
 
+/* Handles preserve whatever case/underscores the user picked (backend/src/handle.rs
+   is_valid) — override .page h1's uppercase transform so it displays as-entered. */
+.profile-handle {
+  text-transform: none;
+}
+
 /* SPEC-CLOUD.md §14: gives .archive-favourite-badge's absolute
    positioning something to anchor to — the tile itself is a plain
    `<img>`, which can't host an overlaid child. */
