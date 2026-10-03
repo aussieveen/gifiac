@@ -438,8 +438,8 @@ pub struct User {
     pub email: Option<String>,
     pub avatar_url: Option<String>,
     /// SPEC-CLOUD.md §5: captured from the Google OAuth payload's `name`
-    /// field to seed the handle picker's suggested slug — not itself
-    /// shown anywhere.
+    /// field to seed the handle picker's suggested slug. Also shown on
+    /// the public profile header in place of the handle, when set.
     pub display_name: Option<String>,
     /// SPEC-CLOUD.md §7: an admin-disabled account. Blocks further login
     /// (checked in `routes::auth::callback`) — the actual session

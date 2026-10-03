@@ -56,6 +56,7 @@ pub async fn set_handle(
 #[serde(rename_all = "camelCase")]
 pub struct ProfileResponse {
     handle: String,
+    display_name: Option<String>,
     avatar_url: Option<String>,
     gifs: Vec<GifResponse>,
 }
@@ -99,6 +100,7 @@ pub async fn get_profile(
         // (or, since migration 0012, in a collision suffix) from its
         // slug (SPEC-CLOUD.md §5).
         handle: user.handle.ok_or(AppError::NotFound)?,
+        display_name: user.display_name,
         avatar_url: user.avatar_url,
         gifs,
     }))
