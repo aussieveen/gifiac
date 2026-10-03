@@ -2622,7 +2622,7 @@ button {
 
 /* Handles preserve whatever case/underscores the user picked (backend/src/handle.rs
    is_valid) — override .page h1's uppercase transform so it displays as-entered. */
-.profile-handle {
+h1.profile-handle {
   text-transform: none;
 }
 
