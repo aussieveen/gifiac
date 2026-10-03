@@ -6,6 +6,8 @@ import { AboutPage } from './About.tsx'
 import App from './App.tsx'
 import { PrivacyPage } from './Privacy.tsx'
 import { ProfilePage } from './ProfilePage.tsx'
+// PROTOTYPE — wayfinder gifiac#41. Delete with frontend/src/prototype/ once resolved.
+import { HomeIaPrototype } from './prototype/HomeIaPrototype.tsx'
 
 // `/u/:handle`, `/about`, and `/privacy` are the routes that render
 // outside App's own auth-gated shell — public profiles, and the
@@ -19,6 +21,7 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/u/:handle" element={<ProfilePage />} />
+        <Route path="/prototype/home-ia" element={<HomeIaPrototype />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="*" element={<App />} />
