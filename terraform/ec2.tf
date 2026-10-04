@@ -50,22 +50,25 @@ resource "aws_instance" "app" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    docker_compose_yml        = file("${path.module}/../docker-compose.yml")
-    caddyfile                 = file("${path.module}/../Caddyfile")
-    deploy_sh                 = file("${path.module}/files/deploy.sh")
-    r2_account_id             = var.r2_account_id
-    r2_bucket_name            = var.r2_bucket_name
-    r2_public_base_url        = var.r2_public_base_url
-    google_client_id          = var.google_client_id
-    app_base_url              = "https://${var.domain_name}"
-    source_videos_s3_bucket   = aws_s3_bucket.source_videos.bucket
-    source_videos_s3_region   = var.aws_region
-    template_assets_s3_bucket = aws_s3_bucket.template_assets.bucket
-    template_assets_s3_region = var.aws_region
-    email_from_address        = var.email_from_address
-    ses_region                = var.aws_region
-    turnstile_site_key        = var.turnstile_site_key
-    trust_cf_connecting_ip    = var.trust_cf_connecting_ip
+    docker_compose_yml          = file("${path.module}/../docker-compose.yml")
+    caddyfile                   = file("${path.module}/../Caddyfile")
+    deploy_sh                   = file("${path.module}/files/deploy.sh")
+    r2_account_id               = var.r2_account_id
+    r2_bucket_name              = var.r2_bucket_name
+    r2_public_base_url          = var.r2_public_base_url
+    google_client_id            = var.google_client_id
+    app_base_url                = "https://${var.domain_name}"
+    source_videos_s3_bucket     = aws_s3_bucket.source_videos.bucket
+    source_videos_s3_region     = var.aws_region
+    template_assets_s3_bucket   = aws_s3_bucket.template_assets.bucket
+    template_assets_s3_region   = var.aws_region
+    email_from_address          = var.email_from_address
+    ses_region                  = var.aws_region
+    turnstile_site_key          = var.turnstile_site_key
+    trust_cf_connecting_ip      = var.trust_cf_connecting_ip
+    ingest_lambda_function_name = aws_lambda_function.ingest.function_name
+    export_lambda_function_name = aws_lambda_function.export.function_name
+    callback_base_url           = "https://${var.domain_name}"
   })
 
   # `data.aws_ami.al2023` re-resolves to whatever AMI is newest at plan

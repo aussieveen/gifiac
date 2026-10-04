@@ -20,6 +20,7 @@ R2_SECRET_ACCESS_KEY="$(get_param r2_secret_access_key)"
 LOGIN_CODE_HMAC_KEY="$(get_param login_code_hmac_key)"
 TURNSTILE_SECRET_KEY="$(get_param turnstile_secret_key)"
 POSTGRES_PASSWORD="$(get_param postgres_local_password)"
+LAMBDA_CALLBACK_TOKEN="$(get_param lambda_callback_token)"
 
 mkdir -p certs
 get_param cloudflare_origin_cert > certs/origin.pem
@@ -48,6 +49,10 @@ SES_REGION=${SES_REGION}
 TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}
 TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}
 TRUST_CF_CONNECTING_IP=${TRUST_CF_CONNECTING_IP}
+INGEST_LAMBDA_FUNCTION_NAME=${INGEST_LAMBDA_FUNCTION_NAME}
+EXPORT_LAMBDA_FUNCTION_NAME=${EXPORT_LAMBDA_FUNCTION_NAME}
+CALLBACK_BASE_URL=${CALLBACK_BASE_URL}
+LAMBDA_CALLBACK_TOKEN=${LAMBDA_CALLBACK_TOKEN}
 EOF
 chmod 600 .env
 

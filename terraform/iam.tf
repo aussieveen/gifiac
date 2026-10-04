@@ -149,6 +149,42 @@ resource "aws_iam_role_policy" "deploy" {
         Action   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"]
         Resource = "*"
       },
+      {
+        # lambda-publish.yml (wayfinder gifiac#32) pushes a new ingest/
+        # export Lambda container image and rolls it out without a
+        # terraform apply — same narrowly-scoped-to-exactly-what-CI-needs
+        # philosophy as the statements above.
+        # Only action here that doesn't support resource-level
+        # restriction (AWS only accepts "*") — logging in to ECR at all,
+        # before the repo-scoped push permissions below.
+        Sid      = "EcrLogin"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "PushLambdaImagesToRepos"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+        ]
+        Resource = [
+          aws_ecr_repository.ingest_lambda.arn,
+          aws_ecr_repository.export_lambda.arn,
+        ]
+      },
+      {
+        Sid      = "UpdateLambdaFunctionCode"
+        Effect   = "Allow"
+        Action   = ["lambda:UpdateFunctionCode"]
+        Resource = [aws_lambda_function.ingest.arn, aws_lambda_function.export.arn]
+      },
     ]
   })
 }

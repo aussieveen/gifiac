@@ -18,6 +18,16 @@ output "github_deploy_role_arn" {
   value       = aws_iam_role.deploy.arn
 }
 
+output "ingest_lambda_ecr_repository_url" {
+  description = "Where lambda-publish.yml pushes the ingest Lambda's container image."
+  value       = aws_ecr_repository.ingest_lambda.repository_url
+}
+
+output "export_lambda_ecr_repository_url" {
+  description = "Where lambda-publish.yml pushes the export Lambda's container image."
+  value       = aws_ecr_repository.export_lambda.repository_url
+}
+
 # SPEC-EMAIL-AUTH.md §8 — same "DNS isn't managed here, so list the
 # records to add manually" pattern as acm_validation_records. Root-domain
 # constraints (do not touch existing MX/SPF, only add a _dmarc record if

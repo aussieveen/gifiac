@@ -119,6 +119,23 @@ way a Route53-hosted domain could. That makes `apply` genuinely two-phase
   the same `/opt/gifiac/deploy.sh` on the instance via SSM
   `send-command` — it re-fetches secrets from SSM and does
   `docker compose pull && up -d` each time.
+- **Bootstrap order for the ingest/export Lambda functions** (wayfinder
+  gifiac#32): AWS validates that `image_uri` resolves to a real image
+  *at function-creation time* — a container-image Lambda function can't
+  be created pointing at a tag that doesn't exist yet, so the two ECR
+  repos need a real `:latest` image in them before `aws_lambda_function.
+  {ingest,export}` can be created. First time only:
+  1. `terraform apply -target=aws_ecr_repository.ingest_lambda
+     -target=aws_ecr_repository.export_lambda` to create just the repos.
+  2. Push to `main` (or manually run `.github/workflows/lambda-publish.yml`)
+     so an image actually lands in each repo.
+  3. `terraform apply` (no `-target`) to create the two Lambda functions
+     against those now-real images.
+  After that, every later `lambda-publish.yml` run pushes a new image and
+  calls `aws lambda update-function-code` itself — Terraform never
+  updates the image after creation (`ignore_changes = [image_uri]`), by
+  design, so an ordinary `apply` for an unrelated change never fights
+  with CI over which image is deployed.
 
 ## Rotating a secret (`google_client_secret`, `r2_access_key_id`, etc.)
 
