@@ -28,6 +28,7 @@ get_param cloudflare_origin_key > certs/origin.key
 chmod 600 certs/origin.pem certs/origin.key
 
 cat > .env <<EOF
+AWS_REGION=${AWS_REGION}
 DATABASE_URL=postgres://gifiac:${POSTGRES_PASSWORD}@postgres:5432/gifiac?sslmode=disable
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 R2_ACCOUNT_ID=${R2_ACCOUNT_ID}

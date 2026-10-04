@@ -30,6 +30,7 @@ data "aws_ami" "al2023" {
 # needed at all.
 locals {
   config_env = templatefile("${path.module}/config.env.tftpl", {
+    aws_region                  = var.aws_region
     r2_account_id               = var.r2_account_id
     r2_bucket_name              = var.r2_bucket_name
     r2_public_base_url          = var.r2_public_base_url

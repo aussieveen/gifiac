@@ -193,6 +193,8 @@ impl FromRequestParts<Arc<AppState>> for CurrentUser {
 
         db::touch_session(&state.pool, &session_id, &Utc::now().to_rfc3339()).await?;
 
+        tracing::Span::current().record("user_id", tracing::field::display(&user.id));
+
         Ok(CurrentUser(user))
     }
 }

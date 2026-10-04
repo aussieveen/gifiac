@@ -33,6 +33,13 @@ services:
       - /opt/gifiac/certs:/certs:ro
     depends_on:
       - gifiac
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: /gifiac/caddy
+        awslogs-create-group: "false"
+        awslogs-stream-prefix: caddy
 
   gifiac:
     # Built and published by .github/workflows/docker-publish.yml on every push to main.
@@ -46,13 +53,22 @@ services:
       - "8080"
     volumes:
       - /opt/gifiac/data:/data
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION}"
+        awslogs-group: /gifiac/app
+        awslogs-create-group: "false"
+        awslogs-stream-prefix: gifiac
     environment:
       # Without this, tracing_subscriber's default filter is ERROR-only
       # (EnvFilter::from_default_env()'s default directive) — every
       # tracing::info! in the app, including per-request timing, is
-      # silently dropped. tower_http=debug surfaces TraceLayer's built-in
-      # per-request duration line alongside our own stage timings.
-      RUST_LOG: "info,gifiac_backend=info,tower_http=debug"
+      # silently dropped. tower_http=info keeps TraceLayer's built-in
+      # per-request duration line and our own stage timings without its
+      # chattier debug-level internals — logs ship to CloudWatch now
+      # (terraform/cloudwatch.tf), and that's billed per GB ingested.
+      RUST_LOG: "info,gifiac_backend=info,tower_http=info"
       GIFIAC_VIDEO_DIR: /data/videos
       DATABASE_URL: "${DATABASE_URL}"
       R2_ACCOUNT_ID: "${R2_ACCOUNT_ID}"

@@ -69,6 +69,28 @@ resource "aws_iam_role_policy" "ec2_app" {
         Action   = ["ses:SendEmail"]
         Resource = aws_sesv2_email_identity.main.arn
       },
+      {
+        # Docker's `awslogs` logging driver (docker-compose.yml) uses the
+        # instance role's credentials directly — no CloudWatch agent
+        # involved. No CreateLogGroup here: the groups are pre-created by
+        # cloudwatch.tf with explicit retention/log class, and the driver
+        # is configured with `awslogs-create-group=false` so a typo'd
+        # group name fails loudly instead of silently creating a
+        # Standard-class, never-expire group.
+        Sid    = "ShipAppLogsToCloudWatch"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams",
+        ]
+        Resource = [
+          aws_cloudwatch_log_group.gifiac_app.arn,
+          "${aws_cloudwatch_log_group.gifiac_app.arn}:*",
+          aws_cloudwatch_log_group.gifiac_caddy.arn,
+          "${aws_cloudwatch_log_group.gifiac_caddy.arn}:*",
+        ]
+      },
     ]
   })
 }
