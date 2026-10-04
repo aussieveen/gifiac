@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, createTemplateExport, getTemplate, subscribeExportProgress, templateClipUrl, videoFileUrl } from './api'
 import mark from './assets/brand/strewthgif-mark.svg'
+import { ExportProgressModal, type ExportProgressState } from './ExportProgressModal'
 import {
   AlignCenterIcon,
   AlignLeftIcon,
@@ -53,6 +54,12 @@ function measureWrappedLines(el: HTMLElement): string {
 // visually similar bold display font — see backend font-provisioning
 // notes) is offered as an explicit, real option and the default, while
 // Impact stays selectable for anyone whose system does have it.
+const INITIAL_EXPORT_PROGRESS: ExportProgressState = {
+  gif: { status: 'pending', percent: 0 },
+  mp4: { status: 'pending', percent: 0 },
+  webm: { status: 'pending', percent: 0 },
+}
+
 const FONTS = ['Anton, sans-serif', 'Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
 const MIN_CAPTION_DURATION = 0.25
 const MIN_GIF_RANGE = 0.1
@@ -275,7 +282,8 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportProgress, setExportProgress] = useState<{ stage: string; percent: number } | null>(null)
+  const [exportProgress, setExportProgress] = useState<ExportProgressState>(INITIAL_EXPORT_PROGRESS)
+  const [exportAllDone, setExportAllDone] = useState(true)
   const [completedGif, setCompletedGif] = useState<Gif | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   // The "Make GIF" dialog's own state — opens for both flows (naming is
@@ -790,7 +798,8 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
     setExportError(null)
     setTemplateError(null)
     setCompletedGif(null)
-    setExportProgress(null)
+    setExportProgress(INITIAL_EXPORT_PROGRESS)
+    setExportAllDone(false)
     try {
       // The backend can only space out lines it knows are separate (see
       // ass.rs's `line_height` doc comment) — it splits on literal '\n',
@@ -825,21 +834,27 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
             // server-side.
             await createTemplateExport(source.template.id, trimmedName, captionsWithWrapping)
       exportUnsubscribeRef.current = subscribeExportProgress(result.export_id, {
-        onProgress: (stage, percent) => setExportProgress({ stage, percent }),
+        onProgress: (format, percent) =>
+          setExportProgress((prev) => ({ ...prev, [format]: { status: 'running', percent } })),
+        onFormatDone: (format) =>
+          setExportProgress((prev) => ({ ...prev, [format]: { status: 'done', percent: 100 } })),
+        onFormatFailed: (format) =>
+          setExportProgress((prev) => ({ ...prev, [format]: { status: 'error', percent: prev[format].percent } })),
         onComplete: (gif) => {
           setCompletedGif(gif)
-          setExportProgress(null)
+          setExportAllDone(true)
           setSubmitting(false)
           onGifCreated?.(gif)
         },
         onError: (message) => {
           setExportError(message)
-          setExportProgress(null)
+          setExportAllDone(true)
           setSubmitting(false)
         },
       })
     } catch (err) {
       setExportError(err instanceof Error ? err.message : String(err))
+      setExportAllDone(true)
       setSubmitting(false)
     }
   }
@@ -1016,11 +1031,7 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
         </div>
       </header>
 
-      {exportProgress && (
-        <div className="editor-toast">
-          {exportProgress.stage} — {exportProgress.percent}%
-        </div>
-      )}
+      <ExportProgressModal progress={exportProgress} allDone={exportAllDone} />
       {exportError && <div className="editor-toast editor-toast-error">{exportError}</div>}
       {templateError && <div className="editor-toast editor-toast-error">{templateError}</div>}
       {completedGif && (

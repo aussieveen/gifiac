@@ -3359,8 +3359,8 @@ h1.profile-handle {
 }
 
 /* ===== Ingest loading modal — wayfinder gifiac#38's agreed design
-   (centered modal + stepper). Not wired into the live flow yet; see
-   frontend/src/prototype/IngestModalPrototype.tsx. ===== */
+   (centered modal + stepper), wired into the live upload flow in
+   NewGifPage.tsx (gifiac#32). See frontend/src/IngestLoadingModal.tsx. ===== */
 
 @keyframes ingest-modal-spin {
   to {
@@ -3437,9 +3437,20 @@ h1.profile-handle {
   flex-shrink: 0;
 }
 
+.ingest-modal-error {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 0 0 16px;
+}
+
+.ingest-modal-dismiss {
+  width: 100%;
+}
+
 /* ===== Export progress modal — wayfinder gifiac#39's agreed design
-   (centered modal, consistent with the ingest modal). Not wired into
-   the live app yet; see frontend/src/prototype/ExportModalPrototype.tsx. ===== */
+   (centered modal, consistent with the ingest modal), wired into the
+   live export flow in CaptionEditor.tsx (gifiac#32). See
+   frontend/src/ExportProgressModal.tsx. ===== */
 
 @keyframes export-modal-spin {
   to {
@@ -3476,6 +3487,14 @@ h1.profile-handle {
 
 .export-modal-row-done {
   color: var(--text-muted);
+}
+
+.export-modal-row-error {
+  color: var(--danger);
+}
+
+.export-modal-row-error .export-modal-row-icon {
+  color: var(--danger);
 }
 
 .export-modal-row-icon {

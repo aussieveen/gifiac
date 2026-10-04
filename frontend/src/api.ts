@@ -149,10 +149,61 @@ export function getVideo(id: string): Promise<Video> {
   return request<Video>(`/api/videos/${id}`)
 }
 
-export function uploadVideo(file: File): Promise<Video> {
+// Ingest (probe + thumbnail + filmstrip) now runs in the ingest Lambda,
+// off the synchronous upload request (wayfinder gifiac#32) — the upload
+// returns fast, 202-style, mirroring export's existing `ExportAccepted`
+// shape. `job_id` is what `subscribeIngestProgress` subscribes to.
+export interface UploadAccepted {
+  video_id: string
+  job_id: string
+}
+
+export function uploadVideo(file: File): Promise<UploadAccepted> {
   const body = new FormData()
   body.append('file', file, file.name)
-  return request<Video>('/api/videos', { method: 'POST', body })
+  return request<UploadAccepted>('/api/videos', { method: 'POST', body })
+}
+
+// One of `ingest_jobs.stage`'s non-terminal values, relayed as-is from
+// the backend (gifiac#32) — matches `IngestStage` in
+// `IngestLoadingModal.tsx` exactly, no translation layer.
+export type IngestStage = 'uploading' | 'analyzing' | 'building_filmstrip'
+
+export interface IngestProgressHandlers {
+  onStage?: (stage: IngestStage) => void
+  onComplete?: (video: Video) => void
+  onError?: (message: string) => void
+}
+
+/** Subscribes to an ingest job's progress stream; returns an unsubscribe
+ * function. Mirrors `subscribeExportProgress`'s shape exactly. */
+export function subscribeIngestProgress(jobId: string, handlers: IngestProgressHandlers): () => void {
+  const source = new EventSource(`/api/videos/${jobId}/ingest-progress`)
+
+  source.addEventListener('stage', (e) => {
+    const { stage } = JSON.parse((e as MessageEvent).data) as { stage: IngestStage }
+    handlers.onStage?.(stage)
+  })
+
+  source.addEventListener('complete', (e) => {
+    const video = JSON.parse((e as MessageEvent).data) as Video
+    handlers.onComplete?.(video)
+    source.close()
+  })
+
+  source.addEventListener('error', (e) => {
+    // A plain browser connection-drop also fires as an 'error' event, but
+    // without `.data` (it isn't a real MessageEvent) — only a pipeline
+    // failure the server actually reported carries JSON here.
+    const raw = (e as MessageEvent).data
+    if (raw) {
+      const { message } = JSON.parse(raw) as { message: string }
+      handlers.onError?.(message)
+      source.close()
+    }
+  })
+
+  return () => source.close()
 }
 
 export async function deleteVideo(id: string): Promise<void> {
@@ -208,14 +259,20 @@ export function createExport(req: ExportRequest): Promise<ExportAccepted> {
   })
 }
 
-// Stage names per SPEC.md §6 — each is its own named SSE event carrying
-// `{ percent }`, ending with a `complete` event carrying the full `gifs`
-// row (or an `error` event with `{ message }` on failure).
-const EXPORT_STAGES = ['palette_gen', 'encoding_gif', 'encoding_mp4', 'encoding_webm', 'uploading'] as const
+// gif/mp4/webm now encode in 3 parallel Lambda invocations (wayfinder
+// gifiac#32) instead of one sequential in-process pipeline — matches
+// `ExportFormat` in `ExportProgressModal.tsx` exactly.
+export type ExportFormat = 'gif' | 'mp4' | 'webm'
 
 export interface ExportProgressHandlers {
-  onProgress?: (stage: (typeof EXPORT_STAGES)[number], percent: number) => void
+  onProgress?: (format: ExportFormat, percent: number) => void
+  onFormatDone?: (format: ExportFormat) => void
+  onFormatFailed?: (format: ExportFormat, message: string) => void
+  /** The whole job succeeded — at minimum the gif format, which is
+   * load-bearing (gifiac#36). */
   onComplete?: (gif: Gif) => void
+  /** The whole job failed — gif failed or timed out, regardless of
+   * mp4/webm's own outcome. */
   onError?: (message: string) => void
 }
 
@@ -223,12 +280,20 @@ export interface ExportProgressHandlers {
 export function subscribeExportProgress(exportId: string, handlers: ExportProgressHandlers): () => void {
   const source = new EventSource(`/api/exports/${exportId}/progress`)
 
-  for (const stage of EXPORT_STAGES) {
-    source.addEventListener(stage, (e) => {
-      const { percent } = JSON.parse((e as MessageEvent).data) as { percent: number }
-      handlers.onProgress?.(stage, percent)
-    })
-  }
+  source.addEventListener('progress', (e) => {
+    const { format, percent } = JSON.parse((e as MessageEvent).data) as { format: ExportFormat; percent: number }
+    handlers.onProgress?.(format, percent)
+  })
+
+  source.addEventListener('format_done', (e) => {
+    const { format } = JSON.parse((e as MessageEvent).data) as { format: ExportFormat }
+    handlers.onFormatDone?.(format)
+  })
+
+  source.addEventListener('format_failed', (e) => {
+    const { format, message } = JSON.parse((e as MessageEvent).data) as { format: ExportFormat; message: string }
+    handlers.onFormatFailed?.(format, message)
+  })
 
   source.addEventListener('complete', (e) => {
     const gif = JSON.parse((e as MessageEvent).data) as Gif

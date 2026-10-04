@@ -326,8 +326,8 @@ describe('CaptionEditor', () => {
     await makeGif(user, 'my clip')
     await waitFor(() => expect(subscribeExportProgress).toHaveBeenCalled())
 
-    act(() => handlers.onProgress?.('encoding_gif', 42))
-    await screen.findByText(/encoding_gif.*42%/)
+    act(() => handlers.onProgress?.('gif', 42))
+    await screen.findByText('Encoding GIF 42%')
 
     act(() =>
       handlers.onComplete?.({
