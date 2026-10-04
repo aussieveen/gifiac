@@ -167,9 +167,18 @@ async fn run_export(req: &ExportRequest, http_client: &reqwest::Client) -> Resul
 
     match req.format.as_str() {
         "gif" => {
+            // Both passes report against the same full clip_duration (see
+            // `ProgressTracker`), so each independently climbs 0→100 —
+            // passed straight through, the backend's callback would see
+            // gif's progress hit 100%, then drop back down as the second
+            // pass starts, then climb to 100% again, which the frontend
+            // rendered as the percentage flickering between a real value
+            // and 100%. Halving and offsetting each pass keeps the
+            // reported percent monotonic across the whole two-pass
+            // encode, reaching 100 only once, at the true end.
             let palette_path = tmp_dir.path().join("palette.png");
-            generate_palette(clip, &palette_path, report_progress).await?;
-            encode_gif(clip, &palette_path, &output_path, report_progress).await?;
+            generate_palette(clip, &palette_path, |percent: u8| report_progress(percent / 2)).await?;
+            encode_gif(clip, &palette_path, &output_path, |percent: u8| report_progress(50 + percent / 2)).await?;
         }
         "mp4" => {
             encode_mp4(clip, &output_path, report_progress).await?;
