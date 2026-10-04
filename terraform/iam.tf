@@ -180,10 +180,21 @@ resource "aws_iam_role_policy" "deploy" {
         ]
       },
       {
-        Sid      = "UpdateLambdaFunctionCode"
-        Effect   = "Allow"
-        Action   = ["lambda:UpdateFunctionCode"]
-        Resource = [aws_lambda_function.ingest.arn, aws_lambda_function.export.arn]
+        # Built from the predictable function-name ARN format, not
+        # `aws_lambda_function.{ingest,export}.arn` — those functions
+        # can't be *created* until an image already exists at their
+        # `image_uri` (see terraform/README.md's bootstrap-order note),
+        # so referencing the resource attribute here would force
+        # Terraform to try creating them as a dependency of this policy
+        # update, before CI can ever push that first image. A plain
+        # string has no such dependency.
+        Sid    = "UpdateLambdaFunctionCode"
+        Effect = "Allow"
+        Action = ["lambda:UpdateFunctionCode"]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.ingest_function_name}",
+          "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.export_function_name}",
+        ]
       },
     ]
   })

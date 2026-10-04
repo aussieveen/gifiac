@@ -4,6 +4,21 @@
 # EC2 instance's own Graviton architecture and avoiding a second
 # cross-compile target.
 
+# Plain literals, not `aws_lambda_function.{ingest,export}.function_name`
+# — those functions can't be *created* until an image already exists at
+# their `image_uri` (see terraform/README.md's bootstrap-order note), so
+# anything that only needs the name string (ec2.tf's user_data, the
+# `deploy` role's UpdateFunctionCode statement in iam.tf) references
+# these locals instead of the resource attribute, to avoid forcing an
+# unnecessary dependency on the functions' creation. Only a genuine
+# "needs the function to actually exist" consumer — `ec2_invoke_lambda`'s
+# `aws_lambda_function.*.arn` references below — still depends on the
+# real resources.
+locals {
+  ingest_function_name = "gifiac-ingest"
+  export_function_name = "gifiac-export"
+}
+
 resource "aws_ecr_repository" "ingest_lambda" {
   name                 = "gifiac-ingest-lambda"
   image_tag_mutability = "MUTABLE"
@@ -57,7 +72,7 @@ resource "aws_iam_role_policy" "lambda_source_videos" {
 }
 
 resource "aws_lambda_function" "ingest" {
-  function_name = "gifiac-ingest"
+  function_name = local.ingest_function_name
   role          = aws_iam_role.lambda_exec.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.ingest_lambda.repository_url}:latest"
@@ -86,7 +101,7 @@ resource "aws_lambda_function" "ingest" {
 }
 
 resource "aws_lambda_function" "export" {
-  function_name = "gifiac-export"
+  function_name = local.export_function_name
   role          = aws_iam_role.lambda_exec.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.export_lambda.repository_url}:latest"
