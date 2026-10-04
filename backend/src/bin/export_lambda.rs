@@ -45,6 +45,17 @@ struct ExportCallback<'a> {
     percent: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// The gif format's actual post-scale output dimensions, probed from
+    /// the encoded file rather than reimplementing the scale filter's
+    /// rounding rules a second time (same approach the pre-Lambda
+    /// pipeline used) — present only on `gif`'s own "done" callback; the
+    /// backend persists these on `export_jobs` since the "all formats
+    /// terminal" callback that needs them to build the `gifs` row may be
+    /// a later, different callback (mp4/webm finish independently).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<i64>,
 }
 
 async fn post_callback(http_client: &reqwest::Client, callback_url: &str, callback_token: &str, body: &ExportCallback<'_>) {
@@ -76,6 +87,8 @@ async fn handler(event: LambdaEvent<ExportRequest>) -> Result<ExportResponse, Er
                 status: "failed",
                 percent: 0,
                 error: Some(err.to_string()),
+                width: None,
+                height: None,
             },
         )
         .await;
@@ -141,6 +154,8 @@ async fn run_export(req: &ExportRequest, http_client: &reqwest::Client) -> Resul
                     status: "running",
                     percent,
                     error: None,
+                    width: None,
+                    height: None,
                 },
             )
             .await;
@@ -170,6 +185,18 @@ async fn run_export(req: &ExportRequest, http_client: &reqwest::Client) -> Resul
         .await
         .with_context(|| format!("uploading {}", req.output_key))?;
 
+    // Only the gif format's dimensions are needed by the backend (the
+    // `gifs` row stores just one width/height, same as today) — probing
+    // mp4/webm's output would be redundant, they share the same scale
+    // filter and thus the same output dimensions.
+    let (width, height) = if req.format == "gif" {
+        let probe_path = output_path.clone();
+        let probe = tokio::task::spawn_blocking(move || gifiac_backend::ffmpeg::probe_video(&probe_path)).await??;
+        (Some(probe.width), Some(probe.height))
+    } else {
+        (None, None)
+    };
+
     post_callback(
         http_client,
         &req.callback_url,
@@ -180,6 +207,8 @@ async fn run_export(req: &ExportRequest, http_client: &reqwest::Client) -> Resul
             status: "done",
             percent: 100,
             error: None,
+            width,
+            height,
         },
     )
     .await;

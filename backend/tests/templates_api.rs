@@ -11,7 +11,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 mod common;
-use common::{authed, login_as, make_test_video, multipart_body, parse_sse_events, spawn_app, upload_test_video};
+use common::{authed, login_as, parse_sse_events, spawn_app, upload_test_video};
 
 /// Uploads a video and saves a named template against it (flow A), owned
 /// by `test_app`'s default owner. Returns the created template's own id.
@@ -396,6 +396,11 @@ async fn template_export_creates_a_gif_with_lineage_and_locked_dimensions() {
     )
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
+    // put_test_template saved width=320, height=240 (see the comment
+    // below) — no real export Lambda runs in tests, so simulate its
+    // "done" callbacks before opening progress (gifiac#32's terminal-
+    // replay path).
+    common::complete_export_job(&test_app, &export_id, 320, 240).await;
 
     let progress_response = tokio::time::timeout(
         std::time::Duration::from_secs(60),
@@ -466,27 +471,7 @@ async fn template_export_from_a_private_template_you_dont_own_returns_404() {
 #[tokio::test]
 async fn flow_a_export_with_save_as_template_stamps_lineage_to_the_new_template() {
     let test_app = spawn_app().await;
-    let fixture_dir = tempfile::TempDir::new().unwrap();
-    let video_path = make_test_video(fixture_dir.path(), 3.0);
-    let video_bytes = std::fs::read(&video_path).unwrap();
-    let (boundary, body) = multipart_body("file", "clip.mp4", "video/mp4", video_bytes);
-    let upload_response = test_app
-        .app
-        .clone()
-        .oneshot(
-            authed(&test_app, Request::builder())
-                .method("POST")
-                .uri("/api/videos")
-                .header("content-type", format!("multipart/form-data; boundary={boundary}"))
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let video: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(upload_response.into_body(), usize::MAX).await.unwrap(),
-    )
-    .unwrap();
+    let video = upload_test_video(&test_app).await;
     let video_id = video["id"].as_str().unwrap();
 
     let export_body = json!({
@@ -517,6 +502,13 @@ async fn flow_a_export_with_save_as_template_stamps_lineage_to_the_new_template(
     )
     .unwrap();
     let export_id = accepted["export_id"].as_str().unwrap().to_string();
+    common::complete_export_job(
+        &test_app,
+        &export_id,
+        video["width"].as_i64().unwrap(),
+        video["height"].as_i64().unwrap(),
+    )
+    .await;
 
     let progress_response = tokio::time::timeout(
         std::time::Duration::from_secs(60),

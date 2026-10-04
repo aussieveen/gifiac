@@ -1,12 +1,17 @@
+use std::convert::Infallible;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Multipart, Path as AxPath, Request, State};
 use axum::http::{StatusCode, header};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
+use futures_util::{Stream, StreamExt};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use uuid::Uuid;
@@ -16,7 +21,9 @@ use crate::db;
 use crate::error::AppError;
 use crate::ffmpeg;
 use crate::filmstrip_layout::compute_filmstrip_layout;
-use crate::models::{FilmstripMeta, NewVideo, PutTemplateRequest, TemplatePayload, Video, VideoListItem};
+use crate::ingest::IngestEvent;
+use crate::lambda_jobs;
+use crate::models::{FilmstripMeta, NewVideo, PutTemplateRequest, TemplatePayload, UploadAccepted, Video, VideoListItem};
 use crate::paths;
 use crate::source_video;
 use crate::state::AppState;
@@ -48,11 +55,17 @@ async fn remove_partial_upload(video_path: &std::path::Path, reason: &str) {
     }
 }
 
+/// Returns fast (202) once the raw file is in S3 — mirrors export's
+/// existing 202-style shape (wayfinder gifiac#32's "Ingest flow"
+/// decision). The ingest Lambda then does probe + thumbnail + filmstrip
+/// asynchronously, backfilling `videos.duration_seconds`/`width`/`height`
+/// (nullable precisely for this) via its callback and relaying stage
+/// progress over `GET /api/videos/{job_id}/ingest-progress`'s SSE stream.
 pub async fn upload_video(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<Video>), AppError> {
+) -> Result<(StatusCode, Json<UploadAccepted>), AppError> {
     let mut field = multipart
         .next_field()
         .await
@@ -88,53 +101,39 @@ pub async fn upload_video(
     file.flush().await?;
     drop(file);
 
+    // A quick sanity probe stays here (client-facing 400 on a bad upload,
+    // same as before) even though the real probe the `videos` row gets
+    // backfilled from runs again in the ingest Lambda — that one has no
+    // request to report a 400 back on, so a garbage upload would
+    // otherwise only surface as a silently-failed ingest job.
     let probe_path = video_path.clone();
     let probe_result = tokio::task::spawn_blocking(move || ffmpeg::probe_video(&probe_path))
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
-
-    let probe = match probe_result {
-        Ok(probe) => probe,
-        Err(err) => {
-            remove_partial_upload(&video_path, "ffmpeg probe failed").await;
-            return Err(AppError::BadRequest(format!(
-                "failed to probe uploaded video: {err}"
-            )));
-        }
-    };
-
-    let thumb_path = paths::thumbnail_path(&state.config.video_dir, &id);
-    if let Err(err) =
-        ffmpeg::generate_thumbnail(&video_path, &thumb_path, probe.duration_seconds).await
-    {
-        remove_partial_upload(&video_path, "thumbnail generation failed").await;
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "failed to generate thumbnail: {err}"
+    if let Err(err) = probe_result {
+        remove_partial_upload(&video_path, "ffmpeg probe failed").await;
+        return Err(AppError::BadRequest(format!(
+            "failed to probe uploaded video: {err}"
         )));
     }
 
     // SPEC-CLOUD.md §6: the video's persistent home is the private S3
     // bucket, not local disk — pushed here, then the local copy is
-    // deleted; a later read re-fetches it on demand (see
-    // `source_video::ensure_on_disk`). The thumbnail stays local (small,
-    // regenerable from the video if it's ever missing — see
-    // `get_thumbnail`).
+    // deleted; the ingest Lambda downloads its own copy to do the real
+    // probe/thumbnail/filmstrip work, and a later playback read re-fetches
+    // it on demand (see `source_video::ensure_on_disk`).
     // Content type doesn't matter functionally here — nothing serves this
     // object directly to a browser (playback always proxies through
     // `GET /api/videos/{id}/file`, which derives its own content type from
     // the local file) — but the source can be any video container, not
     // just mp4, so a generic type is more honest than guessing wrong.
+    let source_key = paths::video_object_key(&id, &extension);
     if let Err(err) = state
         .source_storage
-        .upload_file(
-            &paths::video_object_key(&id, &extension),
-            &video_path,
-            "application/octet-stream",
-        )
+        .upload_file(&source_key, &video_path, "application/octet-stream")
         .await
     {
         remove_partial_upload(&video_path, "uploading to source video storage failed").await;
-        remove_partial_upload(&thumb_path, "uploading to source video storage failed").await;
         return Err(AppError::Internal(anyhow::anyhow!(
             "failed to upload video to object storage: {err}"
         )));
@@ -146,18 +145,86 @@ pub async fn upload_video(
     let new_video = NewVideo {
         id: id.to_string(),
         original_filename,
-        extension,
+        extension: extension.clone(),
         file_size_bytes: file_size as i64,
-        duration_seconds: probe.duration_seconds,
-        width: probe.width,
-        height: probe.height,
+        duration_seconds: None,
+        width: None,
+        height: None,
         user_id: user.id,
     };
-
     let uploaded_at = Utc::now().to_rfc3339();
-    let video = db::insert_video(&state.pool, &new_video, &uploaded_at).await?;
+    db::insert_video(&state.pool, &new_video, &uploaded_at).await?;
 
-    Ok((StatusCode::CREATED, Json(video)))
+    let job_id = Uuid::new_v4();
+    let now = Utc::now().to_rfc3339();
+    db::insert_ingest_job(&state.pool, &job_id.to_string(), &id.to_string(), &now).await?;
+    let (tx, _rx) = broadcast::channel(16);
+    state.ingest_jobs.lock().unwrap().insert(job_id, tx);
+
+    if let Err(err) = lambda_jobs::invoke_ingest(&state, job_id, id, &source_key, &extension).await {
+        tracing::error!(job_id = %job_id, error = ?err, "failed to invoke ingest lambda");
+    }
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(UploadAccepted {
+            video_id: id.to_string(),
+            job_id: job_id.to_string(),
+        }),
+    ))
+}
+
+/// `GET /api/videos/{job_id}/ingest-progress` — SSE stream of ingest
+/// stage transitions, keyed by `job_id` (returned from `upload_video`'s
+/// 202 response) for symmetry with export's `export_id`-keyed stream.
+/// Falls back to replaying the job's current DB state when there's no
+/// live broadcast-channel entry (backend restarted, or the job already
+/// finished) rather than 404ing, so a reconnecting client always gets a
+/// correct snapshot.
+pub async fn ingest_progress(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+    AxPath(job_id): AxPath<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| AppError::NotFound)?;
+    let job = db::get_ingest_job(&state.pool, &job_id).await?.ok_or(AppError::NotFound)?;
+    // Doubles as the ownership check (SPEC-CLOUD.md §3) — `ingest_jobs`
+    // has no owner column of its own, but every job belongs to exactly
+    // one video, which does.
+    let video = db::get_video(&state.pool, &job.video_id, &user.id).await?.ok_or(AppError::NotFound)?;
+
+    let terminal = matches!(job.stage.as_str(), "complete" | "failed" | "timed_out");
+    let initial = match job.stage.as_str() {
+        "complete" => vec![IngestEvent::Complete { video: Box::new(video) }],
+        "failed" | "timed_out" => vec![IngestEvent::Failed {
+            message: job.error.unwrap_or_else(|| "ingest failed".to_string()),
+        }],
+        stage => vec![IngestEvent::Stage { stage: stage.to_string() }],
+    };
+    let initial_stream = futures_util::stream::iter(initial.into_iter().map(|e| Ok(to_ingest_sse_event(&e))));
+
+    if terminal {
+        return Ok(Sse::new(initial_stream.boxed()).keep_alive(KeepAlive::default()));
+    }
+
+    let rx = {
+        let mut jobs = state.ingest_jobs.lock().unwrap();
+        jobs.entry(uuid).or_insert_with(|| broadcast::channel(16).0).subscribe()
+    };
+    let live_stream = BroadcastStream::new(rx).filter_map(|msg| async move { msg.ok().map(|event| Ok(to_ingest_sse_event(&event))) });
+    Ok(Sse::new(initial_stream.chain(live_stream).boxed()).keep_alive(KeepAlive::default()))
+}
+
+fn to_ingest_sse_event(event: &IngestEvent) -> Event {
+    match event {
+        IngestEvent::Stage { stage } => Event::default().event("stage").data(serde_json::json!({ "stage": stage }).to_string()),
+        IngestEvent::Complete { video } => Event::default()
+            .event("complete")
+            .data(serde_json::to_string(video).unwrap_or_default()),
+        IngestEvent::Failed { message } => Event::default()
+            .event("error")
+            .data(serde_json::json!({ "message": message }).to_string()),
+    }
 }
 
 pub async fn list_videos(
@@ -177,26 +244,25 @@ pub async fn get_video(
     Ok(Json(video))
 }
 
-/// Generate-if-missing, same pattern `get_filmstrip_image` already uses
-/// for its sprite — the thumbnail is cheap to regenerate from the source
-/// video and was never itself pushed to S3, so it isn't guaranteed to
-/// survive an instance replacement the way the video it's derived from is
-/// (SPEC-CLOUD.md §6).
+/// Fetch-from-S3-or-404, cached locally once fetched. The ingest Lambda
+/// (wayfinder gifiac#32) is what generates this now, writing it to
+/// `paths::video_thumbnail_object_key` — the backend has no disk shared
+/// with it and can no longer regenerate on a local-cache miss the way it
+/// could when thumbnailing ran inline in `upload_video`.
 pub async fn get_thumbnail(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let (uuid, video) = load_video(&state, &id, &user.id).await?;
+    let (uuid, _video) = load_video(&state, &id, &user.id).await?;
 
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
     if !tokio::fs::try_exists(&thumb_path).await.unwrap_or(false) {
-        let video_path = source_video::ensure_on_disk(&state, &uuid, &video.extension)
+        state
+            .source_storage
+            .download_file(&paths::video_thumbnail_object_key(&uuid), &thumb_path)
             .await
-            .map_err(AppError::Internal)?;
-        ffmpeg::generate_thumbnail(&video_path, &thumb_path, video.duration_seconds)
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to regenerate thumbnail: {e}")))?;
+            .map_err(|_| AppError::NotFound)?;
     }
 
     let bytes = tokio::fs::read(&thumb_path)
@@ -236,7 +302,14 @@ pub async fn get_filmstrip_meta(
     AxPath(id): AxPath<String>,
 ) -> Result<Json<FilmstripMeta>, AppError> {
     let (_, video) = load_video(&state, &id, &user.id).await?;
-    let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
+    // `None` means ingest hasn't backfilled these yet — there's no
+    // filmstrip to describe before that, same as a video whose filmstrip
+    // image genuinely isn't ready.
+    let (duration, width, height) = match (video.duration_seconds, video.width, video.height) {
+        (Some(d), Some(w), Some(h)) => (d, w, h),
+        _ => return Err(AppError::NotFound),
+    };
+    let layout = compute_filmstrip_layout(duration, width, height);
 
     Ok(Json(FilmstripMeta {
         frame_count: layout.frame_count,
@@ -281,6 +354,14 @@ pub(crate) async fn delete_video_and_its_assets(state: &AppState, id: &str, owne
     {
         tracing::warn!(id = %uuid, error = %err, "failed to remove object storage copy of deleted video");
     }
+    for key in [
+        paths::video_thumbnail_object_key(&uuid),
+        paths::video_filmstrip_object_key(&uuid),
+    ] {
+        if let Err(err) = state.source_storage.delete_object(&key).await {
+            tracing::warn!(id = %uuid, %key, error = %err, "failed to remove object storage copy of deleted video's asset");
+        }
+    }
 
     let video_path = paths::video_path(&state.config.video_dir, &uuid, &video.extension);
     let thumb_path = paths::thumbnail_path(&state.config.video_dir, &uuid);
@@ -296,35 +377,24 @@ pub(crate) async fn delete_video_and_its_assets(state: &AppState, id: &str, owne
     Ok(())
 }
 
+/// Fetch-from-S3-or-404, cached locally once fetched — see
+/// `get_thumbnail`'s matching doc comment; the lazy on-demand generation
+/// this used to do is gone along with the local ffmpeg call it depended
+/// on (wayfinder gifiac#32).
 pub async fn get_filmstrip_image(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     AxPath(id): AxPath<String>,
 ) -> Result<Response, AppError> {
-    let (uuid, video) = load_video(&state, &id, &user.id).await?;
+    let (uuid, _video) = load_video(&state, &id, &user.id).await?;
 
     let sprite_path = paths::filmstrip_sprite_path(&state.config.video_dir, &uuid);
-    let sprite_exists = match tokio::fs::try_exists(&sprite_path).await {
-        Ok(exists) => exists,
-        Err(err) => {
-            tracing::warn!(
-                path = %sprite_path.display(),
-                error = %err,
-                "failed to check filmstrip cache, regenerating"
-            );
-            false
-        }
-    };
-    if !sprite_exists {
-        let video_path = source_video::ensure_on_disk(&state, &uuid, &video.extension)
+    if !tokio::fs::try_exists(&sprite_path).await.unwrap_or(false) {
+        state
+            .source_storage
+            .download_file(&paths::video_filmstrip_object_key(&uuid), &sprite_path)
             .await
-            .map_err(AppError::Internal)?;
-        let layout = compute_filmstrip_layout(video.duration_seconds, video.width, video.height);
-        ffmpeg::generate_filmstrip_sprite(&video_path, &sprite_path, &layout)
-            .await
-            .map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("failed to generate filmstrip: {e}"))
-            })?;
+            .map_err(|_| AppError::NotFound)?;
     }
 
     let bytes = tokio::fs::read(&sprite_path).await?;

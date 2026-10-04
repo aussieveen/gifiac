@@ -9,6 +9,8 @@ use crate::auth::GoogleAuthConfig;
 use crate::config::Config;
 use crate::email_auth::EmailAuthConfig;
 use crate::exports::ExportEvent;
+use crate::ingest::IngestEvent;
+use crate::lambda_jobs::LambdaConfig;
 use crate::mailer::Mailer;
 use crate::storage::Storage;
 
@@ -37,9 +39,14 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// In-flight export jobs, keyed by export id, so `GET
     /// /api/exports/{id}/progress` can subscribe to a job's broadcast
-    /// channel. Entries are removed once the job finishes (success or
-    /// failure) — a client connecting after that point gets a 404, which
-    /// is an accepted limitation for a single-user LAN tool where the
-    /// frontend opens the SSE connection immediately after the `202`.
+    /// channel. Entries are removed once the job reaches a terminal state
+    /// (success, failure, or the stuck-job sweep's `timed_out`, gifiac#43)
+    /// — a client connecting after that point (or who never had a live
+    /// entry at all, e.g. after a backend restart) gets the job's current
+    /// state replayed from `export_jobs` the DB table instead of a 404.
     pub export_jobs: Mutex<HashMap<Uuid, broadcast::Sender<ExportEvent>>>,
+    /// Same shape as `export_jobs`, for ingest's 3-stage SSE stream.
+    pub ingest_jobs: Mutex<HashMap<Uuid, broadcast::Sender<IngestEvent>>>,
+    pub lambda_client: aws_sdk_lambda::Client,
+    pub lambda_config: LambdaConfig,
 }

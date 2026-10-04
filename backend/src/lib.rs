@@ -8,6 +8,8 @@ pub mod exports;
 pub mod ffmpeg;
 pub mod filmstrip_layout;
 pub mod handle;
+pub mod ingest;
+pub mod lambda_jobs;
 pub mod link_check;
 pub mod mailer;
 pub mod models;
@@ -26,8 +28,10 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 use config::Config;
+use models::ExportFormat;
 use state::AppState;
 
 /// Where the built frontend (`frontend/dist`, per SPEC.md §1: "built to
@@ -85,10 +89,17 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         tracing::warn!("TURNSTILE_SECRET_KEY not set — Turnstile verification is disabled");
     }
 
-    spawn_login_code_cleanup(pool.clone());
-    spawn_job_sweep(pool.clone());
+    // Lambda has no bearing on IMDS-vs-explicit-credentials the way R2 vs
+    // the source bucket does — the Lambda functions are AWS-native, so
+    // the SDK's default chain (the EC2 instance role via IMDS) is always
+    // the right one, same reasoning as `Storage::new_for_source_bucket`.
+    let lambda_sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest()).load().await;
+    let lambda_client = aws_sdk_lambda::Client::new(&lambda_sdk_config);
+    let lambda_config = lambda_jobs::LambdaConfig::from_env()?;
 
-    Ok(Arc::new(AppState {
+    spawn_login_code_cleanup(pool.clone());
+
+    let state = Arc::new(AppState {
         pool,
         config,
         storage,
@@ -99,7 +110,13 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
         email_auth,
         mailer,
         export_jobs: Default::default(),
-    }))
+        ingest_jobs: Default::default(),
+        lambda_client,
+        lambda_config,
+    });
+    spawn_job_sweep(state.clone());
+
+    Ok(state)
 }
 
 /// SPEC-EMAIL-AUTH.md §8: hourly in-process cleanup of expired
@@ -132,12 +149,11 @@ fn spawn_login_code_cleanup(pool: sqlx::PgPool) {
 /// loops. The grace windows are each job type's Lambda timeout (ingest
 /// 90s, export 5min, per gifiac#34) plus a fixed buffer.
 ///
-/// This piece (DB migration/queries only) has no `AppState`/broadcast
-/// access yet, so a row marked `timed_out` here doesn't yet push an SSE
-/// event to a live subscriber — piece 3 (backend wiring) extends this
-/// function to take the full `AppState` and do that, once the ingest/
-/// export broadcast-channel maps exist.
-fn spawn_job_sweep(pool: sqlx::PgPool) {
+/// Also pushes a `Failed`-shaped event to any live SSE subscriber and
+/// removes the in-memory broadcast-channel entry for each job it marks
+/// `timed_out` — the SSE-push half of the design that piece 1 (DB
+/// migration/queries only, no `AppState` yet) couldn't implement.
+fn spawn_job_sweep(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(20));
         loop {
@@ -146,12 +162,22 @@ fn spawn_job_sweep(pool: sqlx::PgPool) {
             let ingest_cutoff = (now - chrono::Duration::seconds(120)).to_rfc3339();
             let export_cutoff = (now - chrono::Duration::seconds(360)).to_rfc3339();
 
-            match db::find_stale_ingest_jobs(&pool, &ingest_cutoff).await {
+            match db::find_stale_ingest_jobs(&state.pool, &ingest_cutoff).await {
                 Ok(jobs) if !jobs.is_empty() => {
                     for job in &jobs {
                         let now = chrono::Utc::now().to_rfc3339();
-                        if let Err(err) = db::mark_ingest_job_timed_out(&pool, &job.id, &now).await {
-                            tracing::error!(job_id = %job.id, error = ?err, "failed to mark ingest job timed out");
+                        match db::mark_ingest_job_timed_out(&state.pool, &job.id, &now).await {
+                            Ok(true) => {
+                                if let Ok(uuid) = Uuid::parse_str(&job.id)
+                                    && let Some(tx) = state.ingest_jobs.lock().unwrap().remove(&uuid)
+                                {
+                                    let _ = tx.send(ingest::IngestEvent::Failed {
+                                        message: "timed out waiting for Lambda".to_string(),
+                                    });
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(err) => tracing::error!(job_id = %job.id, error = ?err, "failed to mark ingest job timed out"),
                         }
                     }
                     tracing::info!(count = jobs.len(), "marked stale ingest jobs as timed_out");
@@ -160,12 +186,55 @@ fn spawn_job_sweep(pool: sqlx::PgPool) {
                 Err(err) => tracing::error!(error = ?err, "failed to sweep for stale ingest jobs"),
             }
 
-            match db::find_stale_export_jobs(&pool, &export_cutoff).await {
+            match db::find_stale_export_jobs(&state.pool, &export_cutoff).await {
                 Ok(jobs) if !jobs.is_empty() => {
                     for job in &jobs {
                         let now = chrono::Utc::now().to_rfc3339();
-                        if let Err(err) = db::mark_export_job_timed_out(&pool, &job.id, &now).await {
-                            tracing::error!(job_id = %job.id, error = ?err, "failed to mark export job timed out");
+                        // Only the formats that were non-terminal when
+                        // `find_stale_export_jobs` selected this row get
+                        // flipped to `timed_out` — re-check status
+                        // against the pre-sweep row to know which, rather
+                        // than assuming all 3.
+                        let was_non_terminal = |status: &str| !matches!(status, "done" | "failed" | "timed_out");
+                        let newly_timed_out: Vec<ExportFormat> = [
+                            (ExportFormat::Gif, job.gif_status.as_str()),
+                            (ExportFormat::Mp4, job.mp4_status.as_str()),
+                            (ExportFormat::Webm, job.webm_status.as_str()),
+                        ]
+                        .into_iter()
+                        .filter(|(_, status)| was_non_terminal(status))
+                        .map(|(format, _)| format)
+                        .collect();
+
+                        match db::mark_export_job_timed_out(&state.pool, &job.id, &now).await {
+                            Ok(true) => {
+                                let Ok(uuid) = Uuid::parse_str(&job.id) else { continue };
+                                let tx = state.export_jobs.lock().unwrap().get(&uuid).cloned();
+                                if let Some(tx) = &tx {
+                                    for format in &newly_timed_out {
+                                        let _ = tx.send(exports::ExportEvent::FormatFailed {
+                                            format: *format,
+                                            message: "timed out waiting for Lambda".to_string(),
+                                        });
+                                    }
+                                }
+                                if let Ok(Some(updated)) = db::get_export_job(&state.pool, &job.id).await
+                                    && exports::export_job_is_terminal(&updated)
+                                {
+                                    if exports::export_job_failed(&updated) {
+                                        if let Some(tx) = &tx {
+                                            let _ = tx.send(exports::ExportEvent::Failed {
+                                                message: "export timed out".to_string(),
+                                            });
+                                        }
+                                        state.export_jobs.lock().unwrap().remove(&uuid);
+                                    } else if let Err(err) = exports::finalize_export_job(&state, &updated).await {
+                                        tracing::error!(job_id = %job.id, error = ?err, "failed to finalize export job after sweep");
+                                    }
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(err) => tracing::error!(job_id = %job.id, error = ?err, "failed to mark export job timed out"),
                         }
                     }
                     tracing::info!(count = jobs.len(), "marked stale export jobs as timed_out");
