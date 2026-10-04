@@ -60,9 +60,18 @@ jobs:
         run: |
           registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
           image="$registry/$ECR_REPOSITORY:latest"
+          # --provenance=false --sbom=false: buildx (since 0.10) attaches
+          # build provenance/SBOM attestations by default, which turns
+          # the pushed image into a multi-manifest OCI index instead of a
+          # plain single-image manifest — Lambda's container-image
+          # support rejects that outright ("the image manifest, config or
+          # layer media type ... is not supported"), confirmed directly
+          # against a real CreateFunction call.
           docker buildx build \
             --target ${{ matrix.target }} \
             --platform linux/arm64 \
+            --provenance=false \
+            --sbom=false \
             -f Dockerfile.lambda \
             -t "$image" \
             --push \
