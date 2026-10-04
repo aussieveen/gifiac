@@ -7,9 +7,11 @@ import {
   listOtherTemplates,
   renameTemplate,
   setTemplatePublic,
+  subscribeIngestProgress,
   templateThumbnailUrl,
   uploadVideo,
 } from './api'
+import { IngestLoadingModal, type IngestStage } from './IngestLoadingModal'
 import { PencilIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import type { TemplateDetail, TemplateSummary, Video } from './types'
 
@@ -64,7 +66,13 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
 
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [ingestStage, setIngestStage] = useState<IngestStage>('done')
   const [dragActive, setDragActive] = useState(false)
+  const ingestUnsubscribeRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return () => ingestUnsubscribeRef.current?.()
+  }, [])
 
   const mine: DisplayTemplate[] = myTemplates.map((t) => ({ ...t, isOwn: true }))
   const shared: DisplayTemplate[] = otherTemplates.map((t) => ({ ...t, isOwn: false }))
@@ -166,14 +174,31 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     if (!file) return
     setUploading(true)
     setUploadError(null)
+    setIngestStage('uploading')
     try {
-      const video = await uploadVideo(file)
-      onUploaded(video)
+      const { job_id } = await uploadVideo(file)
+      ingestUnsubscribeRef.current = subscribeIngestProgress(job_id, {
+        onStage: (stage) => setIngestStage(stage),
+        onComplete: (video) => {
+          setIngestStage('done')
+          setUploading(false)
+          onUploaded(video)
+        },
+        onError: (message) => {
+          setIngestStage('error')
+          setUploadError(message)
+          setUploading(false)
+        },
+      })
     } catch (err) {
+      setIngestStage('done')
       setUploadError(err instanceof Error ? err.message : String(err))
-    } finally {
       setUploading(false)
     }
+  }
+
+  function dismissIngestError() {
+    setIngestStage('done')
   }
 
   function startRename() {
@@ -268,7 +293,8 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
 
       {loading && <p className="va-hint">Loading templates…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
-      {uploadError && <p className="export-error">{uploadError}</p>}
+      {uploadError && ingestStage === 'done' && <p className="export-error">{uploadError}</p>}
+      <IngestLoadingModal stage={ingestStage} errorMessage={uploadError ?? undefined} onDismissError={dismissIngestError} />
 
       <div className="newgif-layout">
         <div className="newgif-grid">

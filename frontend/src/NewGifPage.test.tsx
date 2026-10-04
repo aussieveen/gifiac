@@ -19,6 +19,7 @@ vi.mock('./api', () => ({
   listOtherTemplates: vi.fn(),
   renameTemplate: vi.fn(),
   setTemplatePublic: vi.fn(),
+  subscribeIngestProgress: vi.fn(),
   templateThumbnailUrl: (id: string) => `/api/templates/${id}/thumbnail`,
   uploadVideo: vi.fn(),
 }))
@@ -30,6 +31,7 @@ import {
   listOtherTemplates,
   renameTemplate,
   setTemplatePublic,
+  subscribeIngestProgress,
   uploadVideo,
 } from './api'
 
@@ -120,6 +122,8 @@ beforeEach(() => {
   vi.mocked(setTemplatePublic).mockReset()
   vi.mocked(deleteTemplateById).mockReset().mockResolvedValue(undefined)
   vi.mocked(uploadVideo).mockReset()
+  vi.mocked(subscribeIngestProgress).mockReset()
+  vi.mocked(subscribeIngestProgress).mockReturnValue(() => {})
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
@@ -352,7 +356,7 @@ describe('NewGifPage', () => {
     expect(screen.queryByRole('heading', { name: 'One-line change' })).not.toBeInTheDocument()
   })
 
-  it('uploading a video calls onUploaded with the created video', async () => {
+  it('uploads a video, drives its ingest job to completion, and calls onUploaded with the finished video', async () => {
     const video: Video = {
       id: 'v1',
       original_filename: 'clip.mp4',
@@ -363,7 +367,11 @@ describe('NewGifPage', () => {
       height: 1080,
       uploaded_at: '2026-01-01T00:00:00Z',
     }
-    vi.mocked(uploadVideo).mockResolvedValue(video)
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: 'v1', job_id: 'job1' })
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId, handlers) => {
+      handlers.onComplete?.(video)
+      return () => {}
+    })
     const onUploaded = vi.fn()
     const user = userEvent.setup()
     renderPage({ onUploaded })
@@ -372,6 +380,45 @@ describe('NewGifPage', () => {
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
 
+    expect(subscribeIngestProgress).toHaveBeenCalledWith('job1', expect.anything())
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith(video))
+  })
+
+  it('shows the ingest loading modal while the upload is in progress, with live stage updates', async () => {
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: 'v1', job_id: 'job1' })
+    let onStage: ((stage: 'uploading' | 'analyzing' | 'building_filmstrip') => void) | undefined
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId, handlers) => {
+      onStage = handlers.onStage
+      return () => {}
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('button', { name: /one-line change/i })
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
+
+    expect(screen.getByRole('dialog', { name: /uploading video/i })).toBeInTheDocument()
+    onStage?.('analyzing')
+    expect(screen.getByText('Analyzing…')).toBeInTheDocument()
+  })
+
+  it('shows an error and lets you dismiss it if the ingest job fails', async () => {
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: 'v1', job_id: 'job1' })
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId, handlers) => {
+      handlers.onError?.('ffmpeg exploded')
+      return () => {}
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('button', { name: /one-line change/i })
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
+
+    expect(await screen.findByRole('dialog', { name: /upload failed/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(screen.queryByRole('dialog', { name: /upload failed/i })).not.toBeInTheDocument()
+    expect(screen.getByText('ffmpeg exploded')).toBeInTheDocument()
   })
 })

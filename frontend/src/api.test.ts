@@ -13,6 +13,7 @@ import {
   putTemplate,
   renameGif,
   subscribeExportProgress,
+  subscribeIngestProgress,
   thumbnailUrl,
   uploadVideo,
   videoFileUrl,
@@ -351,26 +352,47 @@ describe('subscribeExportProgress', () => {
     expect(FakeEventSource.instances[0].url).toBe('/api/exports/exp1/progress')
   })
 
-  it('reports each stage event with its stage name and percent', () => {
+  it('reports a progress event with its format and percent', () => {
     const onProgress = vi.fn()
     subscribeExportProgress('exp1', { onProgress })
     const source = FakeEventSource.instances[0]
 
-    source.emit('encoding_gif', JSON.stringify({ percent: 42 }))
+    source.emit('progress', JSON.stringify({ format: 'gif', percent: 42 }))
 
-    expect(onProgress).toHaveBeenCalledWith('encoding_gif', 42)
+    expect(onProgress).toHaveBeenCalledWith('gif', 42)
   })
 
-  it('reports every documented pipeline stage', () => {
+  it('reports progress independently for all three formats', () => {
     const onProgress = vi.fn()
     subscribeExportProgress('exp1', { onProgress })
     const source = FakeEventSource.instances[0]
 
-    for (const stage of ['palette_gen', 'encoding_gif', 'encoding_mp4', 'encoding_webm', 'uploading']) {
-      source.emit(stage, JSON.stringify({ percent: 10 }))
+    for (const format of ['gif', 'mp4', 'webm']) {
+      source.emit('progress', JSON.stringify({ format, percent: 10 }))
     }
 
-    expect(onProgress).toHaveBeenCalledTimes(5)
+    expect(onProgress).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports a format finishing', () => {
+    const onFormatDone = vi.fn()
+    subscribeExportProgress('exp1', { onFormatDone })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('format_done', JSON.stringify({ format: 'mp4' }))
+
+    expect(onFormatDone).toHaveBeenCalledWith('mp4')
+  })
+
+  it('reports a format failing, without closing the connection', () => {
+    const onFormatFailed = vi.fn()
+    subscribeExportProgress('exp1', { onFormatFailed })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('format_failed', JSON.stringify({ format: 'webm', message: 'encode failed' }))
+
+    expect(onFormatFailed).toHaveBeenCalledWith('webm', 'encode failed')
+    expect(source.closed).toBe(false)
   })
 
   it('reports the completed gif and closes the connection', () => {
@@ -409,6 +431,73 @@ describe('subscribeExportProgress', () => {
 
   it('returns an unsubscribe function that closes the connection', () => {
     const unsubscribe = subscribeExportProgress('exp1', {})
+    const source = FakeEventSource.instances[0]
+
+    unsubscribe()
+
+    expect(source.closed).toBe(true)
+  })
+})
+
+describe('subscribeIngestProgress', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  it('opens a connection to the ingest job\'s progress endpoint', () => {
+    subscribeIngestProgress('job1', {})
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+    expect(FakeEventSource.instances[0].url).toBe('/api/videos/job1/ingest-progress')
+  })
+
+  it('reports a stage event', () => {
+    const onStage = vi.fn()
+    subscribeIngestProgress('job1', { onStage })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('stage', JSON.stringify({ stage: 'analyzing' }))
+
+    expect(onStage).toHaveBeenCalledWith('analyzing')
+  })
+
+  it('reports the completed video and closes the connection', () => {
+    const onComplete = vi.fn()
+    subscribeIngestProgress('job1', { onComplete })
+    const source = FakeEventSource.instances[0]
+    const video = { id: 'v1', width: 320, height: 240 }
+
+    source.emit('complete', JSON.stringify(video))
+
+    expect(onComplete).toHaveBeenCalledWith(video)
+    expect(source.closed).toBe(true)
+  })
+
+  it('reports an ingest failure and closes the connection', () => {
+    const onError = vi.fn()
+    subscribeIngestProgress('job1', { onError })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('error', JSON.stringify({ message: 'probe failed' }))
+
+    expect(onError).toHaveBeenCalledWith('probe failed')
+    expect(source.closed).toBe(true)
+  })
+
+  it('ignores a native connection-drop error event (no JSON data)', () => {
+    const onError = vi.fn()
+    subscribeIngestProgress('job1', { onError })
+    const source = FakeEventSource.instances[0]
+
+    source.emit('error', undefined)
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(source.closed).toBe(false)
+  })
+
+  it('returns an unsubscribe function that closes the connection', () => {
+    const unsubscribe = subscribeIngestProgress('job1', {})
     const source = FakeEventSource.instances[0]
 
     unsubscribe()

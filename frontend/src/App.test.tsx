@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
   logout: vi.fn(),
   listVideos: vi.fn(),
   uploadVideo: vi.fn(),
+  subscribeIngestProgress: vi.fn(),
   deleteVideo: vi.fn(),
   thumbnailUrl: (id: string) => `/api/videos/${id}/thumbnail`,
   videoFileUrl: (id: string) => `/api/videos/${id}/file`,
@@ -74,10 +75,11 @@ import {
   setHandle,
   startEmailLogin,
   subscribeExportProgress,
+  subscribeIngestProgress,
   uploadVideo,
   verifyEmailCode,
 } from './api'
-import type { ExportProgressHandlers } from './api'
+import type { ExportProgressHandlers, IngestProgressHandlers } from './api'
 import type { CurrentUser } from './types'
 
 const loggedInUser: CurrentUser = {
@@ -139,6 +141,7 @@ function renderAppAt(path: string) {
 
 beforeEach(() => {
   vi.mocked(uploadVideo).mockReset()
+  vi.mocked(subscribeIngestProgress).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(getVideo).mockReset()
   vi.mocked(listGifs).mockReset().mockResolvedValue([])
@@ -374,7 +377,11 @@ describe('App', () => {
 
   it('uploading a video loads its film-strip and opens the editor', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(uploadVideo).mockResolvedValue(video)
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
+      handlers.onComplete?.(video)
+      return () => {}
+    })
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     const user = userEvent.setup()
@@ -397,7 +404,11 @@ describe('App', () => {
 
   it('shows an error and lets you go back if the film-strip fails to load', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(uploadVideo).mockResolvedValue(video)
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
+      handlers.onComplete?.(video)
+      return () => {}
+    })
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockRejectedValue(new Error('/api/videos/v1/filmstrip failed (500): boom'))
     const user = userEvent.setup()
@@ -417,8 +428,14 @@ describe('App', () => {
   it("never renders one upload against a second upload's stale film-strip", async () => {
     vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(uploadVideo).mockImplementation((file: File) =>
-      Promise.resolve(file.name === 'clip.mp4' ? video : otherVideo),
+      Promise.resolve(
+        file.name === 'clip.mp4' ? { video_id: video.id, job_id: 'job1' } : { video_id: otherVideo.id, job_id: 'job2' },
+      ),
     )
+    vi.mocked(subscribeIngestProgress).mockImplementation((jobId: string, handlers: IngestProgressHandlers) => {
+      handlers.onComplete?.(jobId === 'job1' ? video : otherVideo)
+      return () => {}
+    })
     vi.mocked(getVideo).mockImplementation((id: string) =>
       Promise.resolve(id === video.id ? video : otherVideo),
     )
@@ -507,7 +524,11 @@ describe('App', () => {
 
   it('making a GIF switches to the archive with it already selected', async () => {
     vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(uploadVideo).mockResolvedValue(video)
+    vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
+    vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
+      handlers.onComplete?.(video)
+      return () => {}
+    })
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
     vi.mocked(createExport).mockResolvedValue({ export_id: 'exp-1' })
