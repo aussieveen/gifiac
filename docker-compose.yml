@@ -39,7 +39,7 @@ services:
         awslogs-region: "${AWS_REGION}"
         awslogs-group: /gifiac/caddy
         awslogs-create-group: "false"
-        awslogs-stream-prefix: caddy
+        awslogs-stream: caddy
 
   gifiac:
     # Built and published by .github/workflows/docker-publish.yml on every push to main.
@@ -59,7 +59,7 @@ services:
         awslogs-region: "${AWS_REGION}"
         awslogs-group: /gifiac/app
         awslogs-create-group: "false"
-        awslogs-stream-prefix: gifiac
+        awslogs-stream: gifiac
     environment:
       # Without this, tracing_subscriber's default filter is ERROR-only
       # (EnvFilter::from_default_env()'s default directive) — every
