@@ -66,8 +66,8 @@ resource "aws_instance" "app" {
     ses_region                  = var.aws_region
     turnstile_site_key          = var.turnstile_site_key
     trust_cf_connecting_ip      = var.trust_cf_connecting_ip
-    ingest_lambda_function_name = aws_lambda_function.ingest.function_name
-    export_lambda_function_name = aws_lambda_function.export.function_name
+    ingest_lambda_function_name = local.ingest_function_name
+    export_lambda_function_name = local.export_function_name
     callback_base_url           = "https://${var.domain_name}"
   })
 
