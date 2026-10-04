@@ -76,3 +76,12 @@ services:
       TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
       TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
       TRUST_CF_CONNECTING_IP: "${TRUST_CF_CONNECTING_IP}"
+      # Lambda ingest/export migration (wayfinder gifiac#32) — explicit
+      # per-key mapping is this file's existing convention (no `env_file:`
+      # for this service), so a new required env var on the Rust side
+      # must be added here too, or it's invisible to the container even
+      # though it's sitting right there in .env.
+      INGEST_LAMBDA_FUNCTION_NAME: "${INGEST_LAMBDA_FUNCTION_NAME}"
+      EXPORT_LAMBDA_FUNCTION_NAME: "${EXPORT_LAMBDA_FUNCTION_NAME}"
+      CALLBACK_BASE_URL: "${CALLBACK_BASE_URL}"
+      LAMBDA_CALLBACK_TOKEN: "${LAMBDA_CALLBACK_TOKEN}"

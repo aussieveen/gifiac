@@ -126,6 +126,18 @@ resource "terraform_data" "push_config_env" {
   triggers_replace = [local.config_env]
 
   provisioner "local-exec" {
+    # The AWS *provider*'s `profile`/`region` config (versions.tf) has no
+    # effect here — `local-exec` just shells out to the system `aws` CLI,
+    # which otherwise falls back to its own "default" profile regardless
+    # of what Terraform itself is authenticated as. Confirmed the hard
+    # way: a real run failed with the CLI trying (and failing) to use a
+    # "default" SSO profile that isn't this account's `personal` profile
+    # at all. `AWS_PROFILE` is only set when `var.aws_profile` is
+    # actually non-null — an empty/absent env var correctly falls
+    # through to the CLI's own default chain, matching how the provider
+    # block treats the same variable.
+    environment = var.aws_profile != null ? { AWS_PROFILE = var.aws_profile } : {}
+
     # `base64encode()` runs in Terraform, not the shell — the rendered
     # config can contain characters (EMAIL_FROM_ADDRESS's "Name <addr>"
     # form has `<`/`>`, among others) that would be unsafe to interpolate
@@ -134,6 +146,7 @@ resource "terraform_data" "push_config_env" {
     # docker-publish.yml's deploy job already uses for the same reason.
     command = <<-EOT
       set -euo pipefail
+      export AWS_DEFAULT_REGION="${var.aws_region}"
       config_b64="${base64encode(local.config_env)}"
       params="$(jq -n --arg config_b64 "$config_b64" '{commands: [
         "echo " + $config_b64 + " | base64 -d > /opt/gifiac/config.env",
