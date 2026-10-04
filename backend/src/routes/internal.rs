@@ -155,17 +155,16 @@ pub async fn export_callback(
     }
 
     let job = db::get_export_job(&state.pool, &body.job_id).await?.ok_or(AppError::NotFound)?;
-    if exports::export_job_is_terminal(&job) {
-        if exports::export_job_failed(&job) {
-            if let Some(tx) = &tx {
-                let _ = tx.send(ExportEvent::Failed {
-                    message: job.gif_error.clone().unwrap_or_else(|| "export failed".to_string()),
-                });
-            }
-            state.export_jobs.lock().unwrap().remove(&job_uuid);
-        } else if let Err(err) = exports::finalize_export_job(&state, &job).await {
-            tracing::error!(job_id = %body.job_id, error = ?err, "failed to finalize export job");
-        }
+
+    if format == ExportFormat::Gif && exports::is_terminal_status(&job.gif_status) {
+        exports::handle_gif_terminal(&state, &job, job_uuid).await;
+    }
+
+    if exports::export_job_is_terminal(&job)
+        && !exports::export_job_failed(&job)
+        && let Err(err) = exports::cleanup_after_all_formats(&state, &job).await
+    {
+        tracing::error!(job_id = %body.job_id, error = ?err, "failed to clean up export job after all formats finished");
     }
 
     Ok(StatusCode::OK)

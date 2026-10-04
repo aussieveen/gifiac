@@ -11,7 +11,10 @@ export type FormatState = { status: 'pending' | 'running' | 'done' | 'error'; pe
 export type ExportProgressState = Record<ExportFormat, FormatState>
 
 const FORMAT_LABEL: Record<ExportFormat, string> = { gif: 'GIF', mp4: 'MP4', webm: 'WebM' }
-const FORMATS: ExportFormat[] = ['gif', 'mp4', 'webm']
+// mp4/webm are still encoded and tracked (see ExportProgressState below) —
+// just not shown yet, since gif is the only format people can share today
+// (gifiac#36). Add them back here once that changes.
+const VISIBLE_FORMATS: ExportFormat[] = ['gif']
 
 function RotatingIcon() {
   return <span className="export-modal-spinner" aria-hidden="true" />
@@ -48,7 +51,7 @@ export function ExportProgressModal({ progress, allDone }: { progress: ExportPro
       <div className="export-modal">
         <h2 className="export-modal-title">Making your GIF</h2>
         <ul className="export-modal-rows">
-          {FORMATS.map((f) => (
+          {VISIBLE_FORMATS.map((f) => (
             <FormatRow key={f} format={f} state={progress[f]} />
           ))}
         </ul>

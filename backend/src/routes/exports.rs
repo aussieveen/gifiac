@@ -180,21 +180,23 @@ pub async fn export_progress(
     let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
     let job = db::get_export_job(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
 
-    if exports::export_job_is_terminal(&job) {
+    if exports::is_terminal_status(&job.gif_status) {
         let event = if exports::export_job_failed(&job) {
-            ExportEvent::Failed {
+            Some(ExportEvent::Failed {
                 message: job.gif_error.unwrap_or_else(|| "export failed".to_string()),
-            }
+            })
         } else {
-            // A terminal, non-failed job always has a `gifs` row by the
-            // time `finalize_export_job` removed its live channel — look
-            // it up fresh rather than keeping a second copy of "the last
-            // known Gif" anywhere.
-            let gif = db::get_gif_unscoped(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
-            ExportEvent::Complete { gif: Box::new(gif) }
+            // gif succeeded and is terminal, so its `gifs` row should
+            // already exist from `handle_gif_terminal` — but if a client
+            // reconnects in the brief window between gif's status write
+            // and that row's insert, fall through and subscribe live
+            // instead of 404ing; `Complete` will arrive momentarily.
+            db::get_gif_unscoped(&state.pool, &id).await?.map(|gif| ExportEvent::Complete { gif: Box::new(gif) })
         };
-        let stream = futures_util::stream::once(async move { Ok(to_sse_event(&event)) });
-        return Ok(Sse::new(stream.boxed()).keep_alive(KeepAlive::default()));
+        if let Some(event) = event {
+            let stream = futures_util::stream::once(async move { Ok(to_sse_event(&event)) });
+            return Ok(Sse::new(stream.boxed()).keep_alive(KeepAlive::default()));
+        }
     }
 
     let rx = {

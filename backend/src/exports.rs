@@ -4,10 +4,13 @@
 //! left on the backend — the SSE event shape relayed from the Lambda's
 //! callbacks (`routes::internal::export_callback`), the terminal-state
 //! rules those callbacks and the stuck-job sweep both need, and
-//! `finalize_export_job`, which does what the old in-process pipeline
-//! used to do after its ffmpeg calls returned: build the `gifs` row,
-//! handle the "save as template" checkbox, and clean up the source
-//! video.
+//! `finalize_gif` and `cleanup_after_all_formats`, which split what the
+//! old in-process pipeline used to do in one step after its ffmpeg calls
+//! returned: building the `gifs` row and handling the "save as template"
+//! checkbox happen as soon as gif alone is done (gif is the only
+//! shareable output today, gifiac#36), while cleaning up the source video
+//! still waits for mp4/webm too, since the export Lambda needs it present
+//! until then.
 //!
 //! `transcode_and_upload` is the one piece of the pre-Lambda pipeline
 //! that's *not* going away — bulk import (SPEC.md §7,
@@ -37,7 +40,7 @@ pub enum ExportEvent {
     Failed { message: String },
 }
 
-fn is_terminal_status(status: &str) -> bool {
+pub(crate) fn is_terminal_status(status: &str) -> bool {
     matches!(status, "done" | "failed" | "timed_out")
 }
 
@@ -50,19 +53,25 @@ pub fn export_job_is_terminal(job: &ExportJob) -> bool {
 
 /// gif is the only shareable output today (gifiac#36) — its failure (or
 /// timeout) fails the whole job even if mp4/webm succeeded. mp4/webm
-/// failing on their own doesn't fail the job: `finalize_export_job` still
-/// builds a `gifs` row from gif's output alone.
+/// failing on their own doesn't fail the job: `finalize_gif` still builds
+/// a `gifs` row from gif's output alone.
 pub fn export_job_failed(job: &ExportJob) -> bool {
     matches!(job.gif_status.as_str(), "failed" | "timed_out")
 }
 
-/// Builds the `gifs` row (plus the "save as template" checkbox and source
-/// video cleanup, for a video export) once an export job has reached a
-/// non-`export_job_failed` terminal state. Takes over from
-/// `run_pipeline`/`run_template_pipeline`'s post-`transcode_and_upload`
-/// half — the ffmpeg work itself now already happened in the export
-/// Lambda, independently, before any of this runs.
-pub async fn finalize_export_job(state: &AppState, job: &ExportJob) -> anyhow::Result<()> {
+/// Builds the `gifs` row (plus the "save as template" checkbox, for a
+/// video export) as soon as gif's own format status is terminal and
+/// succeeded — independent of mp4/webm, which may still be encoding (gif
+/// is the only shareable output today, gifiac#36, so nothing else needs to
+/// finish first). Idempotent: if the row already exists — e.g. this is
+/// called a second time from the all-formats-terminal path, or the stuck-
+/// job sweep races a Lambda callback — it's returned as-is rather than
+/// inserted again.
+pub async fn finalize_gif(state: &AppState, job: &ExportJob) -> anyhow::Result<Gif> {
+    if let Some(gif) = db::get_gif_unscoped(&state.pool, &job.id).await? {
+        return Ok(gif);
+    }
+
     let export_id = Uuid::parse_str(&job.id)?;
     let context: ExportJobContext = serde_json::from_str(&job.request_json)?;
     let (gif_width, gif_height) = (
@@ -70,22 +79,66 @@ pub async fn finalize_export_job(state: &AppState, job: &ExportJob) -> anyhow::R
         job.gif_height.ok_or_else(|| anyhow::anyhow!("export job {} terminal without gif dimensions", job.id))?,
     );
 
-    let gif = match context {
+    match context {
         ExportJobContext::Video { video_id, owner_id, request } => {
-            finalize_video_export(state, export_id, &video_id, &owner_id, &request, gif_width, gif_height).await?
+            finalize_video_gif(state, export_id, &video_id, &owner_id, &request, gif_width, gif_height).await
         }
         ExportJobContext::Template { template_id, owner_id, request } => {
-            finalize_template_export(state, export_id, &template_id, &owner_id, &request, gif_width, gif_height).await?
+            finalize_template_export(state, export_id, &template_id, &owner_id, &request, gif_width, gif_height).await
         }
+    }
+}
+
+/// Deletes the source video once *every* format has reached a terminal
+/// state, provided it wasn't saved as a template — this must stay gated on
+/// all three formats (not just gif), since the export Lambda still needs
+/// the source video present to encode mp4/webm. No-op for a template
+/// export, which has no source video of its own.
+pub async fn cleanup_after_all_formats(state: &AppState, job: &ExportJob) -> anyhow::Result<()> {
+    let context: ExportJobContext = serde_json::from_str(&job.request_json)?;
+    let ExportJobContext::Video { video_id, owner_id, .. } = context else {
+        return Ok(());
     };
 
-    if let Some(tx) = state.export_jobs.lock().unwrap().remove(&export_id) {
-        let _ = tx.send(ExportEvent::Complete { gif: Box::new(gif) });
+    // A video that was never turned into a template is scratch space —
+    // see `routes::videos::delete_video_and_its_assets`'s call site
+    // comment for the full reasoning (unchanged from the pre-Lambda
+    // pipeline).
+    if db::get_template_id(&state.pool, &video_id).await?.is_none()
+        && let Err(err) = crate::routes::videos::delete_video_and_its_assets(state, &video_id, &owner_id).await
+    {
+        tracing::warn!(video_id = %video_id, error = ?err, "failed to clean up source video after export");
     }
     Ok(())
 }
 
-async fn finalize_video_export(
+/// Reacts to gif's own format status having just become terminal: on
+/// success, finalizes the `gifs` row and broadcasts `Complete`; on
+/// failure, broadcasts `Failed` (gif failing fails the whole job
+/// regardless of mp4/webm's own outcome, gifiac#36). Either way, the job's
+/// broadcast channel is torn down here — once gif is settled, nothing else
+/// the frontend is waiting on remains pending.
+pub async fn handle_gif_terminal(state: &AppState, job: &ExportJob, job_uuid: Uuid) {
+    let tx = state.export_jobs.lock().unwrap().remove(&job_uuid);
+    if export_job_failed(job) {
+        if let Some(tx) = &tx {
+            let _ = tx.send(ExportEvent::Failed {
+                message: job.gif_error.clone().unwrap_or_else(|| "export failed".to_string()),
+            });
+        }
+        return;
+    }
+    match finalize_gif(state, job).await {
+        Ok(gif) => {
+            if let Some(tx) = &tx {
+                let _ = tx.send(ExportEvent::Complete { gif: Box::new(gif) });
+            }
+        }
+        Err(err) => tracing::error!(job_id = %job.id, error = ?err, "failed to finalize gif"),
+    }
+}
+
+async fn finalize_video_gif(
     state: &AppState,
     export_id: Uuid,
     video_id: &str,
@@ -150,16 +203,6 @@ async fn finalize_video_export(
             db::set_gif_template_id(&state.pool, &gif.id, &template_id).await?;
             gif.template_id = Some(template_id);
         }
-    }
-
-    // A video that was never turned into a template is scratch space —
-    // see `routes::videos::delete_video_and_its_assets`'s call site
-    // comment for the full reasoning (unchanged from the pre-Lambda
-    // pipeline).
-    if db::get_template_id(&state.pool, &video.id).await?.is_none()
-        && let Err(err) = crate::routes::videos::delete_video_and_its_assets(state, &video.id, owner_id).await
-    {
-        tracing::warn!(video_id = %video.id, error = ?err, "failed to clean up source video after export");
     }
 
     Ok(gif)

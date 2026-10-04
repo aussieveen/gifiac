@@ -218,18 +218,17 @@ fn spawn_job_sweep(state: Arc<AppState>) {
                                         });
                                     }
                                 }
-                                if let Ok(Some(updated)) = db::get_export_job(&state.pool, &job.id).await
-                                    && exports::export_job_is_terminal(&updated)
-                                {
-                                    if exports::export_job_failed(&updated) {
-                                        if let Some(tx) = &tx {
-                                            let _ = tx.send(exports::ExportEvent::Failed {
-                                                message: "export timed out".to_string(),
-                                            });
-                                        }
-                                        state.export_jobs.lock().unwrap().remove(&uuid);
-                                    } else if let Err(err) = exports::finalize_export_job(&state, &updated).await {
-                                        tracing::error!(job_id = %job.id, error = ?err, "failed to finalize export job after sweep");
+                                if let Ok(Some(updated)) = db::get_export_job(&state.pool, &job.id).await {
+                                    if newly_timed_out.contains(&ExportFormat::Gif)
+                                        && exports::is_terminal_status(&updated.gif_status)
+                                    {
+                                        exports::handle_gif_terminal(&state, &updated, uuid).await;
+                                    }
+                                    if exports::export_job_is_terminal(&updated)
+                                        && !exports::export_job_failed(&updated)
+                                        && let Err(err) = exports::cleanup_after_all_formats(&state, &updated).await
+                                    {
+                                        tracing::error!(job_id = %job.id, error = ?err, "failed to clean up export job after sweep");
                                     }
                                 }
                             }

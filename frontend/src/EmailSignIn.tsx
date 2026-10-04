@@ -345,7 +345,6 @@ function CodeStep({
               aria-label="6-digit code"
               inputMode="numeric"
               autoComplete="one-time-code"
-              maxLength={6}
               value={code}
               onChange={(e) => onCodeChange(e.target.value)}
               onFocus={() => setFocused(true)}
