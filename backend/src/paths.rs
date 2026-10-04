@@ -43,6 +43,21 @@ pub fn video_object_key(id: &Uuid, extension: &str) -> String {
     format!("raw/{id}.{extension}")
 }
 
+/// A video's poster-frame thumbnail, written to the source bucket by the
+/// ingest Lambda (wayfinder gifiac#32) rather than kept only on local
+/// disk — the Lambda has no disk shared with the EC2 backend, so this is
+/// the only place `get_thumbnail` (piece 3) can serve it from once
+/// generation moves off the synchronous upload path.
+pub fn video_thumbnail_object_key(video_id: &Uuid) -> String {
+    format!("thumbnails/{video_id}.jpg")
+}
+
+/// A video's film-strip sprite sheet, written to the source bucket by the
+/// ingest Lambda — same reasoning as `video_thumbnail_object_key`.
+pub fn video_filmstrip_object_key(video_id: &Uuid) -> String {
+    format!("filmstrips/{video_id}.jpg")
+}
+
 /// R2 object keys for a GIF export's three output formats (SPEC.md §6) —
 /// derived from the export id, sharing the same UUID across all three.
 pub fn gif_object_key(id: &Uuid) -> String {
@@ -196,6 +211,18 @@ mod tests {
         assert_eq!(
             video_object_key(&id(), "mov"),
             "raw/11111111-1111-4111-8111-111111111111.mov"
+        );
+    }
+
+    #[test]
+    fn video_thumbnail_and_filmstrip_object_keys_use_their_own_prefixes() {
+        assert_eq!(
+            video_thumbnail_object_key(&id()),
+            "thumbnails/11111111-1111-4111-8111-111111111111.jpg"
+        );
+        assert_eq!(
+            video_filmstrip_object_key(&id()),
+            "filmstrips/11111111-1111-4111-8111-111111111111.jpg"
         );
     }
 }
