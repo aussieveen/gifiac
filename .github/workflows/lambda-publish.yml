@@ -1,0 +1,78 @@
+name: Build and publish Lambda images
+
+# Only the ingest/export Lambda functions' own sources — a change to the
+# main app (backend/src/**, excluding these two binaries) doesn't need a
+# new Lambda image, and docker-publish.yml already handles that image
+# separately.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/src/bin/ingest_lambda.rs"
+      - "backend/src/bin/export_lambda.rs"
+      - "backend/src/ffmpeg/**"
+      - "backend/src/storage.rs"
+      - "backend/src/paths.rs"
+      - "Dockerfile.lambda"
+      - ".github/workflows/lambda-publish.yml"
+
+env:
+  AWS_REGION: eu-west-1
+
+jobs:
+  # Lambda's container-image support requires ECR specifically (unlike
+  # the main app's image, which stays on GHCR) — one native-arm64 runner
+  # per function, same "avoid cross-arch emulation for a Rust+ffmpeg
+  # build" reasoning as docker-publish.yml's matrix, just without an
+  # amd64 leg since these only ever run on arm64 Lambda.
+  build-and-push:
+    strategy:
+      matrix:
+        include:
+          - target: ingest-lambda
+            repo_output: ingest
+          - target: export-lambda
+            repo_output: export
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        env:
+          ECR_REPOSITORY: gifiac-${{ matrix.repo_output }}-lambda
+          FUNCTION_NAME: gifiac-${{ matrix.repo_output }}
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          image="$registry/$ECR_REPOSITORY:latest"
+          docker buildx build \
+            --target ${{ matrix.target }} \
+            --platform linux/arm64 \
+            -f Dockerfile.lambda \
+            -t "$image" \
+            --push \
+            .
+          # terraform's aws_lambda_function.{ingest,export} both
+          # `ignore_changes = [image_uri]` — pushing a new `:latest` tag
+          # alone doesn't make Lambda pick it up, so this is what
+          # actually rolls out every deploy, mirroring docker-publish.yml's
+          # SSM-triggered deploy for the EC2 side.
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --image-uri "$image" \
+            --query "LastUpdateStatus" --output text

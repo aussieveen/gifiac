@@ -41,6 +41,21 @@ resource "aws_ssm_parameter" "turnstile_secret_key" {
   value = var.turnstile_secret_key
 }
 
+# Shared bearer token the ingest/export Lambda functions' callbacks
+# authenticate with (wayfinder gifiac#32, piece 3's `verify_callback_token`)
+# — purely internal (the backend hands it to Lambda per-invocation via the
+# invoke payload, Lambda just echoes it back), so it's Terraform-generated
+# straight into SSM, the same reasoning as login_code_hmac_key above.
+resource "random_id" "lambda_callback_token" {
+  byte_length = 32
+}
+
+resource "aws_ssm_parameter" "lambda_callback_token" {
+  name  = "/gifiac/lambda_callback_token"
+  type  = "SecureString"
+  value = random_id.lambda_callback_token.b64_std
+}
+
 # Caddy's TLS files, not env vars — deploy.sh writes these straight to
 # disk for the caddy container to mount (COST-REDUCTION-PLAN.md step 1).
 resource "aws_ssm_parameter" "cloudflare_origin_cert" {
