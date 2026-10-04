@@ -113,7 +113,7 @@ export function AdminPage({ currentUserId }: { currentUserId: string }) {
                 </button>
                 {user.id !== currentUserId && (
                   <button
-                    className="btn btn-danger"
+                    className="btn btn-danger-pill"
                     onClick={() => handleDeleteUser(user)}
                     disabled={pendingId === user.id}
                   >

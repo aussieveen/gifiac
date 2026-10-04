@@ -164,6 +164,22 @@
   text-decoration: underline;
 }
 
+/* Same pill shape as .btn-secondary, just in danger coloring — for a
+   destructive action sitting next to a .btn-secondary one (e.g. Admin's
+   Delete next to Disable/Enable) where the plain borderless .btn-danger
+   text link would look inconsistent in the row. */
+.btn-danger-pill {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.btn-danger-pill:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -904,6 +920,10 @@ button {
 
 .admin-user-disabled {
   opacity: 0.5;
+}
+
+.admin-users-table .btn + .btn {
+  margin-left: 8px;
 }
 
 .admin-actions-table td:last-child {
