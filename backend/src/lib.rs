@@ -249,18 +249,29 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_router())
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
-            // `user_id` starts empty and is filled in by `CurrentUser`'s
-            // extractor (auth.rs) once the session cookie resolves to a
-            // user — lets a user's bug report be correlated to their
-            // request's log lines without baking auth into this layer.
-            tracing::info_span!(
-                "request",
-                method = %request.method(),
-                uri = %request.uri(),
-                user_id = tracing::field::Empty,
-            )
-        }))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    // `user_id` starts empty and is filled in by
+                    // `CurrentUser`'s extractor (auth.rs) once the session
+                    // cookie resolves to a user — lets a user's bug report
+                    // be correlated to their request's log lines without
+                    // baking auth into this layer.
+                    tracing::info_span!(
+                        "request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        user_id = tracing::field::Empty,
+                    )
+                })
+                // tower_http's defaults log the request/response pair (the
+                // per-request duration line) at DEBUG — invisible at the
+                // `tower_http=info` level docker-compose.yml runs with.
+                // Raising both to INFO keeps that line without pulling in
+                // DEBUG's other per-request internals.
+                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
+                .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
         // Anything not under /api. `ServeDir` alone only serves index.html
         // for a directory-root request (`/`) — since the frontend is now a
