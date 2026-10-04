@@ -1,4 +1,5 @@
 import type {
+  AdminActionView,
   AdminUserView,
   Caption,
   CurrentUser,
@@ -528,4 +529,15 @@ export function setUserDisabled(id: string, disabled: boolean): Promise<{ id: st
 export async function adminDeleteGif(id: string): Promise<void> {
   const input = `/api/admin/gifs/${id}`
   await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
+}
+
+// Cascades a full delete of the user and everything they own. Irreversible
+// — the confirm dialog in AdminPage is the only gate before this fires.
+export async function deleteUser(id: string): Promise<void> {
+  const input = `/api/admin/users/${id}`
+  await throwIfNotOk(await fetch(input, { method: 'DELETE' }))
+}
+
+export function listAdminActions(): Promise<AdminActionView[]> {
+  return request<AdminActionView[]>('/api/admin/actions')
 }

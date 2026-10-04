@@ -216,3 +216,15 @@ export interface AdminUserView {
   gif_count: number
   latest_gif_at: string | null
 }
+
+// GET /api/admin/actions response row — matching the backend's
+// `AdminActionView`. `details` is a raw JSON string (see migration
+// `0020_admin_actions.sql`), parsed for display, not typed per action.
+export interface AdminActionView {
+  id: string
+  admin_user_id: string
+  action_type: string
+  target_id: string
+  details: string
+  created_at: string
+}

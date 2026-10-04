@@ -401,6 +401,20 @@ pub struct AdminUserView {
     pub latest_gif_at: Option<String>,
 }
 
+/// `GET /api/admin/actions` row — a minimal, generic audit-trail entry
+/// (see migration `0020_admin_actions.sql`). `details` stays a raw JSON
+/// string rather than a typed field since different `action_type`s will
+/// want different shapes; the admin UI just displays it as-is.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct AdminActionView {
+    pub id: String,
+    pub admin_user_id: String,
+    pub action_type: String,
+    pub target_id: String,
+    pub details: String,
+    pub created_at: String,
+}
+
 /// `GET /api/admin/users/{id}/templates` row (SPEC-CLOUD.md §7) — a lean,
 /// `payload_json`-free view for an admin browsing/moderating someone
 /// else's templates (trust & safety) — an admin can see and remove any

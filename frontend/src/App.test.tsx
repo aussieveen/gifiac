@@ -41,6 +41,8 @@ vi.mock('./api', () => ({
   createTemplateExport: vi.fn(),
   listAdminUsers: vi.fn(),
   setUserDisabled: vi.fn(),
+  deleteUser: vi.fn(),
+  listAdminActions: vi.fn(() => Promise.resolve([])),
   listLibrary: vi.fn(),
   recordGifUse: vi.fn(),
   getConfig: vi.fn(() => Promise.resolve({ turnstileSiteKey: null })),

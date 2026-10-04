@@ -880,13 +880,15 @@ button {
   height: 18px;
 }
 
-.admin-users-table {
+.admin-users-table,
+.admin-actions-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
-.admin-users-table th {
+.admin-users-table th,
+.admin-actions-table th {
   text-align: left;
   color: var(--text-subtle);
   font-weight: normal;
@@ -894,13 +896,20 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-.admin-users-table td {
+.admin-users-table td,
+.admin-actions-table td {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .admin-user-disabled {
   opacity: 0.5;
+}
+
+.admin-actions-table td:last-child {
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .back-link {

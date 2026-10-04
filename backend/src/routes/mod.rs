@@ -83,10 +83,11 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/favourites", get(gifs::list_favourites))
         .route("/preferences", put(preferences::update_preferences))
         .route("/admin/users", get(admin::list_users))
-        .route("/admin/users/{id}", patch(admin::set_user_disabled))
+        .route("/admin/users/{id}", patch(admin::set_user_disabled).delete(admin::delete_user))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))
         .route("/admin/users/{id}/templates", get(admin::list_user_templates))
         .route("/admin/gifs/{id}", delete(admin::delete_gif))
         .route("/admin/gifs/{id}/unpublish", post(admin::unpublish_gif))
         .route("/admin/templates/{id}", delete(admin::delete_template))
+        .route("/admin/actions", get(admin::list_actions))
 }

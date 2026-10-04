@@ -469,6 +469,189 @@ async fn deleting_an_unknown_template_as_admin_returns_404() {
 }
 
 #[tokio::test]
+async fn admin_cannot_delete_their_own_account() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+    let admin_id = find_user_id(&test_app, &admin_cookie, "admin@example.com").await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/admin/users/{admin_id}"))
+                .header("cookie", &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Still there afterwards.
+    let still_there: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+        .bind(&admin_id)
+        .fetch_optional(&test_app.pool)
+        .await
+        .unwrap();
+    assert!(still_there.is_some());
+}
+
+#[tokio::test]
+async fn deleting_an_unknown_user_as_admin_returns_404() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/admin/users/00000000-0000-0000-0000-000000000000")
+                .header("cookie", &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// End-to-end: a user with a real gif (real R2 objects), a real template
+/// (real S3 assets, on its own separate video), and a session gets fully
+/// cascade-deleted, with gif media preserved (so existing shared links
+/// keep resolving) but template/video assets cleaned up, and an
+/// `admin_actions` row left behind as the audit trail.
+#[tokio::test]
+async fn admin_can_delete_a_user_and_cascades_their_content() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+
+    // Everything below is owned by `test_app`'s default owner (the
+    // `create_gif`/`put_test_template` helpers always act as that user).
+    let gif = create_gif(&test_app, "doomed gif", "").await;
+    let gif_id = gif["id"].as_str().unwrap();
+    let template_id = put_test_template(&test_app).await;
+    let template_uuid = uuid::Uuid::parse_str(&template_id).unwrap();
+    let template_video_id: String = sqlx::query_scalar("SELECT video_id FROM templates WHERE id = $1")
+        .bind(&template_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+    let owner_id = find_user_id(&test_app, &admin_cookie, "owner@example.com").await;
+
+    let delete_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/admin/users/{owner_id}"))
+                .header("cookie", &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    // The user row, and everything that pointed at it, is gone.
+    for (table, column) in [
+        ("users", "id"),
+        ("gifs", "user_id"),
+        ("templates", "user_id"),
+        ("videos", "user_id"),
+        ("sessions", "user_id"),
+        ("identities", "user_id"),
+    ] {
+        let remaining: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table} WHERE {column} = $1"
+        )))
+        .bind(&owner_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining, 0, "expected no rows left in {table}");
+    }
+
+    // Gif media is deliberately preserved so a shared/embedded link keeps
+    // resolving even after the owning account is gone.
+    let scratch = tempfile::tempdir().unwrap();
+    let gif_uuid = uuid::Uuid::parse_str(gif_id).unwrap();
+    for key in [
+        gifiac_backend::paths::gif_object_key(&gif_uuid),
+        gifiac_backend::paths::mp4_object_key(&gif_uuid),
+        gifiac_backend::paths::webm_object_key(&gif_uuid),
+    ] {
+        test_app
+            .storage
+            .download_file(&key, &scratch.path().join("preserved"))
+            .await
+            .unwrap_or_else(|e| panic!("expected gif asset {key} to survive the user delete: {e}"));
+    }
+
+    // Template assets, on the other hand, are cleaned up.
+    for key in [
+        gifiac_backend::paths::template_clip_object_key(&template_uuid),
+        gifiac_backend::paths::template_thumbnail_object_key(&template_uuid),
+        gifiac_backend::paths::template_filmstrip_object_key(&template_uuid),
+    ] {
+        let result = test_app
+            .template_assets_storage
+            .download_file(&key, &scratch.path().join("should-not-exist"))
+            .await;
+        assert!(result.is_err(), "expected {key} to have been deleted by the user delete");
+    }
+
+    // So are the template's own video's source assets.
+    let template_video_uuid = uuid::Uuid::parse_str(&template_video_id).unwrap();
+    for key in [
+        gifiac_backend::paths::video_thumbnail_object_key(&template_video_uuid),
+        gifiac_backend::paths::video_filmstrip_object_key(&template_video_uuid),
+    ] {
+        let result = test_app
+            .source_storage
+            .download_file(&key, &scratch.path().join("should-not-exist"))
+            .await;
+        assert!(result.is_err(), "expected {key} to have been deleted by the user delete");
+    }
+
+    // The audit trail recorded it.
+    let actions_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/actions")
+                .header("cookie", &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(actions_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let actions = actions.as_array().unwrap();
+    let action = actions
+        .iter()
+        .find(|a| a["target_id"] == owner_id)
+        .expect("expected a delete_user admin_actions row for the deleted owner");
+    assert_eq!(action["action_type"], "delete_user");
+    let details: serde_json::Value = serde_json::from_str(action["details"].as_str().unwrap()).unwrap();
+    assert_eq!(details["handle"], serde_json::Value::Null);
+    assert_eq!(details["email"], "owner@example.com");
+    assert_eq!(details["gif_count"], 1);
+    assert_eq!(details["template_count"], 1);
+}
+
+#[tokio::test]
 async fn deleting_an_unknown_gif_as_admin_returns_404() {
     let test_app = spawn_app().await;
     let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;

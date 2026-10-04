@@ -458,7 +458,7 @@ function AuthenticatedApp({
           path="/from-template/:templateId"
           element={<FromTemplateRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />}
         />
-        {user.role === 'admin' && <Route path="/admin" element={<AdminPage />} />}
+        {user.role === 'admin' && <Route path="/admin" element={<AdminPage currentUserId={user.id} />} />}
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>
     </>

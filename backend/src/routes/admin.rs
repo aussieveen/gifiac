@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::auth::AdminUser;
 use crate::db;
 use crate::error::AppError;
-use crate::models::AdminTemplateView;
+use crate::models::{AdminActionView, AdminTemplateView};
 use crate::paths;
 use crate::state::AppState;
 
@@ -116,6 +116,77 @@ pub async fn unpublish_gif(
 ) -> Result<Json<GifResponse>, AppError> {
     let gif = db::admin_unpublish_gif(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
     Ok(Json(with_urls(gif, &state.storage, false, false)?))
+}
+
+/// Deletes a user and everything they own (SPEC-CLOUD.md §11 called this
+/// out of scope entirely — it no longer is). Self-delete is blocked: with
+/// exactly one admin account and no recovery path if it deletes itself,
+/// there's no scenario where this is intentional rather than a slip.
+///
+/// Gif/mp4/webm objects in R2 are deliberately left alone so a deleted
+/// user's existing shared/embedded gif links keep resolving — see
+/// `db::admin_delete_user`'s doc comment. Template and video assets have
+/// no such external link to protect, so those ARE cleaned up here, same
+/// as `routes::videos::delete_template_assets`/`delete_video_and_its_assets`
+/// already do for the owner-initiated versions of these deletes.
+pub async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    AdminUser(admin): AdminUser,
+    AxPath(id): AxPath<String>,
+) -> Result<StatusCode, AppError> {
+    if id == admin.id {
+        return Err(AppError::Conflict("cannot delete your own account".to_string()));
+    }
+
+    let target = db::get_user(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let deletion = db::admin_delete_user(&state.pool, &target, &admin.id, &now).await?;
+
+    for (video_id, extension) in deletion.video_assets {
+        if let Err(err) = state
+            .source_storage
+            .delete_object(&paths::video_object_key(&video_id, &extension))
+            .await
+        {
+            tracing::warn!(id = %video_id, error = %err, "failed to remove object storage copy of deleted user's video");
+        }
+        for key in [
+            paths::video_thumbnail_object_key(&video_id),
+            paths::video_filmstrip_object_key(&video_id),
+        ] {
+            if let Err(err) = state.source_storage.delete_object(&key).await {
+                tracing::warn!(id = %video_id, %key, error = %err, "failed to remove object storage copy of deleted user's video asset");
+            }
+        }
+        for path in [
+            paths::video_path(&state.config.video_dir, &video_id, &extension),
+            paths::thumbnail_path(&state.config.video_dir, &video_id),
+            paths::filmstrip_sprite_path(&state.config.video_dir, &video_id),
+        ] {
+            if let Err(err) = tokio::fs::remove_file(&path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), error = %err, "failed to remove file for deleted user's video");
+            }
+        }
+    }
+
+    for template_id in deletion.template_ids {
+        crate::routes::videos::delete_template_assets(&state, &template_id).await;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/admin/actions` — the audit trail (migration
+/// `0020_admin_actions.sql`). No filtering/pagination yet: this exists so
+/// an admin action leaves *some* visible trace, not to be a full log
+/// browser.
+pub async fn list_actions(
+    State(state): State<Arc<AppState>>,
+    AdminUser(_admin): AdminUser,
+) -> Result<Json<Vec<AdminActionView>>, AppError> {
+    Ok(Json(db::list_admin_actions(&state.pool, 100).await?))
 }
 
 /// Admin-scoped equivalent of `routes::videos::delete_template`'s cleanup —

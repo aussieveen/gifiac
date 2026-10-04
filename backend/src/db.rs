@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminUserView, ExportFormat, ExportJob, Gif, IngestJob, LibrarySort, LoginCode, NewGif, NewVideo,
-    PreferencesView, PublicGif, Session, Template, TemplatePayload, TemplateSummary, UpdatePreferencesRequest, User,
-    Video, VideoListItem, VideoTemplate,
+    AdminActionView, AdminUserView, ExportFormat, ExportJob, Gif, IngestJob, LibrarySort, LoginCode, NewGif,
+    NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload, TemplateSummary,
+    UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -891,6 +891,109 @@ pub async fn admin_delete_template(pool: &PgPool, id: &str) -> Result<bool> {
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// `video_assets`/`template_ids` are what existed for the deleted user,
+/// handed back so the caller can run best-effort storage cleanup for them
+/// *after* this commits — see `admin_delete_user`'s doc comment for why
+/// gif media itself is excluded from that cleanup.
+pub struct AdminUserDeletion {
+    pub video_assets: Vec<(Uuid, String)>,
+    pub template_ids: Vec<Uuid>,
+}
+
+/// Admin-only, irreversible: cascades a full delete of everything `target`
+/// owns. SPEC-CLOUD.md §11 called account deletion out of scope entirely —
+/// it no longer is. Every DB row goes in one transaction, including the
+/// `admin_actions` audit row (migration `0020_admin_actions.sql`): this is
+/// the single most destructive admin action and previously left zero
+/// trace. Gif/mp4/webm objects in R2 are deliberately *not* touched here
+/// (unlike `admin_delete_gif`) so existing shared/embedded links to a
+/// deleted user's public gifs keep resolving after the account is gone;
+/// template and video assets ARE cleaned up by the caller using the ids
+/// this returns, since nothing external links to those directly.
+pub async fn admin_delete_user(pool: &PgPool, target: &User, admin_id: &str, now: &str) -> Result<AdminUserDeletion> {
+    let mut tx = pool.begin().await?;
+
+    let videos: Vec<(String, String)> = sqlx::query_as("SELECT id, extension FROM videos WHERE user_id = $1")
+        .bind(&target.id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let template_ids: Vec<String> = sqlx::query_scalar("SELECT id FROM templates WHERE user_id = $1")
+        .bind(&target.id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let gif_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gifs WHERE user_id = $1")
+        .bind(&target.id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM gifs WHERE user_id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM templates WHERE user_id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM videos WHERE user_id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM identities WHERE user_id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+
+    let details = serde_json::to_string(&serde_json::json!({
+        "handle": target.handle,
+        "email": target.email,
+        "role": target.role,
+        "gif_count": gif_count,
+        "template_count": template_ids.len(),
+        "video_count": videos.len(),
+    }))?;
+    sqlx::query(
+        "INSERT INTO admin_actions (id, admin_user_id, action_type, target_id, details, created_at) \
+         VALUES ($1, $2, 'delete_user', $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(admin_id)
+    .bind(&target.id)
+    .bind(&details)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(AdminUserDeletion {
+        video_assets: videos
+            .into_iter()
+            .filter_map(|(id, ext)| Uuid::parse_str(&id).ok().map(|uuid| (uuid, ext)))
+            .collect(),
+        template_ids: template_ids.into_iter().filter_map(|id| Uuid::parse_str(&id).ok()).collect(),
+    })
+}
+
+/// `GET /api/admin/actions` — most recent N audit entries, newest first.
+pub async fn list_admin_actions(pool: &PgPool, limit: i64) -> Result<Vec<AdminActionView>> {
+    sqlx::query_as::<_, AdminActionView>(
+        "SELECT id, admin_user_id, action_type, target_id, details, created_at \
+         FROM admin_actions ORDER BY created_at DESC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
 }
 
 /// Astronomically generous — collisions this deep would mean thousands of
