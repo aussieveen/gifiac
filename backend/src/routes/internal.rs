@@ -120,7 +120,12 @@ pub async fn export_callback(
     let updated =
         db::update_export_format_status(&state.pool, &body.job_id, format, &body.status, body.percent, body.error.as_deref(), &now).await?;
     if !updated {
-        tracing::warn!(job_id = %body.job_id, format = %body.format, "dropped late export callback, job already terminal");
+        // Either the row is already terminal, or this is an
+        // out-of-order progress tick with a lower percent than what's
+        // already stored (see `db::update_export_format_status`'s doc
+        // comment) — both are correctly dropped rather than regressing
+        // the job's visible progress.
+        tracing::warn!(job_id = %body.job_id, format = %body.format, percent = body.percent, "dropped stale or late export callback");
         return Ok(StatusCode::OK);
     }
 

@@ -1381,9 +1381,22 @@ pub async fn update_export_format_status(
         ExportFormat::Mp4 => ("mp4_status", "mp4_percent", "mp4_error"),
         ExportFormat::Webm => ("webm_status", "webm_percent", "webm_error"),
     };
+    // The export Lambda posts one callback per ffmpeg progress tick,
+    // each fire-and-forget on its own spawned task (`export_lambda.rs`'s
+    // `report_progress`) — ffmpeg emits them in order, but nothing
+    // guarantees the resulting HTTP requests *arrive* in that order.
+    // Without the `$3 >= {percent_col}` guard, a late-arriving tick for
+    // an earlier (lower) percent can overwrite a higher one already
+    // stored, and that regression gets broadcast straight to the SSE
+    // stream — the exact bug this fixes: the frontend's percent
+    // appearing to flicker backward before climbing again. Only guards
+    // a `running` update against a `running` row; a terminal status
+    // (done/failed) always applies regardless of percent, same as
+    // before.
     let sql = format!(
         "UPDATE export_jobs SET {status_col} = $2, {percent_col} = $3, {error_col} = $4, updated_at = $5 \
-         WHERE id = $1 AND {status_col} NOT IN ({EXPORT_JOB_TERMINAL_STATUSES})"
+         WHERE id = $1 AND {status_col} NOT IN ({EXPORT_JOB_TERMINAL_STATUSES}) \
+           AND ($2 != 'running' OR $3 >= {percent_col})"
     );
     let result = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
@@ -2630,6 +2643,57 @@ mod tests {
 
         let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
         assert_eq!(job.gif_status, "done");
+    }
+
+    /// Regression test: the export Lambda posts one progress callback per
+    /// ffmpeg tick on its own spawned task (`export_lambda.rs`'s
+    /// `report_progress`), with no guarantee the resulting HTTP requests
+    /// arrive in the order they were sent — an out-of-order arrival must
+    /// not regress a format's stored percent, or that regression gets
+    /// broadcast straight to the SSE stream as a visible flicker.
+    #[tokio::test]
+    async fn update_export_format_status_drops_an_out_of_order_lower_percent() {
+        let pool = test_pool().await;
+        insert_export_job(&pool, "exp1", "{}", "2026-08-22T00:00:00Z").await.unwrap();
+
+        let advanced = update_export_format_status(&pool, "exp1", ExportFormat::Gif, "running", 80, None, "2026-08-22T00:00:01Z")
+            .await
+            .unwrap();
+        assert!(advanced);
+
+        // A tick for 45% arrives after the 80% tick already landed.
+        let stale = update_export_format_status(&pool, "exp1", ExportFormat::Gif, "running", 45, None, "2026-08-22T00:00:02Z")
+            .await
+            .unwrap();
+        assert!(!stale, "a lower running percent must be dropped, not overwrite a higher one");
+
+        let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(job.gif_percent, 80, "stored percent must not have regressed");
+
+        // An equal percent is allowed through (not strictly-greater-only).
+        let same = update_export_format_status(&pool, "exp1", ExportFormat::Gif, "running", 80, None, "2026-08-22T00:00:03Z")
+            .await
+            .unwrap();
+        assert!(same);
+
+        // A terminal status always applies, even with a lower percent
+        // than what's currently stored (e.g. a failure reported mid-encode).
+        let terminal = update_export_format_status(
+            &pool,
+            "exp1",
+            ExportFormat::Gif,
+            "failed",
+            10,
+            Some("boom"),
+            "2026-08-22T00:00:04Z",
+        )
+        .await
+        .unwrap();
+        assert!(terminal, "a terminal status must apply regardless of percent");
+
+        let job = get_export_job(&pool, "exp1").await.unwrap().unwrap();
+        assert_eq!(job.gif_status, "failed");
+        assert_eq!(job.gif_percent, 10);
     }
 
     #[tokio::test]
