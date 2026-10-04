@@ -43,29 +43,17 @@ GIFIAC_CADDYFILE_EOF
 
 # Non-secret config, baked in at instance creation — genuine secrets
 # (SPEC-CLOUD.md §10) are fetched from SSM by deploy.sh instead, on every
-# deploy, not just this first boot. Every value is double-quoted: deploy.sh
-# `source`s this file as a bash script, so an unquoted value containing
-# shell metacharacters (EMAIL_FROM_ADDRESS's "Name <addr>" form has `<`/`>`,
-# read as redirection) breaks the source on a syntax error rather than
-# just setting the variable.
-cat > config.env <<EOF
-R2_ACCOUNT_ID="${r2_account_id}"
-R2_BUCKET_NAME="${r2_bucket_name}"
-R2_PUBLIC_BASE_URL="${r2_public_base_url}"
-GOOGLE_CLIENT_ID="${google_client_id}"
-APP_BASE_URL="${app_base_url}"
-SOURCE_VIDEOS_S3_BUCKET="${source_videos_s3_bucket}"
-SOURCE_VIDEOS_S3_REGION="${source_videos_s3_region}"
-TEMPLATE_ASSETS_S3_BUCKET="${template_assets_s3_bucket}"
-TEMPLATE_ASSETS_S3_REGION="${template_assets_s3_region}"
-EMAIL_FROM_ADDRESS="${email_from_address}"
-SES_REGION="${ses_region}"
-TURNSTILE_SITE_KEY="${turnstile_site_key}"
-TRUST_CF_CONNECTING_IP="${trust_cf_connecting_ip}"
-INGEST_LAMBDA_FUNCTION_NAME="${ingest_lambda_function_name}"
-EXPORT_LAMBDA_FUNCTION_NAME="${export_lambda_function_name}"
-CALLBACK_BASE_URL="${callback_base_url}"
-EOF
+# deploy, not just this first boot. Rendered once in ec2.tf from
+# config.env.tftpl and passed in as one pre-rendered blob (`config_env`)
+# rather than interpolated field-by-field here, so the exact same
+# rendered content can also be pushed to an *already-running* instance
+# by `null_resource.push_config_env` (ec2.tf) whenever it changes —
+# `user_data` only ever runs at first boot, so without that second path
+# a config.env edit would silently never reach an existing instance (see
+# that resource's comment for why this matters).
+cat > config.env <<'GIFIAC_CONFIG_ENV_EOF'
+${config_env}
+GIFIAC_CONFIG_ENV_EOF
 chmod 600 config.env
 
 cat > deploy.sh <<'GIFIAC_DEPLOY_EOF'
