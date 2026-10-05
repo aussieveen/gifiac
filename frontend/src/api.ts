@@ -406,12 +406,41 @@ export function importGifs(files: File[]): Promise<Gif[]> {
 }
 
 // Link import per SPEC.md §13 — a pure hotlink, never downloaded/re-hosted.
-export function linkGif(url: string, name: string): Promise<Gif> {
+export function linkGif(url: string, name: string, isPublic: boolean): Promise<Gif> {
   return request<Gif>('/api/gifs/link', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, name }),
+    body: JSON.stringify({ url, name, is_public: isPublic }),
   })
+}
+
+export interface CheckLinkResult {
+  width: number
+  height: number
+  sizeBytes: number
+}
+
+// The plain-English reason a link check failed, read straight off the
+// response body — see the backend's `routes::gifs::check_link`, which
+// owns this exact copy so the modal doesn't have to.
+export class LinkCheckError extends Error {}
+
+// The Import GIFs modal's "From links" row check (SPEC.md §13) — never
+// creates a gif, just confirms the URL is a reachable GIF under the size
+// limit and not already in the caller's library, and reports its
+// dimensions/size for the row's "Looks good" line.
+export async function checkLink(url: string, signal?: AbortSignal): Promise<CheckLinkResult> {
+  const response = await fetch('/api/gifs/check-link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+    signal,
+  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new LinkCheckError(body || response.statusText)
+  }
+  return (await response.json()) as CheckLinkResult
 }
 
 // Video templates (flow A: a video's own save/overwrite-in-place

@@ -494,6 +494,7 @@ async fn run() -> Result<bool> {
                 width: gif.width,
                 height: gif.height,
                 external_url: gif.external_url.clone(),
+                is_public: false,
                 user_id: args.user_id.clone(),
                 template_id: None,
             },

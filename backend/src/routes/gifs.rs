@@ -346,6 +346,8 @@ pub async fn delete_gif(
 pub struct LinkGifRequest {
     url: String,
     name: String,
+    #[serde(default)]
+    is_public: bool,
 }
 
 /// SPEC.md §13: creates a linked GIF — a pure hotlink to a third-party
@@ -381,6 +383,7 @@ pub async fn link_gif(
         width: None,
         height: None,
         external_url: Some(url),
+        is_public: request.is_public,
         user_id: user.id,
         template_id: None,
     };
@@ -400,6 +403,65 @@ pub async fn link_gif(
     });
 
     Ok((StatusCode::CREATED, Json(with_urls(gif, &state.storage, false, false)?)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckLinkRequest {
+    url: String,
+}
+
+/// What the Import GIFs modal's "From links" row needs to render a
+/// "Looks good · WxH · size" line without yet creating a gif — the same
+/// facts `link_gif` would otherwise only learn (and discard) at creation
+/// time.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckLinkResponse {
+    width: u32,
+    height: u32,
+    size_bytes: u64,
+}
+
+/// `POST /api/gifs/check-link`: the server-side half of validating a
+/// pasted URL before committing it (CORS rules out doing this from the
+/// browser) — confirms it's reachable, actually a GIF (not just an
+/// `image/*`, and not a video misfiled as one), under the upload size
+/// ceiling, and not already in the caller's own library. Never creates a
+/// row; `link_gif` does that once the row is "Add"ed.
+pub async fn check_link(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(user): CurrentUser,
+    Json(request): Json<CheckLinkRequest>,
+) -> Result<Json<CheckLinkResponse>, AppError> {
+    let url = request.url.trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::BadRequest("url must not be empty".to_string()));
+    }
+
+    let existing_urls = db::list_external_urls_for_user(&state.pool, &user.id).await?;
+    let normalized = crate::link_check::normalize_url(&url);
+    if existing_urls.iter().any(|existing| crate::link_check::normalize_url(existing) == normalized) {
+        return Err(AppError::BadRequest("That GIF is already in your library.".to_string()));
+    }
+
+    match crate::link_check::check_gif_link(&state.http_client, &url, crate::MAX_UPLOAD_BYTES as u64).await {
+        Ok(info) => Ok(Json(CheckLinkResponse {
+            width: info.width,
+            height: info.height,
+            size_bytes: info.size_bytes,
+        })),
+        Err(crate::link_check::GifLinkError::Unreachable) => Err(AppError::BadRequest("Couldn't reach that link.".to_string())),
+        Err(crate::link_check::GifLinkError::Video) => Err(AppError::BadRequest(
+            "That's a video, not a GIF. To caption a video, use New GIF instead.".to_string(),
+        )),
+        Err(crate::link_check::GifLinkError::TooLarge { .. }) => Err(AppError::BadRequest(format!(
+            "That's too big. GIFs can be up to {}MB.",
+            crate::MAX_UPLOAD_BYTES / (1024 * 1024)
+        ))),
+        Err(crate::link_check::GifLinkError::NotAGif) => Err(AppError::BadRequest(
+            "That link isn't a GIF. Use the direct link to the .gif file.".to_string(),
+        )),
+    }
 }
 
 /// Bulk import (SPEC.md §7): each multipart field is one file, run through
@@ -492,6 +554,7 @@ pub async fn import_gifs(
             width: Some(result.width),
             height: Some(result.height),
             external_url: None,
+            is_public: false,
             user_id: user.id.clone(),
             template_id: None,
         };

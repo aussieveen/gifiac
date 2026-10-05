@@ -21,7 +21,8 @@ const GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_
 /// here, never part of what's `SELECT`ed back out to a response (SPEC-
 /// CLOUD.md §3's ownership model is enforced in the query, not surfaced
 /// to the frontend).
-const INSERT_GIF_COLUMNS: &str = "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, thumbnail_status, template_id";
+const INSERT_GIF_COLUMNS: &str =
+    "id, video_id, name, caption_text, captions_json, gif_range_start, gif_range_end, width, height, external_url, created_at, thumbnail_status, template_id, is_public";
 const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, name, is_public, payload_json, saved_at";
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool> {
@@ -136,7 +137,7 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
     // nothing to generate here.
     let thumbnail_status = gif.external_url.is_some().then_some("pending");
     let sql = format!(
-        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING {GIF_COLUMNS}"
+        "INSERT INTO gifs ({INSERT_GIF_COLUMNS}, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING {GIF_COLUMNS}"
     );
     sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
         .bind(&gif.id)
@@ -152,10 +153,24 @@ pub async fn insert_gif(pool: &PgPool, gif: &NewGif, created_at: &str) -> Result
         .bind(created_at)
         .bind(thumbnail_status)
         .bind(&gif.template_id)
+        .bind(gif.is_public)
         .bind(&gif.user_id)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
+}
+
+/// Every external URL the user has already linked — the Import GIFs
+/// modal's "That GIF is already in your library" check against this (not
+/// a global check: SPEC.md §13 treats a hotlink as the creator's own
+/// entry, so someone else linking the same URL isn't a duplicate for
+/// them).
+pub async fn list_external_urls_for_user(pool: &PgPool, user_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT external_url FROM gifs WHERE user_id = $1 AND external_url IS NOT NULL")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|(url,)| url).collect())
 }
 
 /// Flips a linked gif's thumbnail pipeline status (see
@@ -1708,6 +1723,7 @@ mod tests {
                 width: Some(480),
                 height: Some(270),
                 external_url: None,
+                is_public: false,
                 user_id: user.clone(),
                 template_id: None,
             },
@@ -1740,6 +1756,7 @@ mod tests {
                 width: Some(200),
                 height: Some(200),
                 external_url: None,
+                is_public: false,
                 user_id: user,
                 template_id: None,
             },
@@ -1770,6 +1787,7 @@ mod tests {
                 width: None,
                 height: None,
                 external_url: Some("https://example.com/a.gif".to_string()),
+                is_public: false,
                 user_id: user,
                 template_id: None,
             },
@@ -1795,6 +1813,7 @@ mod tests {
             width: Some(480),
             height: Some(270),
             external_url: None,
+            is_public: false,
             user_id: user_id.to_string(),
             template_id: None,
         }

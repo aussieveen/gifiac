@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  checkLink,
   createExport,
   deleteGif,
   deleteTemplate,
@@ -7,6 +8,7 @@ import {
   getGif,
   getTemplate,
   importGifs,
+  LinkCheckError,
   linkGif,
   listGifs,
   listVideos,
@@ -258,24 +260,60 @@ describe('importGifs', () => {
 })
 
 describe('linkGif', () => {
-  it('POSTs the url and name as JSON', async () => {
+  it('POSTs the url, name, and is_public as JSON', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'g1', external_url: 'https://example.com/a.gif' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await linkGif('https://example.com/a.gif', 'a gif')
+    await linkGif('https://example.com/a.gif', 'a gif', true)
 
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/gifs/link')
     expect(init.method).toBe('POST')
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
-    expect(JSON.parse(init.body as string)).toEqual({ url: 'https://example.com/a.gif', name: 'a gif' })
+    expect(JSON.parse(init.body as string)).toEqual({ url: 'https://example.com/a.gif', name: 'a gif', is_public: true })
   })
 
   it('rejects with the response body on a non-ok status', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('not an image', { status: 400 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(linkGif('https://example.com/a.gif', 'a gif')).rejects.toThrow(/not an image/)
+    await expect(linkGif('https://example.com/a.gif', 'a gif', false)).rejects.toThrow(/not an image/)
+  })
+})
+
+describe('checkLink', () => {
+  it('POSTs the url as JSON and returns the parsed dimensions/size', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ width: 480, height: 270, sizeBytes: 1_400_000 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await checkLink('https://example.com/a.gif')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/gifs/check-link')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ url: 'https://example.com/a.gif' })
+    expect(result).toEqual({ width: 480, height: 270, sizeBytes: 1_400_000 })
+  })
+
+  it('throws a LinkCheckError carrying the plain-English response body on failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response("That link isn't a GIF. Use the direct link to the .gif file.", { status: 400 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(checkLink('https://example.com/a.png')).rejects.toThrow(LinkCheckError)
+    await expect(checkLink('https://example.com/a.png')).rejects.toThrow(/isn't a GIF/)
+  })
+
+  it('forwards an AbortSignal so an in-flight check can be cancelled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ width: 1, height: 1, sizeBytes: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    await checkLink('https://example.com/a.gif', controller.signal)
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.signal).toBe(controller.signal)
   })
 })
 

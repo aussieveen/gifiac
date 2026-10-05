@@ -2595,33 +2595,6 @@ button {
   max-width: 320px;
 }
 
-.archive-link-form {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.archive-link-url {
-  flex: 2;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-size: 14px;
-}
-
-.archive-link-name {
-  flex: 1;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-size: 14px;
-}
-
 .archive-layout {
   display: flex;
   gap: 32px;
@@ -3616,5 +3589,309 @@ h1.profile-handle {
   .public-home-hero-ctas .btn {
     width: 100%;
     justify-content: center;
+  }
+}
+
+/* ===== Import GIFs ("Add from URL") modal — replaces the old inline
+   URL/title/Add form under My Library's search bar. See
+   frontend/src/ImportLinksModal.tsx. ===== */
+
+.import-link-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 7, 0.72);
+  z-index: 200;
+  display: flex;
+  justify-content: center;
+}
+
+.import-link-modal {
+  width: 600px;
+  max-width: calc(100vw - 32px);
+  margin-top: 90px;
+  max-height: calc(100vh - 120px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.import-link-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 20px 0;
+}
+
+.import-link-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.import-link-close {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-subtle);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-link-close:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.import-link-intro {
+  font-size: 14px;
+  color: var(--text-subtle);
+  margin: 12px 20px 0;
+}
+
+.import-link-rows {
+  overflow-y: auto;
+  padding: 16px 20px 0;
+  margin-top: 8px;
+}
+
+.import-link-row-grid {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1.4fr) minmax(0, 1fr) 56px 36px;
+  column-gap: 10px;
+  align-items: center;
+}
+
+.import-link-row-header {
+  font-size: 12px;
+  color: var(--text-subtle);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.import-link-header-public {
+  justify-self: center;
+}
+
+.import-link-row {
+  grid-template-rows: 44px auto;
+  row-gap: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.import-link-rows .import-link-row:last-of-type {
+  border-bottom: none;
+}
+
+.import-link-row-preview {
+  grid-row: 1;
+  width: 72px;
+  height: 45px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.import-link-row-preview-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.import-link-row-preview-empty {
+  width: 100%;
+  height: 100%;
+}
+
+.import-link-row-error-icon {
+  color: var(--danger);
+}
+
+@keyframes import-link-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.import-link-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: import-link-spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+.import-link-row-url {
+  grid-row: 1;
+  height: 44px;
+  box-sizing: border-box;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.import-link-row-url.danger {
+  border-color: var(--danger);
+}
+
+.import-link-row-status {
+  grid-row: 2;
+  grid-column: 2 / 5;
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-subtle);
+}
+
+.import-link-row-status.error {
+  color: #ff9a8c;
+}
+
+.import-link-row-name {
+  grid-row: 1;
+  height: 44px;
+  box-sizing: border-box;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  font-family: var(--font-body);
+  font-size: 15px;
+}
+
+.import-link-switch {
+  grid-row: 1;
+  justify-self: center;
+  width: 40px;
+  height: 24px;
+  padding: 3px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: none;
+  background: var(--raised);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.import-link-switch.on {
+  background: var(--accent);
+  justify-content: flex-end;
+}
+
+.import-link-switch:focus {
+  outline: none;
+}
+
+.import-link-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.import-link-switch-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.import-link-row-remove {
+  grid-row: 1;
+  justify-self: end;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-subtle);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-link-row-remove:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.import-link-add-row {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin: 14px 20px 0;
+  padding: 0 14px;
+  border: 1px dashed #3a3b46;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.import-link-add-row svg {
+  color: var(--accent);
+}
+
+.import-link-add-row:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.import-link-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 20px;
+  margin-top: 16px;
+}
+
+.import-link-footer-status {
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.import-link-footer-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+@media (max-width: 679.98px) {
+  .import-link-modal {
+    margin-top: 0;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .import-link-row-grid {
+    grid-template-columns: 56px minmax(0, 1.4fr) minmax(0, 1fr) 44px 32px;
   }
 }

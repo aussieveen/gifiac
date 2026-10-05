@@ -48,12 +48,12 @@ describe('ProfilePage', () => {
     expect(screen.getByRole('img', { name: "simon's avatar" })).toHaveAttribute('src', profile.avatarUrl)
   })
 
-  it('renders the display name instead of the handle when set', async () => {
+  it('renders the handle even when a display name is set — the profile header is handle-only', async () => {
     vi.mocked(getProfile).mockResolvedValue({ ...profile, displayName: 'Simon McWhinnie' })
     renderAt('simon')
 
-    expect(await screen.findByText('Simon McWhinnie')).toBeInTheDocument()
-    expect(screen.queryByText('simon', { selector: 'h1' })).not.toBeInTheDocument()
+    expect(await screen.findByText('simon', { selector: 'h1' })).toBeInTheDocument()
+    expect(screen.queryByText('Simon McWhinnie')).not.toBeInTheDocument()
   })
 
   it('shows an empty state when there are no public gifs', async () => {

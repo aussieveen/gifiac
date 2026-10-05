@@ -47,7 +47,7 @@ const STATIC_DIR: &str = "static";
 /// Axum's `Multipart` extractor otherwise caps request bodies at 2MB, far
 /// too small for a video upload — 200MB comfortably covers "at least
 /// 100MB, even though that's unlikely" per the user's ask.
-const MAX_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
+pub(crate) const MAX_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
 
 pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let config = Config::from_env();

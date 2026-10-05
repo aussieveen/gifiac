@@ -164,6 +164,7 @@ async fn finalize_video_gif(
         width: Some(gif_width),
         height: Some(gif_height),
         external_url: None,
+        is_public: false,
         user_id: owner_id.to_string(),
         template_id: None,
     };
@@ -235,6 +236,7 @@ async fn finalize_template_export(
         width: Some(gif_width),
         height: Some(gif_height),
         external_url: None,
+        is_public: false,
         user_id: owner_id.to_string(),
         template_id: Some(template.id.clone()),
     };

@@ -61,6 +61,131 @@ fn has_image_content_type(response: &Response) -> bool {
         .is_some_and(|ct| ct.starts_with("image/"))
 }
 
+/// What the Import GIFs modal's "From links" tab needs about a candidate
+/// URL before it's ever created as a gif.
+pub struct GifLinkInfo {
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+}
+
+/// A `check_gif_link` failure, already classified into the one thing the
+/// caller needs to pick the right plain-English message — see
+/// `routes::gifs::check_link`, which owns that copy.
+pub enum GifLinkError {
+    Unreachable,
+    Video,
+    TooLarge { size_bytes: u64 },
+    NotAGif,
+}
+
+/// The server-side half of the "From links" row check (SPEC.md §13's CORS
+/// problem: a browser can't read a third-party response's bytes itself).
+/// Unlike `check_linkable`, this reads a little of the body too — just
+/// enough (the first 10 bytes, where a GIF's header puts its canvas
+/// width/height) to confirm it's really a GIF and learn its dimensions,
+/// requested via `Range` so a server that honours it never sends more.
+/// Redirects aren't followed, same reasoning as `check_linkable`.
+pub async fn check_gif_link(client: &Client, raw_url: &str, max_bytes: u64) -> Result<GifLinkInfo, GifLinkError> {
+    let url = Url::parse(raw_url).map_err(|_| GifLinkError::Unreachable)?;
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => return Err(GifLinkError::Unreachable),
+    }
+    let host = url.host_str().ok_or(GifLinkError::Unreachable)?.to_string();
+    guard_against_private_hosts(&host).await.map_err(|_| GifLinkError::Unreachable)?;
+
+    let mut response = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-9")
+        .send()
+        .await
+        .map_err(|_| GifLinkError::Unreachable)?;
+
+    if !response.status().is_success() {
+        return Err(GifLinkError::Unreachable);
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if content_type.starts_with("video/") {
+        return Err(GifLinkError::Video);
+    }
+
+    let total_size = total_size_from_headers(response.headers());
+    if let Some(size) = total_size
+        && size > max_bytes
+    {
+        return Err(GifLinkError::TooLarge { size_bytes: size });
+    }
+
+    let mut buf = Vec::with_capacity(10);
+    while buf.len() < 10 {
+        match response.chunk().await {
+            Ok(Some(chunk)) => buf.extend_from_slice(&chunk),
+            Ok(None) => break,
+            Err(_) => return Err(GifLinkError::Unreachable),
+        }
+    }
+    drop(response); // enough bytes read — don't pull the rest of the file
+
+    if buf.len() < 10 || &buf[0..3] != b"GIF" {
+        return Err(GifLinkError::NotAGif);
+    }
+    let width = u16::from_le_bytes([buf[6], buf[7]]) as u32;
+    let height = u16::from_le_bytes([buf[8], buf[9]]) as u32;
+    let size_bytes = total_size.unwrap_or(buf.len() as u64);
+
+    Ok(GifLinkInfo { width, height, size_bytes })
+}
+
+/// The file's full size even when only a `Range` slice came back —
+/// `Content-Range: bytes 0-9/123456` gives the total after the `/`. Falls
+/// back to a plain `Content-Length` for a server that ignored the Range
+/// request and sent the whole thing.
+fn total_size_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    if let Some(total) = headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cr| cr.rsplit('/').next())
+        .and_then(|total| total.parse::<u64>().ok())
+    {
+        return Some(total);
+    }
+    headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+/// Normalizes a URL for duplicate comparison (SPEC.md §13's "already in
+/// your library" check) — lowercases scheme/host, drops the fragment, and
+/// strips a trailing slash, but keeps the query string, since some CDNs
+/// key the actual file through it. Falls back to a trimmed/lowercased raw
+/// comparison for a URL that fails to parse at all, so two unparsable but
+/// textually-identical entries still compare equal.
+pub fn normalize_url(raw: &str) -> String {
+    match Url::parse(raw) {
+        Ok(mut url) => {
+            url.set_fragment(None);
+            let scheme = url.scheme().to_ascii_lowercase();
+            let host = url.host_str().map(str::to_ascii_lowercase).unwrap_or_default();
+            let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+            let mut path = url.path().to_string();
+            if path.len() > 1 && path.ends_with('/') {
+                path.pop();
+            }
+            let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
+            format!("{scheme}://{host}{port}{path}{query}")
+        }
+        Err(_) => raw.trim().to_ascii_lowercase(),
+    }
+}
+
 /// Resolves `host` and rejects it if any resolved address is private,
 /// loopback, link-local, or otherwise non-public — a guard against the
 /// server being made to probe internal network addresses via a submitted
@@ -153,6 +278,19 @@ mod tests {
     async fn rejects_an_unparseable_url() {
         let client = Client::new();
         assert!(check_linkable(&client, "not a url").await.is_err());
+    }
+
+    #[test]
+    fn normalize_url_ignores_scheme_host_case_trailing_slash_and_fragment() {
+        assert_eq!(
+            normalize_url("HTTPS://Example.com/a/b/"),
+            normalize_url("https://example.com/a/b#section"),
+        );
+    }
+
+    #[test]
+    fn normalize_url_treats_different_query_strings_as_different_links() {
+        assert_ne!(normalize_url("https://example.com/a.gif?v=1"), normalize_url("https://example.com/a.gif?v=2"));
     }
 
     #[tokio::test]

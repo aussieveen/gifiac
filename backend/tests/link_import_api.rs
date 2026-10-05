@@ -245,3 +245,216 @@ async fn link_gif_pointed_at_a_non_image_url_is_rejected() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+/// The Import GIFs modal's per-row Public switch (off by default) — a
+/// linked gif created with `is_public: true` is public immediately, in
+/// the same request, with no follow-up `PATCH`.
+#[tokio::test]
+async fn link_gif_with_is_public_true_creates_a_public_gif() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": STABLE_TEST_GIF_URL, "name": "earth", "is_public": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let gif: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(gif["is_public"], true);
+}
+
+/// Omitting `is_public` (the existing inline-form shape this endpoint
+/// still needs to support) defaults to private, same as every other
+/// creation path.
+#[tokio::test]
+async fn link_gif_without_is_public_defaults_to_private() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": STABLE_TEST_GIF_URL, "name": "earth" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let gif: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(gif["is_public"], false);
+}
+
+/// `POST /api/gifs/check-link`'s happy path: a real GIF URL resolves with
+/// its real dimensions, and nothing is created — this is strictly a
+/// pre-commit check for the Import GIFs modal's "From links" tab.
+#[tokio::test]
+async fn check_link_reports_dimensions_and_size_for_a_real_gif() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/check-link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": STABLE_TEST_GIF_URL }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(body["width"].as_u64().unwrap() > 0);
+    assert!(body["height"].as_u64().unwrap() > 0);
+    assert!(body["sizeBytes"].as_u64().unwrap() > 0);
+
+    let list_response = test_app
+        .app
+        .clone()
+        .oneshot(authed(&test_app, Request::builder()).uri("/api/gifs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+        &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(gifs.is_empty(), "check-link must never create a row");
+}
+
+/// A reachable, non-GIF page gets the specific "that link isn't a GIF"
+/// copy the modal shows in the row's error line — not the generic
+/// "couldn't reach" message, since the link itself resolved fine.
+#[tokio::test]
+async fn check_link_rejects_a_non_gif_page_with_the_specific_message() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/check-link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": "https://en.wikipedia.org/wiki/Main_Page" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("isn't a GIF"), "{body}");
+}
+
+/// SPEC.md §13's SSRF guard also applies to the pre-commit check, not
+/// just the real create.
+#[tokio::test]
+async fn check_link_pointed_at_a_loopback_address_is_rejected() {
+    let test_app = spawn_app().await;
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/check-link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": "http://127.0.0.1:1/a.gif" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A URL already linked into the caller's own library is flagged as a
+/// duplicate rather than re-checked over the network.
+#[tokio::test]
+async fn check_link_flags_a_url_already_in_the_callers_library() {
+    let test_app = spawn_app().await;
+
+    let create_response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/link")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "url": STABLE_TEST_GIF_URL, "name": "earth" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    // A trailing-slash-free, differently-cased-host variant of the same
+    // URL still counts as the same link (normalize_url).
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/check-link")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "url": STABLE_TEST_GIF_URL.replace("upload.wikimedia.org", "Upload.Wikimedia.org") }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("already in your library"), "{body}");
+}

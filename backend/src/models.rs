@@ -626,6 +626,12 @@ pub struct NewGif {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub external_url: Option<String>,
+    /// Every creation path except `routes::gifs::link_gif` always passes
+    /// `false` here — a link import is the only one where the creator
+    /// chooses visibility up front, via the Import GIFs modal's per-row
+    /// Public switch, rather than publishing after the fact through `PATCH
+    /// /api/gifs/{id}`.
+    pub is_public: bool,
     pub user_id: String,
     pub template_id: Option<String>,
 }

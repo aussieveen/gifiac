@@ -71,6 +71,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/gifs", get(gifs::list_gifs))
         .route("/gifs/import", post(gifs::import_gifs))
         .route("/gifs/link", post(gifs::link_gif))
+        .route("/gifs/check-link", post(gifs::check_link))
         .route(
             "/gifs/{id}",
             get(gifs::get_gif).patch(gifs::rename_gif).delete(gifs::delete_gif),

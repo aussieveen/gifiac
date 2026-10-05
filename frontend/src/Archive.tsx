@@ -4,7 +4,6 @@ import {
   deleteGif,
   favouriteGif,
   importGifs,
-  linkGif,
   listFavourites,
   listGifs,
   recordGifUse,
@@ -14,6 +13,7 @@ import {
   unfavouriteGif,
 } from './api'
 import { GifThumbnail } from './GifThumbnail'
+import { ImportLinksModal } from './ImportLinksModal'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
@@ -135,11 +135,8 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   const [showImportMenu, setShowImportMenu] = useState(false)
   const importMenuRef = useRef<HTMLDivElement>(null)
   useClickOutside(importMenuRef, showImportMenu, () => setShowImportMenu(false))
-  const [showLinkForm, setShowLinkForm] = useState(false)
-  const [linkUrl, setLinkUrl] = useState('')
-  const [linkName, setLinkName] = useState('')
-  const [linking, setLinking] = useState(false)
-  const [linkError, setLinkError] = useState<string | null>(null)
+  const importButtonRef = useRef<HTMLButtonElement>(null)
+  const [showImportLinksModal, setShowImportLinksModal] = useState(false)
   const toast = useToast()
 
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
@@ -331,27 +328,13 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     }
   }
 
-  // SPEC.md §13: creates a linked (hotlinked, never re-hosted) GIF from a
-  // pasted URL + title.
-  async function handleLink(e: React.FormEvent) {
-    e.preventDefault()
-    const url = linkUrl.trim()
-    const name = linkName.trim()
-    if (!url || !name) return
-    setLinking(true)
-    setLinkError(null)
-    try {
-      const created = await linkGif(url, name)
-      setGifs((gs) => [created, ...gs])
-      setLinkUrl('')
-      setLinkName('')
-      setShowLinkForm(false)
-      toast.show('Linked')
-    } catch (err) {
-      setLinkError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLinking(false)
-    }
+  // SPEC.md §13: the Import GIFs modal's "From links" tab hands back
+  // whatever ready rows it managed to commit — partial success is
+  // expected (see ImportLinksModal's own commit handler), so this always
+  // reflects actual created gifs, never the modal's full row count.
+  function handleLinksAdded(created: Gif[]) {
+    setGifs((gs) => [...created, ...gs])
+    toast.show(created.length === 1 ? '1 GIF added' : `${created.length} GIFs added`)
   }
 
   async function remove() {
@@ -382,6 +365,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
         {mode === 'mine' && (
           <div className="archive-import-menu" ref={importMenuRef}>
             <button
+              ref={importButtonRef}
               type="button"
               className="btn btn-secondary archive-import-btn"
               onClick={() => setShowImportMenu((o) => !o)}
@@ -415,8 +399,8 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
                   className="account-dropdown-item"
                   role="menuitem"
                   onClick={() => {
-                    setShowLinkForm((s) => !s)
                     setShowImportMenu(false)
+                    setShowImportLinksModal(true)
                   }}
                 >
                   Add from URL
@@ -479,32 +463,9 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
         </div>
       )}
 
-      {mode === 'mine' && showLinkForm && (
-        <form className="archive-link-form" onSubmit={handleLink}>
-          <input
-            className="archive-link-url"
-            placeholder="https://…/example.gif"
-            value={linkUrl}
-            onChange={(e) => setLinkUrl(e.target.value)}
-            aria-label="GIF URL"
-          />
-          <input
-            className="archive-link-name"
-            placeholder="Title…"
-            value={linkName}
-            onChange={(e) => setLinkName(e.target.value)}
-            aria-label="Linked GIF title"
-          />
-          <button className="btn btn-primary" type="submit" disabled={linking || !linkUrl.trim() || !linkName.trim()}>
-            {linking ? 'Adding…' : 'Add'}
-          </button>
-        </form>
-      )}
-
       {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
       {importError && <p className="export-error">{importError}</p>}
-      {linkError && <p className="export-error">{linkError}</p>}
 
       <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div
@@ -816,6 +777,16 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           <CheckIcon size={16} />
           <span>{toast.message}</span>
         </div>
+      )}
+
+      {showImportLinksModal && (
+        <ImportLinksModal
+          onClose={() => {
+            setShowImportLinksModal(false)
+            importButtonRef.current?.focus()
+          }}
+          onAdded={handleLinksAdded}
+        />
       )}
     </div>
   )
