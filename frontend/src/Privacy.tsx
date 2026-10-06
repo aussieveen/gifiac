@@ -13,7 +13,7 @@ export function PrivacyPage() {
 
       <div className="public-page">
         <h1>Privacy Policy</h1>
-        <p className="va-hint">Last updated: 24 September 2026</p>
+        <p className="va-hint">Last updated: 6 October 2026</p>
 
         <p>
           StrewthGif ("we", "us") is a small, single-operator GIF creation and archival tool. This page explains
@@ -27,14 +27,25 @@ export function PrivacyPage() {
           contacts, or any other Google data; the sign-in scope is limited to <code>openid email profile</code>.
         </p>
         <p>
-          Once signed in, you choose a public handle for your account. Your account record stores that handle, your
-          Google-provided avatar image, and the content you create — videos you upload, GIFs and clips you export,
-          and captions you write. Some of that content you may choose to make public (visible on your profile page
-          and in the shared Global Library); everything else stays private to your account by default.
+          You can also sign in using just your email address, without a Google account. We send a 6-digit code to
+          that address to verify you control it; the code itself is never stored or logged — we keep only a keyed
+          hash of it, which expires after 10 minutes and can't be used to recover the original code. Signing in this
+          way stores your email address directly on your account record (as does a Google sign-in where Google
+          reports your email as verified).
         </p>
         <p>
-          We don't use any third-party analytics, advertising, or tracking services. There are no tracking cookies,
-          and no data is shared with ad networks. We set a single first-party session cookie to keep you signed in.
+          Once signed in, you choose a public handle for your account. Your account record stores that handle, your
+          avatar image (from Google, where available), and the content you create — videos you upload, GIFs and
+          clips you export, and captions you write. Some of that content you may choose to make public (visible on
+          your profile page and in the shared Global Library); everything else stays private to your account by
+          default.
+        </p>
+        <p>
+          We don't use any third-party analytics or advertising services, and no data is shared with ad networks. We
+          set a single first-party session cookie to keep you signed in. The email sign-in form runs a Cloudflare
+          Turnstile check to verify you're not a bot before we send a code — this loads a small script from
+          Cloudflare and may set a short-lived verification cookie; it only runs on that form, and Cloudflare doesn't
+          see anything else you do in the app.
         </p>
 
         <h2>How we use your information</h2>
@@ -59,8 +70,9 @@ export function PrivacyPage() {
         <p>
           We do not sell, rent, or share your personal information or content with third parties for marketing or
           any other purpose. The only parties with access to your data are the infrastructure providers named above
-          (AWS, Cloudflare), which host the application and store media on our behalf, and Google, which you
-          interact with directly during sign-in.
+          (AWS, Cloudflare), which host the application and store media on our behalf; AWS SES, which we use to send
+          email sign-in codes; Cloudflare Turnstile, which verifies you're not a bot before we send a code; and
+          Google, which you interact with directly during sign-in.
         </p>
 
         <h2>Public content</h2>
