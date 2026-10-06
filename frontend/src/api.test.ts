@@ -7,7 +7,6 @@ import {
   getFilmstripMeta,
   getGif,
   getTemplate,
-  importGifs,
   LinkCheckError,
   linkGif,
   listGifs,
@@ -17,6 +16,7 @@ import {
   subscribeExportProgress,
   subscribeIngestProgress,
   thumbnailUrl,
+  uploadGifFile,
   uploadVideo,
   videoFileUrl,
 } from './api'
@@ -237,25 +237,98 @@ describe('deleteGif', () => {
   })
 })
 
-describe('importGifs', () => {
-  it('POSTs each file as multipart form data under the "files" field', async () => {
-    const created = [{ id: 'g1' }, { id: 'g2' }]
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(created))
-    vi.stubGlobal('fetch', fetchMock)
-    const files = [
-      new File(['a'], 'a.gif', { type: 'image/gif' }),
-      new File(['b'], 'b.gif', { type: 'image/gif' }),
-    ]
+class FakeXHR {
+  static instances: FakeXHR[] = []
+  method = ''
+  url = ''
+  status = 0
+  statusText = ''
+  responseText = ''
+  sentBody: FormData | null = null
+  aborted = false
+  upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = {
+    onprogress: null,
+  }
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onabort: (() => void) | null = null
 
-    const result = await importGifs(files)
+  constructor() {
+    FakeXHR.instances.push(this)
+  }
 
-    expect(result).toEqual(created)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('/api/gifs/import')
-    expect(init.method).toBe('POST')
-    expect(init.body).toBeInstanceOf(FormData)
-    const submitted = (init.body as FormData).getAll('files') as File[]
-    expect(submitted.map((f) => f.name)).toEqual(['a.gif', 'b.gif'])
+  open(method: string, url: string) {
+    this.method = method
+    this.url = url
+  }
+
+  send(body: FormData) {
+    this.sentBody = body
+  }
+
+  abort() {
+    this.aborted = true
+    this.onabort?.()
+  }
+}
+
+describe('uploadGifFile', () => {
+  beforeEach(() => {
+    FakeXHR.instances = []
+    vi.stubGlobal('XMLHttpRequest', FakeXHR)
+  })
+
+  it('POSTs the name and file as multipart form data, reporting progress and resolving with the created gif', async () => {
+    const file = new File(['a'], 'a.gif', { type: 'image/gif' })
+    const onProgress = vi.fn()
+
+    const promise = uploadGifFile(file, 'A gif', onProgress)
+    const xhr = FakeXHR.instances[0]
+    expect(xhr.method).toBe('POST')
+    expect(xhr.url).toBe('/api/gifs/import')
+    expect(xhr.sentBody?.get('name')).toBe('A gif')
+    expect((xhr.sentBody?.get('files') as File).name).toBe('a.gif')
+
+    xhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 })
+    expect(onProgress).toHaveBeenCalledWith(50)
+
+    xhr.status = 201
+    xhr.responseText = JSON.stringify([{ id: 'g1', name: 'A gif' }])
+    xhr.onload?.()
+
+    await expect(promise).resolves.toEqual({ id: 'g1', name: 'A gif' })
+  })
+
+  it('clamps progress at 100% even if a browser reports loaded exceeding total', () => {
+    const onProgress = vi.fn()
+    uploadGifFile(new File(['a'], 'a.gif'), 'A gif', onProgress)
+    const xhr = FakeXHR.instances[0]
+
+    xhr.upload.onprogress?.({ lengthComputable: true, loaded: 188, total: 100 })
+
+    expect(onProgress).toHaveBeenCalledWith(100)
+  })
+
+  it('rejects with the response body on a non-2xx status', async () => {
+    const promise = uploadGifFile(new File(['a'], 'a.gif'), 'A gif', vi.fn())
+    const xhr = FakeXHR.instances[0]
+
+    xhr.status = 400
+    xhr.responseText = "That's too big. GIFs can be up to 20MB."
+    xhr.onload?.()
+
+    await expect(promise).rejects.toThrow(/too big/)
+  })
+
+  it('aborts the underlying request when the signal is aborted', async () => {
+    const controller = new AbortController()
+    const promise = uploadGifFile(new File(['a'], 'a.gif'), 'A gif', vi.fn(), controller.signal)
+    const xhr = FakeXHR.instances[0]
+
+    controller.abort()
+
+    expect(xhr.aborted).toBe(true)
+    await expect(promise).rejects.toThrow()
   })
 })
 

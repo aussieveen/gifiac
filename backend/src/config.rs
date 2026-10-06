@@ -18,11 +18,9 @@ impl Config {
                 .into(),
             database_url: std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "postgres://gifiac:gifiac@localhost:5432/gifiac".to_string()),
-            // TEMPORARY local override for manual verification — port 8080
-            // is occupied by unrelated infra on this machine. Revert before
-            // committing: fixed per SPEC.md §10, host-side port mapping is
-            // left to the deployment tooling, intentionally not env-driven.
-            port: std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080),
+            // Fixed per SPEC.md §10 — host-side port mapping is left to the
+            // deployment tooling, so this is intentionally not env-driven.
+            port: 8080,
         }
     }
 }

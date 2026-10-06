@@ -43,9 +43,12 @@ export function getCurrentUser(): Promise<CurrentUser | null> {
 // SPEC-EMAIL-AUTH.md §6/§9: public, non-secret runtime config the sign-in
 // screen needs before there's any session — today just whether Turnstile
 // is configured (it isn't in local dev/test, where the widget is simply
-// not rendered).
+// not rendered). Also carries the Import GIFs modal's per-GIF size limit,
+// served at runtime rather than duplicated as a frontend constant so the
+// two can never drift.
 export interface AppConfig {
   turnstileSiteKey: string | null
+  maxGifBytes: number
 }
 
 export function getConfig(): Promise<AppConfig> {
@@ -396,13 +399,45 @@ export function listFavourites(): Promise<LibraryEntry[]> {
   return request<LibraryEntry[]>('/api/favourites')
 }
 
-// Bulk import per SPEC.md §7 — multiple files in one multipart request,
-// each field named "files" (reusing the video-upload multipart pattern,
-// extended to multi-file), returning the array of created gif rows.
-export function importGifs(files: File[]): Promise<Gif[]> {
-  const body = new FormData()
-  for (const file of files) body.append('files', file, file.name)
-  return request<Gif[]>('/api/gifs/import', { method: 'POST', body })
+// The Import GIFs modal's Upload tab (SPEC.md §7's import endpoint, one
+// file per request so a failure or a progress bar is scoped to that one
+// row — see ImportGifsModal.tsx). Needs XMLHttpRequest, not `fetch`:
+// there's still no cross-browser way to observe upload progress from a
+// `fetch` request body. `onProgress` fires with 0–100; `signal` lets a
+// row's × button cancel an in-flight upload the same way link checks do.
+export function uploadGifFile(file: File, name: string, onProgress: (pct: number) => void, signal?: AbortSignal): Promise<Gif> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/gifs/import')
+
+    xhr.upload.onprogress = (e) => {
+      // `e.total` can undercount the real multipart body slightly (boundary/
+      // header overhead isn't always reflected in it consistently across
+      // browsers), which can otherwise push this over 100% right at the end.
+      if (e.lengthComputable) onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)))
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve((JSON.parse(xhr.responseText) as Gif[])[0])
+      } else {
+        reject(new Error(xhr.responseText || xhr.statusText))
+      }
+    }
+    xhr.onerror = () => reject(new Error('Upload failed.'))
+    xhr.onabort = () => reject(new DOMException('Upload aborted', 'AbortError'))
+    if (signal) {
+      if (signal.aborted) {
+        reject(new DOMException('Upload aborted', 'AbortError'))
+        return
+      }
+      signal.addEventListener('abort', () => xhr.abort())
+    }
+
+    const body = new FormData()
+    body.append('name', name)
+    body.append('files', file, file.name)
+    xhr.send(body)
+  })
 }
 
 // Link import per SPEC.md §13 — a pure hotlink, never downloaded/re-hosted.

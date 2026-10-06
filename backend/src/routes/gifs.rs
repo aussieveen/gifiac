@@ -444,7 +444,7 @@ pub async fn check_link(
         return Err(AppError::BadRequest("That GIF is already in your library.".to_string()));
     }
 
-    match crate::link_check::check_gif_link(&state.http_client, &url, crate::MAX_UPLOAD_BYTES as u64).await {
+    match crate::link_check::check_gif_link(&state.http_client, &url).await {
         Ok(info) => Ok(Json(CheckLinkResponse {
             width: info.width,
             height: info.height,
@@ -454,10 +454,6 @@ pub async fn check_link(
         Err(crate::link_check::GifLinkError::Video) => Err(AppError::BadRequest(
             "That's a video, not a GIF. To caption a video, use New GIF instead.".to_string(),
         )),
-        Err(crate::link_check::GifLinkError::TooLarge { .. }) => Err(AppError::BadRequest(format!(
-            "That's too big. GIFs can be up to {}MB.",
-            crate::MAX_UPLOAD_BYTES / (1024 * 1024)
-        ))),
         Err(crate::link_check::GifLinkError::NotAGif) => Err(AppError::BadRequest(
             "That link isn't a GIF. Use the direct link to the .gif file.".to_string(),
         )),
@@ -479,31 +475,57 @@ pub async fn import_gifs(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Vec<GifResponse>>), AppError> {
     let mut created = Vec::new();
+    // The Import GIFs modal's Upload tab sends one file per request, plus
+    // this optional text field carrying the row's (possibly user-edited)
+    // name — set once by whichever "name" field precedes the next "files"
+    // field it belongs to, then consumed. A legacy multi-file batch
+    // request with no "name" field falls back to the derived name below,
+    // same as before.
+    let mut custom_name: Option<String> = None;
 
     while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?
     {
+        if field.name() == Some("name") {
+            let text = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                custom_name = Some(trimmed.to_string());
+            }
+            continue;
+        }
+
         let original_filename = field
             .file_name()
             .map(str::to_string)
             .unwrap_or_else(|| "import".to_string());
-        let name = Path::new(&original_filename)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("import")
-            .to_string();
+        let name = custom_name.take().unwrap_or_else(|| {
+            Path::new(&original_filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("import")
+                .to_string()
+        });
 
         let tmp_dir = tempfile::tempdir()?;
         let source_path = tmp_dir.path().join("source");
         let mut file = tokio::fs::File::create(&source_path).await?;
+        let mut bytes_written: usize = 0;
         while let Some(chunk) = field
             .chunk()
             .await
             .map_err(|e| AppError::BadRequest(e.to_string()))?
         {
+            bytes_written += chunk.len();
+            if bytes_written > crate::MAX_GIF_BYTES {
+                return Err(AppError::BadRequest(format!(
+                    "That's too big. GIFs can be up to {}MB.",
+                    crate::MAX_GIF_BYTES / (1024 * 1024)
+                )));
+            }
             file.write_all(&chunk).await?;
         }
         file.flush().await?;

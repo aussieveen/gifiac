@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,9 +11,6 @@ vi.mock('./api', () => ({
   listFavourites: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
-  importGifs: vi.fn(),
-  checkLink: vi.fn(),
-  linkGif: vi.fn(),
   setGifOneOff: vi.fn(),
   setGifPublic: vi.fn(),
   recordGifUse: vi.fn(),
@@ -23,12 +20,9 @@ vi.mock('./api', () => ({
 }))
 
 import {
-  checkLink,
   deleteGif,
   favouriteGif,
   getCurrentUser,
-  importGifs,
-  linkGif,
   listFavourites,
   listGifs,
   recordGifUse,
@@ -115,21 +109,11 @@ function renderArchive() {
   )
 }
 
-/** Opens the "Import" menu (design brief §4 moved "Upload GIFs"/"Add from
- * URL" behind it) — both the file input and the "Add from URL" trigger
- * only exist in the DOM while it's open. */
-async function openImportMenu(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: /import/i }))
-}
-
 beforeEach(() => {
   vi.mocked(listGifs).mockReset()
   vi.mocked(listFavourites).mockReset()
   vi.mocked(renameGif).mockReset()
   vi.mocked(deleteGif).mockReset()
-  vi.mocked(importGifs).mockReset()
-  vi.mocked(checkLink).mockReset()
-  vi.mocked(linkGif).mockReset()
   vi.mocked(setGifOneOff).mockReset()
   vi.mocked(setGifPublic).mockReset()
   vi.mocked(recordGifUse).mockReset()
@@ -284,19 +268,6 @@ describe('Archive', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
     await user.click(screen.getByLabelText('GIF name'))
-
-    await user.keyboard('{Escape}')
-
-    expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
-  })
-
-  it('Escape does not close the panel while the Import menu is open', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    const user = userEvent.setup()
-
-    renderArchive()
-    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    await openImportMenu(user)
 
     await user.keyboard('{Escape}')
 
@@ -625,41 +596,6 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
   })
 
-  it('importing files calls the API and prepends the created gifs to the grid', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    vi.mocked(importGifs).mockResolvedValue([gifB])
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    await openImportMenu(user)
-
-    const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    await user.upload(input, file)
-
-    await waitFor(() => expect(importGifs).toHaveBeenCalledWith([file]))
-    expect(await screen.findByRole('button', { name: 'dog running' })).toBeInTheDocument()
-    await screen.findByText(/1 gif imported/i)
-  })
-
-  it('shows an import error without touching the grid', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    vi.mocked(importGifs).mockRejectedValue(new Error('/api/gifs/import failed (400): bad file'))
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    await openImportMenu(user)
-
-    const file = new File(['bytes'], 'bad.gif', { type: 'image/gif' })
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    await user.upload(input, file)
-
-    await screen.findByText(/bad file/)
-    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
-  })
-
   it('shows an external badge only for a linked gif, not a native/imported one', async () => {
     vi.mocked(listGifs).mockResolvedValue([gifA, linkedGif])
 
@@ -726,57 +662,6 @@ describe('Archive', () => {
     await user.click(await screen.findByRole('button', { name: 'linked meme' }))
 
     expect(screen.queryByRole('link', { name: /remix/i })).not.toBeInTheDocument()
-  })
-
-  it('"Add from URL" opens the Import GIFs modal — the old dropdown and inline form are gone', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    await openImportMenu(user)
-    await user.click(screen.getByRole('menuitem', { name: 'Add from URL' }))
-
-    expect(screen.getByRole('dialog', { name: 'Add from URL' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('GIF URL')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Linked GIF title')).not.toBeInTheDocument()
-  })
-
-  it('Esc closes the Import GIFs modal and returns focus to the Import button', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    const importButton = screen.getByRole('button', { name: 'Import GIFs' })
-    await openImportMenu(user)
-    await user.click(screen.getByRole('menuitem', { name: 'Add from URL' }))
-    const dialog = screen.getByRole('dialog', { name: 'Add from URL' })
-
-    fireEvent.keyDown(dialog, { key: 'Escape' })
-
-    expect(screen.queryByRole('dialog', { name: 'Add from URL' })).not.toBeInTheDocument()
-    expect(importButton).toHaveFocus()
-  })
-
-  it('adding a gif via the Import GIFs modal prepends it to the grid and shows a toast', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
-    vi.mocked(checkLink).mockResolvedValue({ width: 480, height: 270, sizeBytes: 1_400_000 })
-    vi.mocked(linkGif).mockResolvedValue(linkedGif)
-    const user = userEvent.setup()
-
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    await openImportMenu(user)
-    await user.click(screen.getByRole('menuitem', { name: 'Add from URL' }))
-    fireEvent.paste(screen.getByLabelText('GIF link'), { clipboardData: { getData: () => 'https://example.com/meme.gif' } })
-    await screen.findByText(/looks good/i)
-
-    await user.click(screen.getByRole('button', { name: /add 1 gif$/i }))
-
-    await waitFor(() => expect(linkGif).toHaveBeenCalledWith('https://example.com/meme.gif', expect.any(String), false))
-    expect(await screen.findByRole('button', { name: 'linked meme' })).toBeInTheDocument()
-    await screen.findByText(/1 gif added/i)
   })
 
   it('marks the layout as having a selection, and the Back button clears it', async () => {

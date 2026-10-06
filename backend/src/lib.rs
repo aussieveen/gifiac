@@ -46,8 +46,18 @@ const STATIC_DIR: &str = "static";
 
 /// Axum's `Multipart` extractor otherwise caps request bodies at 2MB, far
 /// too small for a video upload — 200MB comfortably covers "at least
-/// 100MB, even though that's unlikely" per the user's ask.
+/// 100MB, even though that's unlikely" per the user's ask. This is the
+/// hard ceiling on every request body in the app (raw source video
+/// included) — it is deliberately *not* the limit a finished GIF is held
+/// to; see `MAX_GIF_BYTES` for that.
 pub(crate) const MAX_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
+
+/// A finished GIF (hotlinked or uploaded) has no business being bigger
+/// than this with decent encoding — unlike `MAX_UPLOAD_BYTES`, which
+/// bounds a raw source video before transcoding, this bounds the actual
+/// output artifact the Import GIFs modal deals with (SPEC.md §13's
+/// linked-GIF size check, and the Upload tab's own per-file check).
+pub(crate) const MAX_GIF_BYTES: usize = 20 * 1024 * 1024;
 
 pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let config = Config::from_env();

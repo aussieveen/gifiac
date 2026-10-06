@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { _resetLastTabForTests } from './ImportGifsModal'
 import { resizeTo } from './testUtils'
 import type { FilmstripMeta, Video } from './types'
 
@@ -24,8 +25,10 @@ vi.mock('./api', () => ({
   listGifs: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
-  importGifs: vi.fn(),
+  uploadGifFile: vi.fn(),
+  checkLink: vi.fn(),
   linkGif: vi.fn(),
+  setGifPublic: vi.fn(),
   getTemplate: vi.fn(),
   putTemplate: vi.fn(),
   deleteTemplate: vi.fn(),
@@ -45,7 +48,7 @@ vi.mock('./api', () => ({
   listAdminActions: vi.fn(() => Promise.resolve([])),
   listLibrary: vi.fn(),
   recordGifUse: vi.fn(),
-  getConfig: vi.fn(() => Promise.resolve({ turnstileSiteKey: null })),
+  getConfig: vi.fn(() => Promise.resolve({ turnstileSiteKey: null, maxGifBytes: 20 * 1024 * 1024 })),
   startEmailLogin: vi.fn(),
   verifyEmailCode: vi.fn(),
   EmailAuthError: class EmailAuthError extends Error {
@@ -62,12 +65,14 @@ vi.mock('./api', () => ({
 }))
 
 import {
+  checkLink,
   createExport,
   EmailAuthError,
   getCurrentUser,
   getFilmstripMeta,
   getTemplate,
   getVideo,
+  linkGif,
   listAdminUsers,
   listGifs,
   listLibrary,
@@ -78,11 +83,12 @@ import {
   startEmailLogin,
   subscribeExportProgress,
   subscribeIngestProgress,
+  uploadGifFile,
   uploadVideo,
   verifyEmailCode,
 } from './api'
 import type { ExportProgressHandlers, IngestProgressHandlers } from './api'
-import type { CurrentUser } from './types'
+import type { CurrentUser, Gif } from './types'
 
 const loggedInUser: CurrentUser = {
   id: 'u1',
@@ -114,6 +120,31 @@ const filmstrip: FilmstripMeta = {
   frameHeight: 90,
   interval: 0.25,
   imageUrl: '/api/videos/v1/filmstrip.jpg',
+}
+
+function makeGif(id: string, name: string): Gif {
+  return {
+    id,
+    video_id: null,
+    name,
+    caption_text: '',
+    captions_json: null,
+    gif_range_start: null,
+    gif_range_end: null,
+    width: 480,
+    height: 270,
+    external_url: null,
+    created_at: '2026-01-01T00:00:00Z',
+    is_one_off: false,
+    is_public: false,
+    use_count: 0,
+    is_favourited: false,
+    template_id: null,
+    template_remixable: false,
+    gif_url: `https://example.com/${id}.gif`,
+    mp4_url: `https://example.com/${id}.mp4`,
+    webm_url: `https://example.com/${id}.webm`,
+  }
 }
 
 const otherVideo: Video = { ...video, id: 'v2', original_filename: 'other.mp4' }
@@ -159,6 +190,10 @@ beforeEach(() => {
   vi.mocked(listLibrary).mockReset().mockResolvedValue([])
   vi.mocked(listMyTemplates).mockReset().mockResolvedValue([])
   vi.mocked(listOtherTemplates).mockReset().mockResolvedValue([])
+  vi.mocked(uploadGifFile).mockReset()
+  vi.mocked(checkLink).mockReset()
+  vi.mocked(linkGif).mockReset()
+  _resetLastTabForTests()
 })
 
 afterEach(() => {
@@ -640,5 +675,85 @@ describe('App', () => {
     renderAppAt('/')
 
     await waitFor(() => expect(sessionStorage.getItem('strewthgif:return_to')).toBeNull())
+  })
+
+  it('"Import" sits in the global header next to "New GIF" and opens the Import modal', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderApp()
+    await screen.findByText('My Library', { selector: 'h1' })
+    const header = screen.getByRole('link', { name: 'New GIF' }).closest('.app-header-right') as HTMLElement
+    const importButton = within(header).getByRole('button', { name: 'Import GIFs' })
+
+    await user.click(importButton)
+
+    expect(screen.getByRole('dialog', { name: 'Import GIFs' })).toBeInTheDocument()
+  })
+
+  it('Esc closes the Import modal and returns focus to the header Import button', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderApp()
+    await screen.findByText('My Library', { selector: 'h1' })
+    const importButton = screen.getByRole('button', { name: 'Import GIFs' })
+    await user.click(importButton)
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: 'Import GIFs' })).not.toBeInTheDocument()
+    expect(importButton).toHaveFocus()
+  })
+
+  it('clicking Import from outside My Library navigates there first, then opens the modal', async () => {
+    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listLibrary).mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderAppAt('/')
+    await screen.findByRole('button', { name: 'Import GIFs' })
+
+    await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
+
+    await screen.findByText('My Library', { selector: 'h1' })
+    expect(screen.getByRole('dialog', { name: 'Import GIFs' })).toBeInTheDocument()
+  })
+
+  it('adding a gif via the global Import modal refreshes My Library and shows a toast', async () => {
+    vi.mocked(listGifs).mockResolvedValueOnce([]).mockResolvedValueOnce([makeGif('g1', 'linked meme')])
+    vi.mocked(checkLink).mockResolvedValue({ width: 480, height: 270, sizeBytes: 1_400_000 })
+    vi.mocked(linkGif).mockResolvedValue(makeGif('g1', 'linked meme'))
+    const user = userEvent.setup()
+
+    renderApp()
+    await screen.findByText('My Library', { selector: 'h1' })
+    await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
+    await user.click(screen.getByRole('tab', { name: 'From links' }))
+    fireEvent.paste(screen.getByLabelText('GIF link'), { clipboardData: { getData: () => 'https://example.com/meme.gif' } })
+    await screen.findByText(/480×270/)
+
+    fireEvent.click(screen.getByRole('button', { name: /add 1 gif$/i }))
+
+    await waitFor(() => expect(listGifs).toHaveBeenCalledTimes(2)) // the Import-triggered refetch
+    expect(await screen.findByRole('button', { name: 'linked meme' })).toBeInTheDocument()
+    await screen.findByText(/1 gif added/i)
+  })
+
+  it('uploading a file via the global Import modal refreshes My Library', async () => {
+    vi.mocked(listGifs).mockResolvedValueOnce([]).mockResolvedValueOnce([makeGif('g1', 'Dog running')])
+    vi.mocked(uploadGifFile).mockResolvedValue(makeGif('g1', 'Dog running'))
+    const user = userEvent.setup()
+
+    renderApp()
+    await screen.findByText('My Library', { selector: 'h1' })
+    await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
+
+    const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => expect(listGifs).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('button', { name: 'Dog running' })).toBeInTheDocument()
   })
 })

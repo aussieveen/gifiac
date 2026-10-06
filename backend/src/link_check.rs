@@ -75,7 +75,6 @@ pub struct GifLinkInfo {
 pub enum GifLinkError {
     Unreachable,
     Video,
-    TooLarge { size_bytes: u64 },
     NotAGif,
 }
 
@@ -85,8 +84,11 @@ pub enum GifLinkError {
 /// enough (the first 10 bytes, where a GIF's header puts its canvas
 /// width/height) to confirm it's really a GIF and learn its dimensions,
 /// requested via `Range` so a server that honours it never sends more.
-/// Redirects aren't followed, same reasoning as `check_linkable`.
-pub async fn check_gif_link(client: &Client, raw_url: &str, max_bytes: u64) -> Result<GifLinkInfo, GifLinkError> {
+/// Redirects aren't followed, same reasoning as `check_linkable`. No size
+/// ceiling here — unlike an upload, a hotlinked GIF is never stored on
+/// our servers, so its size is purely informational (shown in the row's
+/// "Looks good" line), not something worth rejecting on.
+pub async fn check_gif_link(client: &Client, raw_url: &str) -> Result<GifLinkInfo, GifLinkError> {
     let url = Url::parse(raw_url).map_err(|_| GifLinkError::Unreachable)?;
     match url.scheme() {
         "http" | "https" => {}
@@ -117,11 +119,6 @@ pub async fn check_gif_link(client: &Client, raw_url: &str, max_bytes: u64) -> R
     }
 
     let total_size = total_size_from_headers(response.headers());
-    if let Some(size) = total_size
-        && size > max_bytes
-    {
-        return Err(GifLinkError::TooLarge { size_bytes: size });
-    }
 
     let mut buf = Vec::with_capacity(10);
     while buf.len() < 10 {

@@ -10,7 +10,8 @@ import { EditorUnavailable } from './EditorUnavailable'
 import { EmailSignIn } from './EmailSignIn'
 import { profileUrl } from './handles'
 import { HandlePicker } from './HandlePicker'
-import { ChevronDownIcon, LogInIcon, MailIcon, PlusIcon } from './icons'
+import { ImportGifsModal } from './ImportGifsModal'
+import { CheckIcon, ChevronDownIcon, LogInIcon, MailIcon, PlusIcon, UploadIcon } from './icons'
 import { Library } from './Library'
 import { NewGifPage } from './NewGifPage'
 import { Preferences } from './Preferences'
@@ -20,6 +21,7 @@ import type { CurrentUser, FilmstripMeta, Gif, TemplateDetail, Video } from './t
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
+import { useToast } from './useToast'
 
 /** The avatar/handle pill in the header — clicking it opens a small menu
  * (design brief §2) with a link to the user's own profile and sign-out,
@@ -86,13 +88,14 @@ function AccountMenu({ user }: { user: CurrentUser }) {
  * already open — switching to a different GIF, or closing back to `null`
  * — replaces that entry instead, so Back from the library skips over
  * every GIF viewed along the way rather than stepping through each one. */
-function ArchiveRoute() {
+function ArchiveRoute({ refreshToken }: { refreshToken: number }) {
   const { gifId } = useParams<{ gifId: string }>()
   const navigate = useNavigate()
   return (
     <Archive
       initialSelectedId={gifId ?? null}
       onSelectGif={(id) => navigate(id ? `/library/${id}` : '/library', { replace: Boolean(gifId) })}
+      refreshToken={refreshToken}
     />
   )
 }
@@ -385,12 +388,21 @@ function AuthenticatedApp({
   }, [])
 
   const canEdit = useCanEdit()
+  const [showImportModal, setShowImportModal] = useState(false)
+  const importButtonRef = useRef<HTMLButtonElement>(null)
+  // Bumped on every successful import/removal so `Archive` (which this
+  // header has no other way to reach — Import lives up here, not inside
+  // the page it affects) knows to re-fetch. See `Archive`'s own fetch
+  // effect, which depends on this.
+  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0)
+  const importToast = useToast()
 
   // SPEC-CLOUD.md §9 / design brief §2: one fixed header — a wordmark,
   // exactly three flat tabs (Admin only for an admin account), a primary
-  // "New GIF" button, and an account pill (avatar/handle) that opens a
-  // small menu with the profile link and sign-out. "New GIF" still isn't
-  // one of the three tabs, and the video-picker/editor sub-flow it starts
+  // "New GIF" button, an "Import" button beside it, and an account pill
+  // (avatar/handle) that opens a small menu with the profile link and
+  // sign-out. "New GIF" still isn't one of the three tabs, and the
+  // video-picker/editor sub-flow it starts
   // (`/new`, `/edit/:videoId`) stays conceptually nested under My Library,
   // so that tab keeps highlighting on those paths too, not just `/library`.
   // (Archive's own toolbar copy of this action is gone as of the My
@@ -415,6 +427,19 @@ function AuthenticatedApp({
               New GIF
             </Link>
           )}
+          <button
+            ref={importButtonRef}
+            type="button"
+            className="btn btn-secondary archive-import-btn"
+            onClick={() => {
+              if (location.pathname !== '/library') navigate('/library')
+              setShowImportModal(true)
+            }}
+            aria-label="Import GIFs"
+          >
+            <UploadIcon size={16} className="archive-import-btn-icon" />
+            <span className="archive-import-btn-label">Import</span>
+          </button>
           <AccountMenu user={user} />
         </div>
       </div>
@@ -448,8 +473,8 @@ function AuthenticatedApp({
       {!isEditorRoute && nav}
       <Routes>
         <Route path="/" element={<Library />} />
-        <Route path="/library" element={<ArchiveRoute />} />
-        <Route path="/library/:gifId" element={<ArchiveRoute />} />
+        <Route path="/library" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
+        <Route path="/library/:gifId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
         <Route path="/explore" element={<Navigate to="/" replace />} />
         <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />
         <Route path="/new" element={<NewGifRoute />} />
@@ -461,6 +486,27 @@ function AuthenticatedApp({
         {user.role === 'admin' && <Route path="/admin" element={<AdminPage currentUserId={user.id} />} />}
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>
+
+      {showImportModal && (
+        <ImportGifsModal
+          onClose={() => {
+            setShowImportModal(false)
+            importButtonRef.current?.focus()
+          }}
+          onAdded={(created) => {
+            setLibraryRefreshToken((t) => t + 1)
+            importToast.show(created.length === 1 ? '1 GIF added' : `${created.length} GIFs added`)
+          }}
+          onRemoved={() => setLibraryRefreshToken((t) => t + 1)}
+        />
+      )}
+
+      {importToast.message && (
+        <div className="archive-toast">
+          <CheckIcon size={16} />
+          <span>{importToast.message}</span>
+        </div>
+      )}
     </>
   )
 }

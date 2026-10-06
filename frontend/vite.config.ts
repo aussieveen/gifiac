@@ -10,7 +10,7 @@ export default defineConfig({
       // In production the backend serves the built frontend and /api from
       // the same origin (SPEC.md §1); this proxy just gives local dev the
       // same same-origin behaviour against `cargo run` on :8080.
-      '/api': 'http://localhost:8090',
+      '/api': 'http://localhost:8080',
     },
   },
   test: {

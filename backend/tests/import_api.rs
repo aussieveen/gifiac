@@ -157,6 +157,85 @@ async fn import_of_an_unparseable_file_is_rejected() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// The Import GIFs modal's Upload tab sends the row's (possibly
+/// user-edited) name alongside the file, rather than relying on the
+/// derived-from-filename default.
+#[tokio::test]
+async fn import_uses_the_provided_name_field_over_the_derived_filename() {
+    let test_app = spawn_app().await;
+    let fixture_dir = TempDir::new().unwrap();
+    let gif_path = make_test_gif(fixture_dir.path(), 1.0);
+    let gif_bytes = std::fs::read(&gif_path).unwrap();
+
+    let (boundary, body) = multipart_body_multi(&[
+        ("name", "unused.txt", "text/plain", b"Monday standup final".to_vec()),
+        ("files", "monday-standup-final-v2.gif", "image/gif", gif_bytes),
+    ]);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/import")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Vec<serde_json::Value> = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(created[0]["name"], "Monday standup final");
+}
+
+/// The Import GIFs modal's per-file size ceiling (20MB) — smaller than,
+/// and enforced independently of, the 200MB global request-body limit
+/// (SPEC.md §7 vs the raw-source-video upload path).
+#[tokio::test]
+async fn import_of_a_file_over_the_size_limit_is_rejected() {
+    let test_app = spawn_app().await;
+    let oversized = vec![0u8; 21 * 1024 * 1024];
+    let (boundary, body) = multipart_body("files", "huge.gif", "image/gif", oversized);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("POST")
+                .uri("/api/gifs/import")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("too big"), "{body}");
+}
+
 #[tokio::test]
 async fn import_with_no_files_is_rejected() {
     let test_app = spawn_app().await;

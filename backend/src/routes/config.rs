@@ -17,5 +17,6 @@ use crate::state::AppState;
 pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<PublicConfig> {
     Json(PublicConfig {
         turnstile_site_key: state.email_auth.turnstile_site_key.clone(),
+        max_gif_bytes: crate::MAX_GIF_BYTES as u64,
     })
 }

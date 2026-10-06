@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import {
   deleteGif,
   favouriteGif,
-  importGifs,
   listFavourites,
   listGifs,
   recordGifUse,
@@ -13,12 +12,10 @@ import {
   unfavouriteGif,
 } from './api'
 import { GifThumbnail } from './GifThumbnail'
-import { ImportLinksModal } from './ImportLinksModal'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
   CheckIcon,
-  ChevronDownIcon,
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
@@ -29,12 +26,10 @@ import {
   ShareIcon,
   StarIcon,
   TrashIcon,
-  UploadIcon,
   XIcon,
 } from './icons'
 import type { Gif, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
-import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
 
@@ -99,9 +94,15 @@ interface Props {
    * into the URL (`/library/:gifId`) can keep it in sync — optional since
    * not every caller needs a shareable selection. */
   onSelectGif?: (id: string | null) => void
+  /** Bumped by the global Import modal (App.tsx — Import now lives in the
+   * header next to New GIF, not here) whenever it creates or removes a
+   * gif, so this re-fetches the list even though it never hears about
+   * that import directly. Optional since the archive is still perfectly
+   * usable without ever importing anything in this session. */
+  refreshToken?: number
 }
 
-export function Archive({ initialSelectedId, onSelectGif }: Props) {
+export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props) {
   const [mode, setMode] = useState<Mode>('mine')
   const [gifs, setGifs] = useState<ArchiveItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -130,13 +131,6 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   const { user } = useCurrentUser()
   const canShare = typeof navigator.share === 'function'
   const [deleting, setDeleting] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
-  const [showImportMenu, setShowImportMenu] = useState(false)
-  const importMenuRef = useRef<HTMLDivElement>(null)
-  useClickOutside(importMenuRef, showImportMenu, () => setShowImportMenu(false))
-  const importButtonRef = useRef<HTMLButtonElement>(null)
-  const [showImportLinksModal, setShowImportLinksModal] = useState(false)
   const toast = useToast()
 
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
@@ -151,6 +145,9 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
   // client-side filter over "my gifs" the way the chips are, since Favourites
   // can include other users' gifs. `query` has no effect there (no
   // search/sort for Favourites yet — see the map's "Not yet specified").
+  // `refreshToken` has no meaning of its own — it only exists to force
+  // this effect to re-run when the global Import modal changes the
+  // library out from under this already-mounted page.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -169,20 +166,19 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     return () => {
       cancelled = true
     }
-  }, [query, mode])
+  }, [query, mode, refreshToken])
 
   // Desktop-only affordance (mobile's full-screen panel keeps its own back
   // arrow instead — see the `canEdit` gate on the × button below). Skipped
-  // while focus is in a text input (the rename field, search box, or the
-  // link-import form) or the Import dropdown is open, so Escape can still
-  // do its usual job there (e.g. clearing a native `<input>`'s own state,
-  // or dismissing the dropdown) without also closing the detail panel out
-  // from under it.
+  // while focus is in a text input (the rename field or search box), so
+  // Escape can still do its usual job there (e.g. clearing a native
+  // `<input>`'s own state) without also closing the detail panel out from
+  // under it. The Import modal handles its own Escape and stops it from
+  // bubbling here (see ImportGifsModal's dialog keydown handler).
   useEffect(() => {
     if (!selectedId || !canEdit) return
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
-      if (showImportMenu) return
       const active = document.activeElement
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
       closeDetail()
@@ -190,7 +186,7 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, canEdit, showImportMenu])
+  }, [selectedId, canEdit])
 
   const filteredGifs = gifs.filter((g) => {
     if (mode === 'favourites') return true
@@ -313,30 +309,6 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
     }
   }
 
-  async function handleImport(files: FileList | null) {
-    if (!files || files.length === 0) return
-    setImporting(true)
-    setImportError(null)
-    try {
-      const created = await importGifs(Array.from(files))
-      setGifs((gs) => [...created, ...gs])
-      toast.show(created.length === 1 ? '1 GIF imported' : `${created.length} GIFs imported`)
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  // SPEC.md §13: the Import GIFs modal's "From links" tab hands back
-  // whatever ready rows it managed to commit — partial success is
-  // expected (see ImportLinksModal's own commit handler), so this always
-  // reflects actual created gifs, never the modal's full row count.
-  function handleLinksAdded(created: Gif[]) {
-    setGifs((gs) => [...created, ...gs])
-    toast.show(created.length === 1 ? '1 GIF added' : `${created.length} GIFs added`)
-  }
-
   async function remove() {
     if (!selected) return
     if (!window.confirm(`Delete "${selected.name}"? This can't be undone.`)) return
@@ -360,55 +332,6 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           <h1 className="page-title">My Library</h1>
           <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
         </div>
-        {/* SPEC-CLOUD.md §14: importing/linking only makes sense for gifs
-            you're creating, not the Favourites view of gifs you've favourited. */}
-        {mode === 'mine' && (
-          <div className="archive-import-menu" ref={importMenuRef}>
-            <button
-              ref={importButtonRef}
-              type="button"
-              className="btn btn-secondary archive-import-btn"
-              onClick={() => setShowImportMenu((o) => !o)}
-              aria-haspopup="true"
-              aria-expanded={showImportMenu}
-              aria-label="Import GIFs"
-            >
-              <UploadIcon size={16} className="archive-import-btn-icon" />
-              <span className="archive-import-btn-label">Import</span>
-              <ChevronDownIcon size={14} className="archive-import-btn-label" />
-            </button>
-            {showImportMenu && (
-              <div className="account-dropdown archive-import-dropdown" role="menu">
-                <label className="account-dropdown-item" role="menuitem">
-                  {importing ? 'Importing…' : 'Upload GIFs'}
-                  <input
-                    type="file"
-                    accept="image/gif,video/*"
-                    multiple
-                    hidden
-                    disabled={importing}
-                    onChange={(e) => {
-                      handleImport(e.target.files)
-                      e.target.value = '' // allow re-selecting the same file(s) later
-                      setShowImportMenu(false)
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="account-dropdown-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowImportMenu(false)
-                    setShowImportLinksModal(true)
-                  }}
-                >
-                  Add from URL
-                </button>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* SPEC-CLOUD.md §14: swaps the whole dataset/toolbar below, not a
@@ -465,7 +388,6 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
 
       {loading && <p className="va-hint">Loading…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
-      {importError && <p className="export-error">{importError}</p>}
 
       <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div
@@ -777,16 +699,6 @@ export function Archive({ initialSelectedId, onSelectGif }: Props) {
           <CheckIcon size={16} />
           <span>{toast.message}</span>
         </div>
-      )}
-
-      {showImportLinksModal && (
-        <ImportLinksModal
-          onClose={() => {
-            setShowImportLinksModal(false)
-            importButtonRef.current?.focus()
-          }}
-          onAdded={handleLinksAdded}
-        />
       )}
     </div>
   )

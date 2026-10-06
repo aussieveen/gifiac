@@ -613,6 +613,10 @@ pub struct LoginCode {
 #[serde(rename_all = "camelCase")]
 pub struct PublicConfig {
     pub turnstile_site_key: Option<String>,
+    /// The Import GIFs modal's size ceiling for a single GIF (linked or
+    /// uploaded) — served at runtime rather than duplicated as a frontend
+    /// constant, so the two can never drift (see `crate::MAX_GIF_BYTES`).
+    pub max_gif_bytes: u64,
 }
 
 pub struct NewGif {
