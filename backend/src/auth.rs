@@ -32,6 +32,13 @@ pub const STATE_COOKIE_NAME: &str = "gifiac_oauth_state";
 /// disabling an account per §7) by deleting its row takes effect
 /// immediately regardless of what the browser still holds.
 pub const SESSION_TTL_DAYS: i64 = 30;
+/// How stale `last_active_at` has to be before `CurrentUser` bothers
+/// writing a fresh one — the sliding expiry only needs to be accurate to
+/// within a few minutes against a 30-day TTL, so this turns "one
+/// `UPDATE` per authenticated request" into "about one every N minutes
+/// per active session", which is what was queuing on the connection pool
+/// under concurrent load.
+const TOUCH_DEBOUNCE_MINUTES: i64 = 5;
 
 /// Required env vars, no defaults — mirrors `storage.rs`'s `R2Config`
 /// exactly. `app_base_url` (e.g. `http://localhost:5173` in dev, the real
@@ -172,14 +179,19 @@ impl FromRequestParts<Arc<AppState>> for CurrentUser {
             .map(|cookie| cookie.value().to_string())
             .ok_or(AppError::Unauthorized)?;
 
-        let session = db::get_session(&state.pool, &session_id)
+        // One joined query instead of `get_session` + `get_user` as two
+        // separate round trips — each was its own pool checkout, and
+        // under concurrent load that queuing was the dominant cost of an
+        // authenticated request.
+        let (user, last_active_at) = db::get_session_user(&state.pool, &session_id)
             .await?
             .ok_or(AppError::Unauthorized)?;
 
-        let last_active_at = DateTime::parse_from_rfc3339(&session.last_active_at)
+        let last_active_at = DateTime::parse_from_rfc3339(&last_active_at)
             .map_err(|_| AppError::Unauthorized)?
             .with_timezone(&Utc);
-        if Utc::now().signed_duration_since(last_active_at) > chrono::Duration::days(SESSION_TTL_DAYS) {
+        let now = Utc::now();
+        if now.signed_duration_since(last_active_at) > chrono::Duration::days(SESSION_TTL_DAYS) {
             // Best-effort cleanup — an expired session is treated as
             // unauthorized either way, so a failure here isn't fatal to
             // the request.
@@ -187,11 +199,11 @@ impl FromRequestParts<Arc<AppState>> for CurrentUser {
             return Err(AppError::Unauthorized);
         }
 
-        let user = db::get_user(&state.pool, &session.user_id)
-            .await?
-            .ok_or(AppError::Unauthorized)?;
-
-        db::touch_session(&state.pool, &session_id, &Utc::now().to_rfc3339()).await?;
+        // Debounced: skip the write entirely when the stored timestamp
+        // is already fresh enough (see `TOUCH_DEBOUNCE_MINUTES`).
+        if now.signed_duration_since(last_active_at) > chrono::Duration::minutes(TOUCH_DEBOUNCE_MINUTES) {
+            db::touch_session(&state.pool, &session_id, &now.to_rfc3339()).await?;
+        }
 
         tracing::Span::current().record("user_id", tracing::field::display(&user.id));
 

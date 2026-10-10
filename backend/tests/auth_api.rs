@@ -190,3 +190,81 @@ async fn login_redirects_to_google_with_a_state_param_and_sets_the_state_cookie(
         .unwrap();
     assert!(set_cookie.starts_with("gifiac_oauth_state="));
 }
+
+/// `CurrentUser`'s `touch_session` write is debounced (`TOUCH_DEBOUNCE_MINUTES`
+/// in auth.rs) — a session touched moments ago shouldn't get a fresh
+/// `UPDATE` on every subsequent request, since that write was the
+/// dominant cost of an authenticated request under concurrent load.
+#[tokio::test]
+async fn an_authenticated_request_does_not_touch_a_recently_active_session() {
+    let test_app = spawn_app().await;
+    let cookie = login_as(&test_app, "a@example.com").await;
+    let session_id = cookie.strip_prefix("gifiac_session=").unwrap();
+
+    let before: String = sqlx::query_scalar("SELECT last_active_at FROM sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let after: String = sqlx::query_scalar("SELECT last_active_at FROM sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after, "a session touched moments ago shouldn't be re-touched");
+}
+
+/// The other half of the debounce: once a session's `last_active_at` is
+/// stale enough, the next authenticated request does refresh it — the
+/// sliding expiry (SPEC-CLOUD.md §2) still works, just not on every
+/// single request.
+#[tokio::test]
+async fn an_authenticated_request_touches_a_stale_session() {
+    let test_app = spawn_app().await;
+    let cookie = login_as(&test_app, "a@example.com").await;
+    let session_id = cookie.strip_prefix("gifiac_session=").unwrap();
+
+    let stale = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    sqlx::query("UPDATE sessions SET last_active_at = $1 WHERE id = $2")
+        .bind(&stale)
+        .bind(session_id)
+        .execute(&test_app.pool)
+        .await
+        .unwrap();
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let after: String = sqlx::query_scalar("SELECT last_active_at FROM sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&test_app.pool)
+        .await
+        .unwrap();
+    assert_ne!(stale, after, "a stale session should be touched on the next request");
+}

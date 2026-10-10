@@ -1476,6 +1476,29 @@ pub async fn get_session(pool: &PgPool, id: &str) -> Result<Option<Session>> {
         .map_err(Into::into)
 }
 
+/// `CurrentUser`'s row shape: a joined `User` plus the session's
+/// `last_active_at` — one query instead of `get_session` followed by a
+/// separate `get_user`, since every authenticated request paid for both
+/// round trips before even reaching its own handler logic.
+#[derive(sqlx::FromRow)]
+struct SessionUserRow {
+    #[sqlx(flatten)]
+    user: User,
+    last_active_at: String,
+}
+
+pub async fn get_session_user(pool: &PgPool, session_id: &str) -> Result<Option<(User, String)>> {
+    let row: Option<SessionUserRow> = sqlx::query_as(
+        "SELECT u.id, u.handle, u.slug, u.role, u.created_at, u.email, u.avatar_url, u.display_name, u.disabled, \
+                s.last_active_at \
+         FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.user, r.last_active_at)))
+}
+
 /// Refreshes the sliding expiry (SPEC-CLOUD.md §2) — called on every
 /// authenticated request that passes the `CurrentUser` extractor.
 pub async fn touch_session(pool: &PgPool, id: &str, now: &str) -> Result<()> {
@@ -2717,6 +2740,31 @@ mod tests {
 
         assert!(get_session(&pool, "sess-target").await.unwrap().is_none());
         assert!(get_session(&pool, "sess-other").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn get_session_user_joins_the_owning_user_and_returns_last_active_at() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        set_handle(&pool, &user, "joined-user").await.unwrap();
+        create_session(&pool, "sess-1", &user, "2026-08-22T00:00:00Z")
+            .await
+            .unwrap();
+
+        let (joined_user, last_active_at) = get_session_user(&pool, "sess-1").await.unwrap().unwrap();
+        assert_eq!(joined_user.id, user);
+        assert_eq!(joined_user.handle.as_deref(), Some("joined-user"));
+        assert_eq!(last_active_at, "2026-08-22T00:00:00Z");
+
+        touch_session(&pool, "sess-1", "2026-08-22T01:00:00Z").await.unwrap();
+        let (_, touched_last_active_at) = get_session_user(&pool, "sess-1").await.unwrap().unwrap();
+        assert_eq!(touched_last_active_at, "2026-08-22T01:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn get_session_user_returns_none_for_a_missing_session() {
+        let pool = test_pool().await;
+        assert!(get_session_user(&pool, "missing").await.unwrap().is_none());
     }
 
     #[tokio::test]
