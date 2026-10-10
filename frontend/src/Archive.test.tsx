@@ -4,11 +4,19 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Archive } from './Archive'
 import { resizeTo } from './testUtils'
-import type { CurrentUser, Gif } from './types'
+import type { CollectionWithCount, CurrentUser, Gif } from './types'
 
 vi.mock('./api', () => ({
   listGifs: vi.fn(),
   listFavourites: vi.fn(),
+  listCollections: vi.fn(),
+  listCollectionGifs: vi.fn(),
+  createCollection: vi.fn(),
+  renameCollection: vi.fn(),
+  deleteCollection: vi.fn(),
+  addGifToCollection: vi.fn(),
+  removeGifFromCollection: vi.fn(),
+  gifCollectionIds: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
   setGifOneOff: vi.fn(),
@@ -20,12 +28,20 @@ vi.mock('./api', () => ({
 }))
 
 import {
+  addGifToCollection,
+  createCollection,
+  deleteCollection,
   deleteGif,
   favouriteGif,
   getCurrentUser,
+  gifCollectionIds,
+  listCollectionGifs,
+  listCollections,
   listFavourites,
   listGifs,
   recordGifUse,
+  removeGifFromCollection,
+  renameCollection,
   renameGif,
   setGifOneOff,
   setGifPublic,
@@ -101,16 +117,18 @@ const plainUser: CurrentUser = {
 // Archive now renders a <Link> (the "Remix" secondary button, shown when a
 // gif has a video_id) — needs a Router context to render, in production
 // that's main.tsx's BrowserRouter, here a MemoryRouter.
-function renderArchive() {
+function renderArchive(view: import('./LibrarySidebar').LibraryView = { kind: 'all' }) {
   return render(
     <MemoryRouter>
-      <Archive />
+      <Archive view={view} />
     </MemoryRouter>,
   )
 }
 
 beforeEach(() => {
-  vi.mocked(listGifs).mockReset()
+  vi.mocked(listGifs).mockReset().mockResolvedValue([])
+  vi.mocked(listCollections).mockReset().mockResolvedValue([])
+  vi.mocked(gifCollectionIds).mockReset().mockResolvedValue([])
   vi.mocked(listFavourites).mockReset()
   vi.mocked(renameGif).mockReset()
   vi.mocked(deleteGif).mockReset()
@@ -462,14 +480,14 @@ describe('Archive', () => {
 
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    const oneOffSwitch = screen.getByRole('switch', { name: 'One-off' })
+    const oneOffSwitch = screen.getByRole('switch', { name: 'Hidden' })
     expect(oneOffSwitch).toHaveAttribute('aria-checked', 'false')
 
     await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', true)
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'One-off' })).toHaveAttribute('aria-checked', 'true'))
-    await screen.findByText(/marked as one-off/i)
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'true'))
+    await screen.findByText(/marked as hidden/i)
   })
 
   it('marking a gif back as reusable calls the API with false', async () => {
@@ -479,15 +497,16 @@ describe('Archive', () => {
     const user = userEvent.setup()
 
     renderArchive()
+    await user.click(screen.getByRole('button', { name: 'Hidden' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    const oneOffSwitch = screen.getByRole('switch', { name: 'One-off' })
+    const oneOffSwitch = screen.getByRole('switch', { name: 'Hidden' })
     expect(oneOffSwitch).toHaveAttribute('aria-checked', 'true')
 
     await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', false)
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'One-off' })).toHaveAttribute('aria-checked', 'false'))
-    await screen.findByText(/marked as reusable/i)
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'false'))
+    await screen.findByText(/Marked as visible/i)
   })
 
   it('making a gif public calls the API and flips the Public switch', async () => {
@@ -525,24 +544,20 @@ describe('Archive', () => {
     await screen.findByText(/made private/i)
   })
 
-  it('shows a "One-offs" divider above one-off gifs in the grid, only when one exists', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA, gifB])
-    const { rerender } = render(
-      <MemoryRouter>
-        <Archive />
-      </MemoryRouter>,
-    )
-    await screen.findByRole('button', { name: 'cat jumping' })
-    expect(screen.queryByText('One-offs', { selector: '.archive-grid-divider' })).not.toBeInTheDocument()
+  it('a hidden gif never shows under All/Public/Private — only the Hidden chip reveals it', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA, { ...gifB, is_one_off: true, is_public: true }])
+    const user = userEvent.setup()
+    renderArchive()
 
-    vi.mocked(listGifs).mockResolvedValue([gifA, { ...gifB, is_one_off: true }])
-    rerender(
-      <MemoryRouter>
-        <Archive key="reload" />
-      </MemoryRouter>,
-    )
-    await screen.findByRole('button', { name: 'dog running' })
-    expect(screen.getByText('One-offs', { selector: '.archive-grid-divider' })).toBeInTheDocument()
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Public' }))
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Hidden' }))
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
   })
 
   it('deleting asks for confirmation, then calls the API and clears the selection', async () => {
@@ -581,19 +596,20 @@ describe('Archive', () => {
 
     renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
-    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
+    // The hidden gif never shows under All — only the Hidden chip reveals it.
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Public' }))
     expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'One-offs' }))
+    await user.click(screen.getByRole('button', { name: 'Hidden' }))
     expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'All' }))
     expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
   })
 
   it('shows an external badge only for a linked gif, not a native/imported one', async () => {
@@ -672,14 +688,14 @@ describe('Archive', () => {
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.archive-layout')).toHaveClass(
+    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.library-grid')).toHaveClass(
       'has-selection',
     )
     const backButton = screen.getByRole('button', { name: 'Back to library' })
 
     await user.click(backButton)
 
-    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.archive-layout')).not.toHaveClass(
+    expect(screen.getByRole('button', { name: 'cat jumping' }).closest('.library-grid')).not.toHaveClass(
       'has-selection',
     )
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
@@ -750,42 +766,30 @@ describe('Archive favourites', () => {
     expect(await within(panel).findByRole('button', { name: 'Favourite', pressed: false })).toBeInTheDocument()
   })
 
-  it('switching to Favourites mode fetches and renders the caller\'s favourites, not "My GIFs"', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
+  it("the favourites view fetches and renders the caller's favourites, not All GIFs", async () => {
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifB, owner_handle: 'jess', owner_slug: 'jess' }])
-    const user = userEvent.setup()
 
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
 
     expect(await screen.findByRole('button', { name: 'dog running' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
   })
 
   it('shows an empty state with a link to the Global Library when Favourites has nothing', async () => {
-    vi.mocked(listGifs).mockResolvedValue([gifA])
     vi.mocked(listFavourites).mockResolvedValue([])
-    const user = userEvent.setup()
 
-    renderArchive()
-    await screen.findByRole('button', { name: 'cat jumping' })
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
 
     expect(await screen.findByText(/no favourites yet/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /browse global library/i })).toHaveAttribute('href', '/explore')
   })
 
-  it('unfavouriting a gif in Favourites mode removes it from view and closes its detail panel', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+  it('unfavouriting a gif in the favourites view removes it from view and closes its detail panel', async () => {
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifA, is_favourited: true, owner_handle: null, owner_slug: null }])
     vi.mocked(unfavouriteGif).mockResolvedValue({ ...gifA, is_favourited: false })
     const user = userEvent.setup()
 
-    renderArchive()
-    await user.click(screen.getByRole('button', { name: 'My GIFs' })) // ensure default mode's fetch settles first
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     const panel = document.querySelector('.archive-panel') as HTMLElement
@@ -795,53 +799,247 @@ describe('Archive favourites', () => {
     expect(screen.getByText(/select a gif/i)).toBeInTheDocument()
   })
 
-  it('shows owner attribution in Favourites mode for someone else\'s gif', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+  it("shows owner attribution in the favourites view for someone else's gif", async () => {
     vi.mocked(listFavourites).mockResolvedValue([{ ...gifA, is_favourited: true, owner_handle: 'jess', owner_slug: 'jess' }])
     const user = userEvent.setup()
 
-    renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    expect(screen.getByRole('link', { name: 'jess' })).toHaveAttribute('href', '/u/jess')
+    expect(screen.getByRole('link', { name: 'by @jess' })).toHaveAttribute('href', '/u/jess')
   })
 
-  it('hides owner-only controls (rename, Public/One-off, Delete, Remix) for someone else\'s gif in Favourites mode', async () => {
+  it("hides owner-only controls (rename, Public/One-off, Delete, Remix) for someone else's gif in the favourites view", async () => {
     // The backend's own rename/publish/delete/remix-source endpoints are
     // ownership-scoped and 404 for a non-owner — this is the frontend
     // half: don't even offer controls that would just fail.
-    vi.mocked(listGifs).mockResolvedValue([])
     vi.mocked(listFavourites).mockResolvedValue([
       { ...gifA, is_favourited: true, video_id: 'v1', owner_handle: 'jess', owner_slug: 'jess' },
     ])
     const user = userEvent.setup()
 
-    renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
     expect(screen.getByText('cat jumping')).toBeInTheDocument()
     expect(screen.queryByRole('switch', { name: 'Public' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('switch', { name: 'One-off' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Hidden' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
   })
 
-  it('still shows owner-only controls for your own gif favourited via Favourites mode', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+  it('still shows owner-only controls for your own gif favourited via the favourites view', async () => {
     vi.mocked(listFavourites).mockResolvedValue([
       { ...gifA, is_favourited: true, owner_handle: 'simon', owner_slug: 'simon' },
     ])
     const user = userEvent.setup()
 
-    renderArchive()
-    await user.click(screen.getByRole('button', { name: 'Favourites' }))
+    renderArchive({ kind: 'favourites' })
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByLabelText('GIF name')).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: 'Public' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument()
+  })
+})
+
+const favouritesCollection: CollectionWithCount = {
+  id: 'c-fav',
+  ownerId: 'u1',
+  name: 'Favourites',
+  kind: 'favourites',
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+  gifCount: 0,
+}
+
+const roadtripCollection: CollectionWithCount = {
+  id: 'c-roadtrip',
+  ownerId: 'u1',
+  name: 'Roadtrip',
+  kind: 'custom',
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+  gifCount: 1,
+}
+
+describe('Archive collections', () => {
+  it('opening the Save to collection picker shows every collection with its checked state', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(listCollections).mockResolvedValue([favouritesCollection, roadtripCollection])
+    vi.mocked(gifCollectionIds).mockResolvedValue(['c-roadtrip'])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(await screen.findByRole('button', { name: 'Save to collection' }))
+
+    const menu = await screen.findByRole('menu', { name: 'Save to collection' })
+    expect(within(menu).getByRole('checkbox', { name: /Favourites/ })).toHaveAttribute('aria-checked', 'false')
+    expect(within(menu).getByRole('checkbox', { name: /Roadtrip/ })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('checking a custom collection in the picker saves it there; unchecking removes it', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    vi.mocked(gifCollectionIds).mockResolvedValue([])
+    vi.mocked(addGifToCollection).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(await screen.findByRole('button', { name: 'Save to collection' }))
+    const menu = await screen.findByRole('menu', { name: 'Save to collection' })
+    await user.click(within(menu).getByRole('checkbox', { name: /Roadtrip/ }))
+
+    expect(addGifToCollection).toHaveBeenCalledWith('c-roadtrip', 'g1')
+    await waitFor(() => expect(within(menu).getByRole('checkbox', { name: /Roadtrip/ })).toHaveAttribute('aria-checked', 'true'))
+
+    vi.mocked(removeGifFromCollection).mockResolvedValue(undefined)
+    await user.click(within(menu).getByRole('checkbox', { name: /Roadtrip/ }))
+    expect(removeGifFromCollection).toHaveBeenCalledWith('c-roadtrip', 'g1')
+  })
+
+  it('checking the Favourites row in the picker favourites the gif, same as the star', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(listCollections).mockResolvedValue([favouritesCollection])
+    vi.mocked(gifCollectionIds).mockResolvedValue([])
+    vi.mocked(favouriteGif).mockResolvedValue({ ...gifA, is_favourited: true })
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(await screen.findByRole('button', { name: 'Save to collection' }))
+    const menu = await screen.findByRole('menu', { name: 'Save to collection' })
+    await user.click(within(menu).getByRole('checkbox', { name: /Favourites/ }))
+
+    expect(favouriteGif).toHaveBeenCalledWith('g1')
+    const panel = document.querySelector('.archive-panel') as HTMLElement
+    expect(within(panel).getByRole('button', { name: 'Favourite', pressed: true })).toBeInTheDocument()
+  })
+
+  it('creating a new collection from the picker creates it and adds the open gif', async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(listCollections).mockResolvedValue([])
+    vi.mocked(gifCollectionIds).mockResolvedValue([])
+    vi.mocked(createCollection).mockResolvedValue({
+      id: 'c-new',
+      ownerId: 'u1',
+      name: 'New One',
+      kind: 'custom',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    })
+    vi.mocked(addGifToCollection).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(await screen.findByRole('button', { name: 'Save to collection' }))
+    const menu = await screen.findByRole('menu', { name: 'Save to collection' })
+    await user.type(within(menu).getByLabelText('New collection name'), 'New One')
+    await user.click(within(menu).getByRole('button', { name: /create/i }))
+
+    expect(createCollection).toHaveBeenCalledWith('New One')
+    await waitFor(() => expect(addGifToCollection).toHaveBeenCalledWith('c-new', 'g1'))
+  })
+
+  it("the detail panel's \"In collections\" chips link to the gif's collections", async () => {
+    vi.mocked(listGifs).mockResolvedValue([gifA])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    vi.mocked(gifCollectionIds).mockResolvedValue(['c-roadtrip'])
+    const user = userEvent.setup()
+
+    renderArchive()
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(await screen.findByText('In collections')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Roadtrip/ })).toHaveAttribute('href', '/library/c/c-roadtrip')
+  })
+
+  it("the \"Remove from '<collection>'\" button removes the gif from that collection's view", async () => {
+    vi.mocked(listCollectionGifs).mockResolvedValue([{ ...gifA, owner_handle: 'simon', owner_slug: 'simon' }])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    vi.mocked(gifCollectionIds).mockResolvedValue(['c-roadtrip'])
+    vi.mocked(removeGifFromCollection).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    renderArchive({ kind: 'collection', id: 'c-roadtrip' })
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+    await user.click(await screen.findByRole('button', { name: /remove from/i }))
+
+    expect(removeGifFromCollection).toHaveBeenCalledWith('c-roadtrip', 'g1')
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument())
+  })
+
+  it('renaming a collection via the ⋯ menu calls the API and updates the title', async () => {
+    vi.mocked(listCollectionGifs).mockResolvedValue([])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    vi.mocked(renameCollection).mockResolvedValue({ ...roadtripCollection, name: '2026 Roadtrip' })
+    const user = userEvent.setup()
+
+    renderArchive({ kind: 'collection', id: 'c-roadtrip' })
+    await screen.findByText('Roadtrip', { selector: 'h1' })
+    await user.click(screen.getByRole('button', { name: 'Collection options' }))
+    await user.click(screen.getByRole('menuitem', { name: /rename/i }))
+
+    const nameField = screen.getByLabelText('Name')
+    await user.clear(nameField)
+    await user.type(nameField, '2026 Roadtrip')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(renameCollection).toHaveBeenCalledWith('c-roadtrip', '2026 Roadtrip')
+  })
+
+  it('deleting a collection navigates away and offers an Undo that recreates it', async () => {
+    vi.mocked(listCollectionGifs).mockResolvedValue([{ ...gifA, owner_handle: 'simon', owner_slug: 'simon' }])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    vi.mocked(deleteCollection).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    renderArchive({ kind: 'collection', id: 'c-roadtrip' })
+    await screen.findByRole('button', { name: 'cat jumping' })
+    await user.click(screen.getByRole('button', { name: 'Collection options' }))
+    await user.click(screen.getByRole('menuitem', { name: /delete collection/i }))
+    await user.click(screen.getByRole('button', { name: 'Delete collection' }))
+
+    expect(deleteCollection).toHaveBeenCalledWith('c-roadtrip')
+    expect(await screen.findByText(/deleted 'roadtrip'/i)).toBeInTheDocument()
+
+    vi.mocked(createCollection).mockResolvedValue({
+      id: 'c-restored',
+      ownerId: 'u1',
+      name: 'Roadtrip',
+      kind: 'custom',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    })
+    vi.mocked(addGifToCollection).mockResolvedValue(undefined)
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+
+    expect(createCollection).toHaveBeenCalledWith('Roadtrip')
+    await waitFor(() => expect(addGifToCollection).toHaveBeenCalledWith('c-restored', 'g1'))
+  })
+
+  it('the Mine/From others chips filter a collection view client-side', async () => {
+    vi.mocked(listCollectionGifs).mockResolvedValue([
+      { ...gifA, owner_handle: 'simon', owner_slug: 'simon' },
+      { ...gifB, owner_handle: 'jess', owner_slug: 'jess' },
+    ])
+    vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
+    const user = userEvent.setup()
+
+    renderArchive({ kind: 'collection', id: 'c-roadtrip' })
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Mine' }))
+    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'dog running' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Borrowed' }))
+    expect(screen.queryByRole('button', { name: 'cat jumping' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'dog running' })).toBeInTheDocument()
   })
 })

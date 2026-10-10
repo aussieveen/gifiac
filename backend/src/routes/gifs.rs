@@ -283,6 +283,12 @@ pub struct LibraryEntry {
     owner_slug: Option<String>,
 }
 
+impl LibraryEntry {
+    pub(crate) fn new(gif: GifResponse, owner_handle: Option<String>, owner_slug: Option<String>) -> Self {
+        Self { gif, owner_handle, owner_slug }
+    }
+}
+
 /// Auth-optional (SPEC-CLOUD.md §14): a logged-out visitor still browses
 /// the library freely, they just get `is_favourited: false` on every
 /// item — favouriting itself still requires signing in, enforced by

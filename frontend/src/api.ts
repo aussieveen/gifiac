@@ -2,6 +2,8 @@ import type {
   AdminActionView,
   AdminUserView,
   Caption,
+  Collection,
+  CollectionWithCount,
   CurrentUser,
   FilmstripMeta,
   Gif,
@@ -397,6 +399,57 @@ export function unfavouriteGif(id: string): Promise<Gif> {
 // the same attributed shape as `listLibrary`.
 export function listFavourites(): Promise<LibraryEntry[]> {
   return request<LibraryEntry[]>('/api/favourites')
+}
+
+// Collections (collections-design/COLLECTIONS.md) — named, unordered
+// groupings of gifs. Favourites is one of these under the hood (`kind:
+// 'favourites'`), surfaced here alongside whatever custom collections
+// the caller has created.
+
+export function listCollections(): Promise<CollectionWithCount[]> {
+  return request<CollectionWithCount[]>('/api/collections')
+}
+
+export function createCollection(name: string): Promise<Collection> {
+  return request<Collection>('/api/collections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function renameCollection(id: string, name: string): Promise<Collection> {
+  return request<Collection>(`/api/collections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function deleteCollection(id: string): Promise<void> {
+  await throwIfNotOk(await fetch(`/api/collections/${id}`, { method: 'DELETE' }))
+}
+
+// Same attributed shape as `listLibrary`/`listFavourites` — a collection
+// can hold the caller's own gifs and other people's public gifs.
+export function listCollectionGifs(id: string, q?: string): Promise<LibraryEntry[]> {
+  const query = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+  return request<LibraryEntry[]>(`/api/collections/${id}/gifs${query}`)
+}
+
+export async function addGifToCollection(collectionId: string, gifId: string): Promise<void> {
+  await throwIfNotOk(await fetch(`/api/collections/${collectionId}/gifs/${gifId}`, { method: 'POST' }))
+}
+
+export async function removeGifFromCollection(collectionId: string, gifId: string): Promise<void> {
+  await throwIfNotOk(await fetch(`/api/collections/${collectionId}/gifs/${gifId}`, { method: 'DELETE' }))
+}
+
+// For the detail panel's "In collections" chips / "Save to collection"
+// picker's checked state — which of the caller's own collections a gif
+// is currently in.
+export function gifCollectionIds(gifId: string): Promise<string[]> {
+  return request<{ collectionIds: string[] }>(`/api/gifs/${gifId}/collections`).then((r) => r.collectionIds)
 }
 
 // The Import GIFs modal's Upload tab (SPEC.md §7's import endpoint, one

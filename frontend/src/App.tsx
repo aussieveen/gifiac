@@ -17,6 +17,7 @@ import { NewGifPage } from './NewGifPage'
 import { Preferences } from './Preferences'
 import { PublicHomePage } from './PublicHomePage'
 import { consumeReturnTo, saveReturnTo } from './returnTo'
+import type { LibraryView } from './LibrarySidebar'
 import type { CurrentUser, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
@@ -80,21 +81,39 @@ function AccountMenu({ user }: { user: CurrentUser }) {
   )
 }
 
-/** `/library` and `/library/:gifId` both land here — the id (if any)
- * pre-selects that GIF in the detail panel, so the current selection is
- * always a shareable link, not just in-memory state. Opening the first
- * GIF from the closed state pushes a new history entry (so Back leaves
- * the detail view); every subsequent selection change while one is
- * already open — switching to a different GIF, or closing back to `null`
- * — replaces that entry instead, so Back from the library skips over
- * every GIF viewed along the way rather than stepping through each one. */
+/** Every `/library...` route lands here — `/library`, `/library/:gifId`,
+ * `/library/favourites[/:gifId]`, and `/library/c/:collectionId[/:gifId]`.
+ * The gif id (if any) pre-selects that GIF in the detail panel, so the
+ * current selection is always a shareable link, not just in-memory
+ * state. Opening the first GIF from the closed state pushes a new
+ * history entry (so Back leaves the detail view); every subsequent
+ * selection change while one is already open — switching to a different
+ * GIF, or closing back to `null` — replaces that entry instead, so Back
+ * from the library skips over every GIF viewed along the way rather than
+ * stepping through each one. */
 function ArchiveRoute({ refreshToken }: { refreshToken: number }) {
-  const { gifId } = useParams<{ gifId: string }>()
+  const { gifId, collectionId } = useParams<{ gifId?: string; collectionId?: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
+
+  let view: LibraryView
+  let basePath: string
+  if (collectionId) {
+    view = { kind: 'collection', id: collectionId }
+    basePath = `/library/c/${collectionId}`
+  } else if (location.pathname.startsWith('/library/favourites')) {
+    view = { kind: 'favourites' }
+    basePath = '/library/favourites'
+  } else {
+    view = { kind: 'all' }
+    basePath = '/library'
+  }
+
   return (
     <Archive
+      view={view}
       initialSelectedId={gifId ?? null}
-      onSelectGif={(id) => navigate(id ? `/library/${id}` : '/library', { replace: Boolean(gifId) })}
+      onSelectGif={(id) => navigate(id ? `${basePath}/${id}` : basePath, { replace: Boolean(gifId) })}
       refreshToken={refreshToken}
     />
   )
@@ -474,6 +493,10 @@ function AuthenticatedApp({
       <Routes>
         <Route path="/" element={<Library />} />
         <Route path="/library" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
+        <Route path="/library/favourites" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
+        <Route path="/library/favourites/:gifId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
+        <Route path="/library/c/:collectionId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
+        <Route path="/library/c/:collectionId/:gifId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
         <Route path="/library/:gifId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
         <Route path="/explore" element={<Navigate to="/" replace />} />
         <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />

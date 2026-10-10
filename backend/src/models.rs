@@ -752,6 +752,39 @@ impl std::str::FromStr for ExportFormat {
     }
 }
 
+/// Named, unordered grouping of gifs (collections-design/COLLECTIONS.md
+/// §1), replacing the old flat `favourites` table. Every user has exactly
+/// one `kind = "favourites"` row — reserved name, can't be renamed or
+/// deleted — plus however many `kind = "custom"` ones they've created.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    pub id: String,
+    pub owner_id: String,
+    pub name: String,
+    pub kind: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Collection {
+    pub fn is_favourites(&self) -> bool {
+        self.kind == "favourites"
+    }
+}
+
+/// `GET /api/collections` row shape — a collection plus how many
+/// currently-visible gifs it holds (collections-design/COLLECTIONS.md §2:
+/// "Counts include only GIFs the user can currently view").
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionWithCount {
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub collection: Collection,
+    pub gif_count: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

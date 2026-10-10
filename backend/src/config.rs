@@ -20,7 +20,10 @@ impl Config {
                 .unwrap_or_else(|_| "postgres://gifiac:gifiac@localhost:5432/gifiac".to_string()),
             // Fixed per SPEC.md §10 — host-side port mapping is left to the
             // deployment tooling, so this is intentionally not env-driven.
-            port: 8080,
+            // TEMP (local manual review only, reverted immediately after):
+            // 8080 is already bound by an unrelated container on this
+            // machine.
+            port: 18080,
         }
     }
 }

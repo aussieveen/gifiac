@@ -27,6 +27,27 @@ export function PlusIcon({ size = 16, className }: IconProps) {
   )
 }
 
+export function MoreIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className} fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="19" cy="12" r="2" />
+    </svg>
+  )
+}
+
+export function GridIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className}>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </svg>
+  )
+}
+
 export function ChevronDownIcon({ size = 14, className }: IconProps) {
   return (
     <svg {...base} width={size} height={size} className={className}>

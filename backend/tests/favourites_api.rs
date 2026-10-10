@@ -264,12 +264,12 @@ async fn deleting_a_gif_removes_its_favourite_rows() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
-    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM favourites WHERE gif_id = $1")
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collection_gifs WHERE gif_id = $1")
         .bind(id)
         .fetch_one(&test_app.pool)
         .await
         .unwrap();
-    assert_eq!(remaining, 0, "deleting a gif must cascade away its favourite rows");
+    assert_eq!(remaining, 0, "deleting a gif must cascade away its collection membership rows");
 }
 
 #[tokio::test]

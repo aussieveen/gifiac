@@ -203,6 +203,27 @@ export interface LibraryEntry extends Gif {
 // `LibrarySort`, kebab-case on the wire.
 export type LibrarySort = 'newest' | 'most-used'
 
+// `GET/POST/PATCH /api/collections` response shape (collections-design/
+// COLLECTIONS.md §1) — camelCase, matching the backend's `Collection`.
+// `kind` is `'favourites'` for the one reserved, un-renameable/
+// undeletable collection every user has, `'custom'` for the rest.
+export interface Collection {
+  id: string
+  ownerId: string
+  name: string
+  kind: 'favourites' | 'custom'
+  createdAt: string
+  updatedAt: string
+}
+
+// `GET /api/collections` row shape — a `Collection` plus how many of its
+// gifs are currently visible to the caller (a collected gif someone else
+// made private, or deleted, silently drops out of this count without
+// removing the membership row — collections-design/COLLECTIONS.md §2).
+export interface CollectionWithCount extends Collection {
+  gifCount: number
+}
+
 // GET /api/admin/users response row (SPEC-CLOUD.md §7) — snake_case,
 // matching the backend's `AdminUserView`.
 export interface AdminUserView {

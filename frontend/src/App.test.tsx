@@ -23,6 +23,13 @@ vi.mock('./api', () => ({
   createExport: vi.fn(),
   subscribeExportProgress: vi.fn(),
   listGifs: vi.fn(),
+  listCollections: vi.fn(),
+  gifCollectionIds: vi.fn(),
+  createCollection: vi.fn(),
+  renameCollection: vi.fn(),
+  deleteCollection: vi.fn(),
+  addGifToCollection: vi.fn(),
+  removeGifFromCollection: vi.fn(),
   renameGif: vi.fn(),
   deleteGif: vi.fn(),
   uploadGifFile: vi.fn(),
@@ -74,6 +81,8 @@ import {
   getVideo,
   linkGif,
   listAdminUsers,
+  gifCollectionIds,
+  listCollections,
   listGifs,
   listLibrary,
   listMyTemplates,
@@ -178,6 +187,8 @@ beforeEach(() => {
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(getVideo).mockReset()
   vi.mocked(listGifs).mockReset().mockResolvedValue([])
+  vi.mocked(listCollections).mockReset().mockResolvedValue([])
+  vi.mocked(gifCollectionIds).mockReset().mockResolvedValue([])
   vi.mocked(createExport).mockReset()
   vi.mocked(subscribeExportProgress).mockReset()
   vi.mocked(getTemplate).mockReset().mockResolvedValue(null)
@@ -682,7 +693,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     renderApp()
-    await screen.findByText('My Library', { selector: 'h1' })
+    await screen.findByText('My GIFs', { selector: 'h1' })
     const header = screen.getByRole('link', { name: 'New GIF' }).closest('.app-header-right') as HTMLElement
     const importButton = within(header).getByRole('button', { name: 'Import GIFs' })
 
@@ -696,7 +707,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     renderApp()
-    await screen.findByText('My Library', { selector: 'h1' })
+    await screen.findByText('My GIFs', { selector: 'h1' })
     const importButton = screen.getByRole('button', { name: 'Import GIFs' })
     await user.click(importButton)
 
@@ -716,7 +727,7 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
 
-    await screen.findByText('My Library', { selector: 'h1' })
+    await screen.findByText('My GIFs', { selector: 'h1' })
     expect(screen.getByRole('dialog', { name: 'Import GIFs' })).toBeInTheDocument()
   })
 
@@ -727,7 +738,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     renderApp()
-    await screen.findByText('My Library', { selector: 'h1' })
+    await screen.findByText('My GIFs', { selector: 'h1' })
     await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
     await user.click(screen.getByRole('tab', { name: 'From links' }))
     fireEvent.paste(screen.getByLabelText('GIF link'), { clipboardData: { getData: () => 'https://example.com/meme.gif' } })
@@ -746,7 +757,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     renderApp()
-    await screen.findByText('My Library', { selector: 'h1' })
+    await screen.findByText('My GIFs', { selector: 'h1' })
     await user.click(screen.getByRole('button', { name: 'Import GIFs' }))
 
     const file = new File(['bytes'], 'dog.gif', { type: 'image/gif' })

@@ -1,10 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { adminDeleteGif, favouriteGif, listLibrary, recordGifUse, unfavouriteGif } from './api'
+import {
+  addGifToCollection,
+  adminDeleteGif,
+  createCollection,
+  favouriteGif,
+  gifCollectionIds,
+  listCollections,
+  listLibrary,
+  recordGifUse,
+  removeGifFromCollection,
+  unfavouriteGif,
+} from './api'
+import { CollectionPicker } from './CollectionPicker'
+import { swatchColor } from './collectionSwatch'
 import { GifThumbnail } from './GifThumbnail'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
+  BookmarkIcon,
   CheckIcon,
   CodeIcon,
   DownloadIcon,
@@ -17,7 +31,7 @@ import {
   TrashIcon,
   XIcon,
 } from './icons'
-import type { LibraryEntry, LibrarySort } from './types'
+import type { CollectionWithCount, LibraryEntry, LibrarySort } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
@@ -79,6 +93,10 @@ export function Library({ hideHeader = false }: Props = {}) {
   const [deleting, setDeleting] = useState(false)
   const toast = useToast()
   const canEdit = useCanEdit()
+  const [collections, setCollections] = useState<CollectionWithCount[]>([])
+  const [collectionsRefreshToken, setCollectionsRefreshToken] = useState(0)
+  const [memberIds, setMemberIds] = useState<string[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const canShare = typeof navigator.share === 'function'
   // Keyed by gif id so `closeDetail` can return focus to whichever grid
   // tile was open — see Archive.tsx's identical pattern.
@@ -125,6 +143,69 @@ export function Library({ hideHeader = false }: Props = {}) {
   }, [query, sort])
 
   const selected = items.find((i) => i.id === selectedId) ?? null
+
+  // Save-to-collection picker — only meaningful signed in (favouriting/
+  // collecting at all requires an account); fetched once per selection,
+  // same pattern as Archive.tsx.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    listCollections()
+      .then((cs) => {
+        if (!cancelled) setCollections(cs)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [user, collectionsRefreshToken])
+
+  useEffect(() => {
+    if (!user || !selected) {
+      setMemberIds([])
+      return
+    }
+    let cancelled = false
+    gifCollectionIds(selected.id)
+      .then((ids) => {
+        if (!cancelled) setMemberIds(ids)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, selected?.id])
+
+  async function toggleCollectionMembership(collectionId: string) {
+    if (!selected) return
+    const collection = collections.find((c) => c.id === collectionId)
+    const isMember = memberIds.includes(collectionId)
+    try {
+      if (collection?.kind === 'favourites') {
+        await toggleFavourite(selected.id, isMember)
+      } else if (isMember) {
+        await removeGifFromCollection(collectionId, selected.id)
+        if (collection) toast.show(`Removed from '${collection.name}'`)
+      } else {
+        await addGifToCollection(collectionId, selected.id)
+        if (collection) toast.show(`Saved to '${collection.name}'`)
+      }
+      setMemberIds((ids) => (isMember ? ids.filter((id) => id !== collectionId) : [...ids, collectionId]))
+      setCollectionsRefreshToken((t) => t + 1)
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function createCollectionAndAdd(name: string) {
+    if (!selected) return
+    const created = await createCollection(name)
+    await addGifToCollection(created.id, selected.id)
+    setMemberIds((ids) => [...ids, created.id])
+    setCollectionsRefreshToken((t) => t + 1)
+    toast.show(`Saved to '${created.name}'`)
+  }
 
   function recordUse(id: string) {
     recordGifUse(id)
@@ -275,18 +356,23 @@ export function Library({ hideHeader = false }: Props = {}) {
                   <LinkIcon size={14} />
                 </span>
               )}
-              <button
-                type="button"
-                className={`archive-favourite-badge ${item.is_favourited ? 'favourited' : ''}`}
-                aria-label="Favourite"
-                aria-pressed={item.is_favourited}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  toggleFavourite(item.id, item.is_favourited)
-                }}
-              >
-                <StarIcon size={14} filled={item.is_favourited} />
-              </button>
+              {/* SPEC-CLOUD.md §14: favouriting/collecting requires an
+                  account — the button doesn't exist for a logged-out
+                  visitor, rather than existing and 401ing on click. */}
+              {user && (
+                <button
+                  type="button"
+                  className={`archive-favourite-badge ${item.is_favourited ? 'favourited' : ''}`}
+                  aria-label="Favourite"
+                  aria-pressed={item.is_favourited}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleFavourite(item.id, item.is_favourited)
+                  }}
+                >
+                  <StarIcon size={14} filled={item.is_favourited} />
+                </button>
+              )}
             </div>
           ))}
           {!loading && items.length === 0 && <p className="va-hint">No public GIFs yet.</p>}
@@ -331,10 +417,12 @@ export function Library({ hideHeader = false }: Props = {}) {
                 )}
               </div>
               <div className="archive-panel-header">
-                <p className="archive-panel-title-text">{selected.name}</p>
+                <p className="archive-panel-title-text">
+                  {selected.name || <span className="archive-panel-untitled">Untitled GIF</span>}
+                </p>
                 {selected.owner_handle && selected.owner_slug && (
                   <Link className="archive-owner-link" to={profileUrl(selected.owner_slug)}>
-                    {selected.owner_handle}
+                    by @{selected.owner_handle}
                   </Link>
                 )}
               </div>
@@ -349,15 +437,66 @@ export function Library({ hideHeader = false }: Props = {}) {
                   <button className="btn btn-primary archive-copy-link-btn" onClick={copyLink}>
                     <LinkIcon /> Copy link
                   </button>
-                  <button
-                    type="button"
-                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label="Favourite"
-                    aria-pressed={selected.is_favourited}
-                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
-                  >
-                    <StarIcon filled={selected.is_favourited} />
-                  </button>
+                  {/* SPEC-CLOUD.md §14: favouriting/collecting requires an
+                      account — neither button exists for a logged-out
+                      visitor, rather than existing and 401ing on click. */}
+                  {user && (
+                    <>
+                      <button
+                        type="button"
+                        className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                        aria-label="Favourite"
+                        aria-pressed={selected.is_favourited}
+                        onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                      >
+                        <StarIcon filled={selected.is_favourited} />
+                      </button>
+                      <div className="collection-picker-anchor">
+                        <button
+                          type="button"
+                          className="archive-favourite-btn"
+                          aria-label="Save to collection"
+                          aria-expanded={pickerOpen}
+                          onClick={() => setPickerOpen((o) => !o)}
+                        >
+                          <BookmarkIcon size={16} />
+                        </button>
+                        {pickerOpen && (
+                          <CollectionPicker
+                            collections={collections}
+                            memberIds={memberIds}
+                            onToggle={toggleCollectionMembership}
+                            onCreateAndAdd={createCollectionAndAdd}
+                            onClose={() => setPickerOpen(false)}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {user && memberIds.length > 0 && (
+                <div className="library-in-collections">
+                  <p className="library-in-collections-label">In collections</p>
+                  <div className="library-in-collections-chips">
+                    {collections
+                      .filter((c) => memberIds.includes(c.id))
+                      .map((c) => (
+                        <Link
+                          key={c.id}
+                          className="library-collection-chip"
+                          to={c.kind === 'favourites' ? '/library/favourites' : `/library/c/${c.id}`}
+                        >
+                          {c.kind === 'favourites' ? (
+                            <StarIcon size={12} filled />
+                          ) : (
+                            <span className="library-sidebar-swatch collection-picker-swatch" style={{ background: swatchColor(c.id) }} />
+                          )}
+                          {c.name}
+                        </Link>
+                      ))}
+                  </div>
                 </div>
               )}
 
@@ -405,15 +544,39 @@ export function Library({ hideHeader = false }: Props = {}) {
                       <LinkIcon /> Copy link
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
-                    aria-label="Favourite"
-                    aria-pressed={selected.is_favourited}
-                    onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
-                  >
-                    <StarIcon filled={selected.is_favourited} />
-                  </button>
+                  {user && (
+                    <>
+                      <button
+                        type="button"
+                        className={`archive-favourite-btn ${selected.is_favourited ? 'on' : ''}`}
+                        aria-label="Favourite"
+                        aria-pressed={selected.is_favourited}
+                        onClick={() => toggleFavourite(selected.id, selected.is_favourited)}
+                      >
+                        <StarIcon filled={selected.is_favourited} />
+                      </button>
+                      <div className="collection-picker-anchor">
+                        <button
+                          type="button"
+                          className="archive-favourite-btn"
+                          aria-label="Save to collection"
+                          aria-expanded={pickerOpen}
+                          onClick={() => setPickerOpen((o) => !o)}
+                        >
+                          <BookmarkIcon size={16} />
+                        </button>
+                        {pickerOpen && (
+                          <CollectionPicker
+                            collections={collections}
+                            memberIds={memberIds}
+                            onToggle={toggleCollectionMembership}
+                            onCreateAndAdd={createCollectionAndAdd}
+                            onClose={() => setPickerOpen(false)}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

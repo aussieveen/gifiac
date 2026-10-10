@@ -180,6 +180,22 @@
   color: var(--on-accent);
 }
 
+/* Solid fill, not an outline/text-link — for a destructive action that's
+ * the dialog's own primary action (collections-design/COLLECTIONS.md §4:
+ * "danger fill #c9483a, white text"), as opposed to .btn-danger-pill
+ * sitting secondary to another action, or plain .btn-danger standing
+ * alone at the bottom of a settings list. */
+.btn-danger-fill {
+  background: #c9483a;
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-danger-fill:hover:not(:disabled) {
+  background: #b53c2f;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2521,36 +2537,239 @@ button {
   border-color: var(--text);
 }
 
-/* SPEC-CLOUD.md §14: My Library's "My GIFs" / "Favourites" mode toggle —
-   swaps the whole dataset/toolbar below it, so it's a segmented control,
-   not another filter chip alongside .archive-chips (those filter one
-   already-fetched list; this one changes which list is fetched). */
-.mode-toggle {
-  display: flex;
-  gap: 4px;
-  width: fit-content;
-  padding: 4px;
-  margin-bottom: 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+/* collections-design/COLLECTIONS.md §2: My Library's sidebar — All GIFs
+   and Favourites fixed at the top, then the user's own collections,
+   replacing the old My GIFs/Favourites mode-toggle pills. Swaps the whole
+   dataset/toolbar in .library-header, same "changes which list is
+   fetched, not a filter over one already-fetched list" relationship the
+   old toggle had to .archive-chips.
+
+   Four pieces — sidebar, header, tile grid, panel — on one CSS grid with
+   named areas, not nested flex boxes:
+     "sidebar header header"
+     "sidebar tiles  panel"
+   The header (title block + toolbar) spans the tiles+panel columns, so
+   it stretches to the same right edge the panel does rather than being
+   squeezed into just the tiles column's width; the sidebar spans both
+   rows down the left. The panel's top edge lines up with the header's
+   top edge (both start at row 1) and it's `position: sticky` against
+   that same row — see .archive-panel. The panel always renders (even
+   with nothing selected, showing .archive-panel-empty) so the grid
+   never has to reshuffle columns depending on selection state.
+   Column widths step down across three desktop breakpoints (1024px+);
+   below 1024px this collapses to a plain block stack instead (sidebar
+   becomes the mobile chip-row, panel becomes a full-screen overlay —
+   unchanged from before, see the existing <1024px rules further down). */
+.library-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-areas:
+    'header header'
+    'tiles panel';
+  gap: 24px;
+  align-items: start;
 }
 
-.mode-toggle button {
-  height: 36px;
-  padding: 0 18px;
+@media (min-width: 1200px) and (max-width: 1439.98px) {
+  .library-grid {
+    grid-template-columns: 200px minmax(0, 1fr) 360px;
+    grid-template-areas:
+      'sidebar header header'
+      'sidebar tiles panel';
+    gap: 24px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .library-grid {
+    grid-template-columns: 240px minmax(0, 1fr) 400px;
+    grid-template-areas:
+      'sidebar header header'
+      'sidebar tiles panel';
+    gap: 28px;
+  }
+}
+
+.library-header {
+  grid-area: header;
+  min-width: 0;
+}
+
+.library-sidebar {
+  /* Fills its `.library-grid` track — 240px at ≥1440px, 200px at
+     1200-1439px (see .library-grid's own media queries) — rather than a
+     fixed width of its own; a hardcoded width here previously overrode
+     the narrower 1200-1439px track and spilled into the content column.
+     The dropdown variant (.library-nav-dropdown .library-sidebar) isn't
+     a grid item and sets its own fixed width instead. */
+  grid-area: sidebar;
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 1024-1199px: no room for a 240/200px sidebar column alongside a usable
+   grid+panel — hidden in favour of the title-dropdown nav instead (see
+   .archive-title-dropdown-trigger / .library-nav-dropdown below). */
+@media (min-width: 1024px) and (max-width: 1199.98px) {
+  .library-sidebar {
+    display: none;
+  }
+}
+
+/* The dropdown variant of the sidebar, reusing the exact same component —
+   only ever shown 1024-1199px (see .archive-title-dropdown-trigger's
+   chevron, which is the only other thing visible in that range). */
+.library-nav-dropdown-wrap {
+  position: relative;
+}
+
+.archive-title-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
   border: none;
-  border-radius: 7px;
+  padding: 0;
+  text-align: left;
+  cursor: default;
+}
+
+.archive-title-dropdown-chevron {
+  display: none;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.library-nav-dropdown {
+  display: none;
+}
+
+@media (min-width: 1024px) and (max-width: 1199.98px) {
+  .archive-title-dropdown-trigger {
+    cursor: pointer;
+  }
+
+  .archive-title-dropdown-chevron {
+    display: block;
+  }
+
+  .library-nav-dropdown {
+    display: block;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 50;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+    padding: 10px;
+  }
+
+  .library-nav-dropdown .library-sidebar {
+    display: flex;
+    width: 240px;
+  }
+}
+
+.library-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
   background: transparent;
   color: var(--text-muted);
   font-family: var(--font-body);
   font-size: 14px;
-  font-weight: 500;
+  text-align: left;
+  border-left: 3px solid transparent;
 }
 
-.mode-toggle button.active {
-  background: var(--raised);
+.library-sidebar-item .library-sidebar-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-sidebar-item-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.library-sidebar-item.active {
+  background: #26272f;
   color: var(--text);
+  font-weight: 700;
+  border-left-color: var(--accent);
+}
+
+.library-sidebar-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.library-sidebar-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 8px 4px;
+}
+
+.library-sidebar-label {
+  margin: 4px 10px 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.library-sidebar-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 10px;
+  margin-top: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.library-sidebar-new-form {
+  padding: 0 2px;
+}
+
+.library-sidebar-new-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  box-shadow: 0 0 0 2px rgba(245, 197, 24, 0.2);
+}
+
+.library-sidebar-new-hint {
+  margin: 4px 10px 0;
+  font-size: 11px;
+  color: var(--text-subtle);
 }
 
 .archive-favourites-empty {
@@ -2579,12 +2798,6 @@ button {
   max-width: 320px;
 }
 
-.archive-layout {
-  display: flex;
-  gap: 32px;
-  margin-top: 16px;
-  align-items: flex-start;
-}
 
 .profile-topbar {
   display: flex;
@@ -2715,8 +2928,24 @@ h1.profile-handle {
   color: var(--accent);
 }
 
+/* Library.tsx (Global Library) still uses this simple two-up flex layout
+ * — only My Library (Archive.tsx) moved to the .library-grid/sticky-panel
+ * treatment. Grid + panel side by side, panel sized by its own
+ * .archive-panel width. */
+.archive-layout {
+  display: flex;
+  gap: 32px;
+  margin-top: 16px;
+  align-items: flex-start;
+}
+
 .archive-grid {
+  /* flex:1 for Library.tsx's plain flex .archive-layout; grid-area for
+     Archive.tsx's named-area .library-grid — each ignored by the other's
+     container type, so one rule serves both. */
   flex: 1;
+  grid-area: tiles;
+  min-width: 0;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 14px;
@@ -2815,19 +3044,48 @@ h1.profile-handle {
   display: contents;
 }
 
-/* Spans every column so the divider reads as a full-width section break
-   between the reusable and one-off groups (SPEC.md §8), not just another
-   grid cell. Desktop only — see the <1024px override further down, which
-   hides it in favor of the One-offs filter chip on a cramped grid. */
-.archive-grid-divider {
-  grid-column: 1 / -1;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-subtle);
+/* Desktop-only (≥1024px) — tweaks the grid/badge layout without touching
+ * the <1024px mobile rules above, which stay exactly as they were. */
+@media (min-width: 1024px) {
+  .archive-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+
+  /* Owner-related badges (lock, external) share the top-left corner;
+   * the favourite star gets top-right to itself, no overlap possible
+   * between the two groups. 8px inset, 26px badges, 6px gap. */
+  .archive-badge-lock,
+  .archive-badge-external {
+    top: 8px;
+    left: 8px;
+  }
+
+  .archive-badge-lock ~ .archive-badge-external {
+    left: 40px;
+  }
+
+  .archive-favourite-badge {
+    top: 8px;
+    right: 8px;
+  }
+
+  .archive-badge-external ~ .archive-favourite-badge {
+    right: 8px;
+  }
+
+  /* A tile under 200px wide (the auto-fill grid can get there on a
+   * narrow-ish desktop/tablet width) hasn't got room for three badges —
+   * drop the external-link one; the detail panel already shows the same
+   * "Linked" note once a tile's opened. */
+  .archive-thumb {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 199.98px) {
+    .archive-badge-external {
+      display: none;
+    }
+  }
 }
 
 .archive-panel-external-note {
@@ -2857,16 +3115,14 @@ h1.profile-handle {
 }
 
 .archive-panel {
-  /* Design brief §4's fixed 460px, minus 20px padding either side, leaves
-     420px for the preview — narrower than the 480px a GIF export can be
-     (backend/src/scale.rs MAX_WIDTH). The old 520px width here existed
-     specifically to avoid that: browsers use cheap, low-quality real-time
-     scaling for *animated* GIFs, and a 480px one squeezed into a
-     meaningfully narrower box has visibly mangled fine text before (a
-     capital "U" reading as "II") even though the source file was clean.
-     Following the brief's number as specified; worth an eye on a
-     real caption-heavy GIF (not just this section's synthetic previews)
-     to see whether that artifact is back. */
+  /* Default (Library.tsx's .archive-layout, a plain flex row): a fixed
+     width of its own, same reasoning as always — GIF exports can be up
+     to 480px wide (backend/src/scale.rs MAX_WIDTH), and browsers use
+     cheap, low-quality real-time scaling for *animated* GIFs, so a
+     caption-heavy one squeezed much narrower than that has visibly
+     mangled fine text before (a capital "U" reading as "II") even
+     though the source file was clean. Archive.tsx's .library-grid
+     overrides this to 100% below, to fill its grid track instead. */
   width: 460px;
   flex-shrink: 0;
   background: var(--surface);
@@ -2879,11 +3135,27 @@ h1.profile-handle {
   /* Without this, clicking a thumb several rows down the grid opens a
      panel that's already scrolled off the top of the viewport — .app-header
      isn't sticky itself, so there's nothing above to clear. Sticking the
-     panel keeps it in view as the grid scrolls past it. */
+     panel keeps it in view as the grid scrolls past it. In .library-grid
+     (My Library) this additionally lines its top edge up with the title
+     block's, since both start at the same grid row.
+     Deliberately no max-height/overflow-y cap here (desktop) — an inner
+     scrollbar on the panel clips the Save-to-collection popover (and any
+     other absolutely-positioned content that overflows the panel's own
+     box) into a confusing truncated scroll area. A panel taller than the
+     viewport just scrolls with the page instead, same as the grid beside
+     it. Mobile's full-screen overlay variant (<1024px, further down)
+     still wants its own max-height/overflow — unaffected, same
+     specificity, later in the cascade. */
   position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 32px);
-  overflow-y: auto;
+  top: 24px;
+}
+
+/* My Library (Archive.tsx): fills its `.library-grid` track
+   (340/360/400px depending on breakpoint — see .library-grid's own
+   comment) instead of the fixed width above. */
+.library-grid .archive-panel {
+  grid-area: panel;
+  width: 100%;
 }
 
 .archive-panel-empty {
@@ -2993,6 +3265,11 @@ h1.profile-handle {
 
 /* Global Library's read-only equivalent of .archive-panel-name — the name
    isn't yours to rename, so it's plain text, not an input. */
+.archive-panel-untitled {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .archive-panel-title-text {
   flex: 1;
   min-width: 0;
@@ -3178,9 +3455,381 @@ h1.profile-handle {
   color: var(--accent);
 }
 
+.archive-toast-action {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0;
+  margin-left: 4px;
+}
+
+/* collections-design/COLLECTIONS.md §3: the "Save to collection" popover. */
+.collection-picker-anchor {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.collection-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Anchored from the right, not the left: the "Save to collection"
+   * button sits near the right edge of the detail panel, which itself
+   * sits near the right edge of the viewport — a left-anchored 300px
+   * popover ran off-screen and forced a horizontal scrollbar. */
+  right: 0;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  background: #22232b;
+  border: 1px solid #34353f;
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+  padding: 12px;
+  z-index: 50;
+}
+
+.collection-picker-title {
+  margin: 0 4px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.collection-picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.collection-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  text-align: left;
+}
+
+.collection-picker-row:hover {
+  background: var(--raised);
+}
+
+.collection-picker-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+}
+
+.collection-picker-checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.collection-picker-swatch {
+  width: 14px;
+  height: 14px;
+}
+
+.collection-picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-picker-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 8px 4px;
+}
+
+.collection-picker-new {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.collection-picker-new-input {
+  flex: 1;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.collection-picker-create {
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.collection-picker-error {
+  margin: 8px 4px 0;
+}
+
+.library-in-collections {
+  margin-top: -4px;
+}
+
+.library-in-collections-label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.library-in-collections-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library-collection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #22232b;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.library-collection-chip .library-sidebar-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.library-remove-from-collection {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.library-collection-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--text-subtle);
+}
+
+.library-collection-subtitle svg {
+  flex-shrink: 0;
+}
+
+.library-collection-menu {
+  position: relative;
+}
+
+.library-collection-menu-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.library-collection-menu-btn:hover {
+  border-color: var(--text-subtle);
+}
+
+.library-collection-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+  padding: 6px;
+  z-index: 50;
+}
+
+.library-collection-menu-dropdown button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  text-align: left;
+}
+
+.library-collection-menu-dropdown button:hover {
+  background: var(--raised);
+}
+
+.library-collection-menu-danger {
+  color: var(--danger);
+}
+
+/* Small confirm/rename dialogs (collections-design/COLLECTIONS.md §4) —
+ * same overlay treatment as .import-link-overlay/-modal, just a much
+ * smaller fixed-width box since there's no tabbed content to fit. */
+.app-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 7, 0.72);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-dialog {
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  padding: 24px;
+}
+
+.app-dialog-title {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.app-dialog-body {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.app-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.app-dialog-label {
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.app-dialog-input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 /* ---------- archive (My Library / Global Library share this CSS): mobile & tablet ---------- */
 
 @media (max-width: 1023.98px) {
+  /* collections-design/COLLECTIONS.md §5: below the sidebar's breakpoint
+   * it becomes a horizontally-scrolling row of chips under the page
+   * title, instead of a 240px fixed column — same nav items/order, no
+   * "COLLECTIONS" section label or divider (there's no room, and a flat
+   * row of chips doesn't need one). */
+  .library-grid {
+    display: block;
+  }
+
+  .library-sidebar {
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .library-sidebar-divider,
+  .library-sidebar-label {
+    display: none;
+  }
+
+  .library-sidebar-item {
+    flex-shrink: 0;
+    width: auto;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+  }
+
+  .library-sidebar-item .library-sidebar-item-name {
+    flex: initial;
+  }
+
+  .library-sidebar-item.active {
+    border-color: var(--accent);
+    border-left-color: var(--accent);
+  }
+
+  .library-sidebar-new {
+    flex-shrink: 0;
+    width: auto;
+    height: 36px;
+    padding: 0 14px;
+    margin-top: 0;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .library-sidebar-new-form {
+    flex-shrink: 0;
+    width: 180px;
+  }
+
+  .library-sidebar-new-input {
+    height: 36px;
+    border-radius: 999px;
+  }
+
   .archive-title-row {
     align-items: center;
   }
@@ -3241,10 +3890,6 @@ h1.profile-handle {
     gap: 10px;
   }
 
-  .archive-grid-divider {
-    display: none;
-  }
-
   /* The panel becomes the full-screen "GIF detail" view purely via CSS —
      same JSX as the desktop side panel, no separate mobile component. */
   .archive-panel {
@@ -3260,11 +3905,11 @@ h1.profile-handle {
     gap: 16px;
   }
 
-  .archive-layout.has-selection .archive-grid {
+  .library-grid.has-selection .archive-grid {
     display: none;
   }
 
-  .archive-layout.has-selection .archive-panel {
+  .library-grid.has-selection .archive-panel {
     display: flex;
   }
 

@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod collections;
 mod config;
 mod exports;
 pub(crate) mod gifs;
@@ -81,7 +82,21 @@ pub fn api_router() -> Router<Arc<AppState>> {
             "/gifs/{id}/favourite",
             post(gifs::favourite_gif).delete(gifs::unfavourite_gif),
         )
+        .route("/gifs/{id}/collections", get(collections::collections_for_gif))
         .route("/favourites", get(gifs::list_favourites))
+        .route(
+            "/collections",
+            get(collections::list_collections).post(collections::create_collection),
+        )
+        .route(
+            "/collections/{id}",
+            patch(collections::rename_collection).delete(collections::delete_collection),
+        )
+        .route("/collections/{id}/gifs", get(collections::list_collection_gifs))
+        .route(
+            "/collections/{id}/gifs/{gifId}",
+            post(collections::add_gif).delete(collections::remove_gif),
+        )
         .route("/preferences", put(preferences::update_preferences))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled).delete(admin::delete_user))

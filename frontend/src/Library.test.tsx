@@ -13,9 +13,23 @@ vi.mock('./api', () => ({
   getCurrentUser: vi.fn(),
   favouriteGif: vi.fn(),
   unfavouriteGif: vi.fn(),
+  listCollections: vi.fn(),
+  gifCollectionIds: vi.fn(),
+  createCollection: vi.fn(),
+  addGifToCollection: vi.fn(),
+  removeGifFromCollection: vi.fn(),
 }))
 
-import { adminDeleteGif, favouriteGif, getCurrentUser, listLibrary, recordGifUse, unfavouriteGif } from './api'
+import {
+  adminDeleteGif,
+  favouriteGif,
+  getCurrentUser,
+  gifCollectionIds,
+  listCollections,
+  listLibrary,
+  recordGifUse,
+  unfavouriteGif,
+} from './api'
 
 const entryA: LibraryEntry = {
   id: 'g1',
@@ -60,6 +74,8 @@ beforeEach(() => {
   vi.mocked(adminDeleteGif).mockReset()
   vi.mocked(favouriteGif).mockReset()
   vi.mocked(unfavouriteGif).mockReset()
+  vi.mocked(listCollections).mockReset().mockResolvedValue([])
+  vi.mocked(gifCollectionIds).mockReset().mockResolvedValue([])
   // Library.tsx uses useCurrentUser() itself (only to gate the admin-only
   // Delete button) — default to a plain signed-in user; individual tests
   // override this to check the admin case.
@@ -115,7 +131,7 @@ describe('Library', () => {
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
     expect(screen.getByText('cat jumping')).toBeInTheDocument()
-    const link = screen.getByRole('link', { name: 'simon' })
+    const link = screen.getByRole('link', { name: 'by @simon' })
     expect(link).toHaveAttribute('href', '/u/simon')
   })
 
@@ -129,7 +145,7 @@ describe('Library', () => {
 
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
 
-    const link = screen.getByRole('link', { name: 'Simon_Mc' })
+    const link = screen.getByRole('link', { name: 'by @Simon_Mc' })
     expect(link).toHaveAttribute('href', '/u/simon_mc2')
   })
 
@@ -343,5 +359,29 @@ describe('Library favourites', () => {
 
     expect(unfavouriteGif).toHaveBeenCalledWith('g1')
     expect(await within(panel).findByRole('button', { name: 'Favourite', pressed: false })).toBeInTheDocument()
+  })
+})
+
+describe('Library logged out', () => {
+  it('shows no favourite or save-to-collection button on a grid tile', async () => {
+    vi.mocked(getCurrentUser).mockReset().mockResolvedValue(null)
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    renderLibrary()
+
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.queryByRole('button', { name: 'Favourite' })).not.toBeInTheDocument()
+  })
+
+  it('shows no favourite or save-to-collection button in the detail panel', async () => {
+    vi.mocked(getCurrentUser).mockReset().mockResolvedValue(null)
+    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    const user = userEvent.setup()
+    renderLibrary()
+
+    await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
+
+    expect(screen.queryByRole('button', { name: 'Favourite' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save to collection' })).not.toBeInTheDocument()
+    expect(listCollections).not.toHaveBeenCalled()
   })
 })

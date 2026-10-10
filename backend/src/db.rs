@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminActionView, AdminUserView, ExportFormat, ExportJob, Gif, IngestJob, LibrarySort, LoginCode, NewGif,
-    NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload, TemplateSummary,
-    UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
+    AdminActionView, AdminUserView, Collection, CollectionWithCount, ExportFormat, ExportJob, Gif, IngestJob,
+    LibrarySort, LoginCode, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload,
+    TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -1113,19 +1113,25 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort)
 }
 
 pub async fn is_favourited(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<bool> {
-    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM favourites WHERE user_id = $1 AND gif_id = $2")
-        .bind(user_id)
-        .bind(gif_id)
-        .fetch_optional(pool)
-        .await?;
+    let exists: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM collection_gifs cg JOIN collections c ON c.id = cg.collection_id \
+         WHERE c.owner_id = $1 AND c.kind = 'favourites' AND cg.gif_id = $2",
+    )
+    .bind(user_id)
+    .bind(gif_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(exists.is_some())
 }
 
 pub async fn list_favourite_gif_ids(pool: &PgPool, user_id: &str) -> Result<HashSet<String>> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT gif_id FROM favourites WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_all(pool)
-        .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT cg.gif_id FROM collection_gifs cg JOIN collections c ON c.id = cg.collection_id \
+         WHERE c.owner_id = $1 AND c.kind = 'favourites'",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
     Ok(ids.into_iter().collect())
 }
 
@@ -1154,14 +1160,17 @@ pub async fn get_favouritable_gif(pool: &PgPool, id: &str, viewer_id: &str) -> R
 }
 
 /// Idempotent — saving an already-favourited gif again leaves its
-/// original `created_at` untouched rather than bumping it back to the top
-/// of Saved.
+/// original `added_at` untouched rather than bumping it back to the top
+/// of Saved. Lazily creates the caller's Favourites collection on first
+/// use (collections-design/COLLECTIONS.md §1: "created on demand or by
+/// migration").
 pub async fn add_favourite(pool: &PgPool, user_id: &str, gif_id: &str, created_at: &str) -> Result<()> {
+    let favourites = get_or_create_favourites_collection(pool, user_id, created_at).await?;
     sqlx::query(
-        "INSERT INTO favourites (user_id, gif_id, created_at) VALUES ($1, $2, $3) \
-         ON CONFLICT (user_id, gif_id) DO NOTHING",
+        "INSERT INTO collection_gifs (collection_id, gif_id, added_at) VALUES ($1, $2, $3) \
+         ON CONFLICT (collection_id, gif_id) DO NOTHING",
     )
-    .bind(user_id)
+    .bind(&favourites.id)
     .bind(gif_id)
     .bind(created_at)
     .execute(pool)
@@ -1174,36 +1183,252 @@ pub async fn add_favourite(pool: &PgPool, user_id: &str, gif_id: &str, created_a
 /// visibility: unfavouriting your own bookmark is always allowed, even
 /// for a gif its owner has since made private (SPEC-CLOUD.md §14).
 pub async fn remove_favourite(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM favourites WHERE user_id = $1 AND gif_id = $2")
+    sqlx::query(
+        "DELETE FROM collection_gifs cg USING collections c \
+         WHERE cg.collection_id = c.id AND c.owner_id = $1 AND c.kind = 'favourites' AND cg.gif_id = $2",
+    )
+    .bind(user_id)
+    .bind(gif_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The caller's saved gifs (SPEC-CLOUD.md §14, `GET /api/favourites`),
+/// newest-favourited first — ordered by `collection_gifs.added_at`, not
+/// the gif's own, so re-favouriting an old gif bumps it back to the top.
+/// Filtered to gifs still visible to the viewer (public, or owned by
+/// them): un-publishing a gif doesn't delete its membership row, so this
+/// filter is what makes it disappear from Saved and reappear if it's
+/// re-published later.
+pub async fn list_favourite_gifs(pool: &PgPool, user_id: &str) -> Result<Vec<PublicGif>> {
+    let sql = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
+         gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
+         gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
+         users.handle AS owner_handle, users.slug AS owner_slug \
+         FROM collection_gifs cg \
+         JOIN collections c ON c.id = cg.collection_id \
+         JOIN gifs ON gifs.id = cg.gif_id \
+         JOIN users ON users.id = gifs.user_id \
+         WHERE c.owner_id = $1 AND c.kind = 'favourites' AND (gifs.is_public = true OR gifs.user_id = $1) \
+         ORDER BY cg.added_at DESC";
+    sqlx::query_as::<_, PublicGif>(sql)
         .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Returns the caller's Favourites collection, creating it on first use.
+/// The `ON CONFLICT ... DO UPDATE` is a no-op write (sets `owner_id` to
+/// itself) purely so `RETURNING` still works if a concurrent call created
+/// it first — a plain `INSERT ... ON CONFLICT DO NOTHING` would return no
+/// row in that race.
+pub async fn get_or_create_favourites_collection(pool: &PgPool, owner_id: &str, now: &str) -> Result<Collection> {
+    if let Some(existing) = sqlx::query_as::<_, Collection>(
+        "SELECT id, owner_id, name, kind, created_at, updated_at FROM collections \
+         WHERE owner_id = $1 AND kind = 'favourites'",
+    )
+    .bind(owner_id)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(existing);
+    }
+    sqlx::query_as::<_, Collection>(
+        "INSERT INTO collections (id, owner_id, name, kind, created_at, updated_at) \
+         VALUES ($1, $2, 'Favourites', 'favourites', $3, $3) \
+         ON CONFLICT (owner_id, lower(name)) DO UPDATE SET owner_id = collections.owner_id \
+         RETURNING id, owner_id, name, kind, created_at, updated_at",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(owner_id)
+    .bind(now)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// `GET /api/collections` (collections-design/COLLECTIONS.md §2): every
+/// collection the caller owns, Favourites first then custom collections
+/// alphabetically (case-insensitive), each with a count of its
+/// currently-visible gifs — a member gif made private (or deleted) by
+/// someone else drops out of the count without touching the membership
+/// row, same visibility-at-read-time rule as Favourites always used.
+pub async fn list_collections(pool: &PgPool, owner_id: &str) -> Result<Vec<CollectionWithCount>> {
+    sqlx::query_as::<_, CollectionWithCount>(
+        "SELECT c.id, c.owner_id, c.name, c.kind, c.created_at, c.updated_at, \
+             COUNT(cg.gif_id) FILTER (WHERE g.is_public = true OR g.user_id = c.owner_id) AS gif_count \
+         FROM collections c \
+         LEFT JOIN collection_gifs cg ON cg.collection_id = c.id \
+         LEFT JOIN gifs g ON g.id = cg.gif_id \
+         WHERE c.owner_id = $1 \
+         GROUP BY c.id \
+         ORDER BY (c.kind = 'favourites') DESC, lower(c.name) ASC",
+    )
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// Ownership-scoped lookup, the same "invisible to anyone but the owner"
+/// treatment every other owned resource in this app gets — a collection
+/// that doesn't exist and one that exists but belongs to someone else
+/// both read as `None`.
+pub async fn get_collection(pool: &PgPool, id: &str, owner_id: &str) -> Result<Option<Collection>> {
+    sqlx::query_as::<_, Collection>(
+        "SELECT id, owner_id, name, kind, created_at, updated_at FROM collections WHERE id = $1 AND owner_id = $2",
+    )
+    .bind(id)
+    .bind(owner_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// `POST /api/collections` — `Ok(None)` means the name collided with an
+/// existing collection (case-insensitively), including "Favourites"
+/// itself once that row exists for this user; the route layer turns that
+/// into a 409 with the exact wording collections-design/COLLECTIONS.md §4
+/// specifies. Reserved-name rejection ("'Favourites' is reserved" for a
+/// user with no Favourites collection yet) is a pre-check at the route
+/// layer instead, since it can't rely on the DB constraint existing yet.
+pub async fn create_collection(pool: &PgPool, owner_id: &str, name: &str, now: &str) -> Result<Option<Collection>> {
+    let result = sqlx::query_as::<_, Collection>(
+        "INSERT INTO collections (id, owner_id, name, kind, created_at, updated_at) \
+         VALUES ($1, $2, $3, 'custom', $4, $4) \
+         RETURNING id, owner_id, name, kind, created_at, updated_at",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(owner_id)
+    .bind(name)
+    .bind(now)
+    .fetch_one(pool)
+    .await;
+    match result {
+        Ok(collection) => Ok(Some(collection)),
+        Err(sqlx::Error::Database(db_err)) if db_err.constraint() == Some("idx_collections_owner_name") => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// `PATCH /api/collections/{id}` — caller must already have confirmed via
+/// `get_collection` that this isn't the Favourites collection; this just
+/// handles the name-uniqueness race the same way `create_collection` does.
+pub async fn rename_collection(pool: &PgPool, id: &str, owner_id: &str, name: &str, now: &str) -> Result<Option<Collection>> {
+    let result = sqlx::query_as::<_, Collection>(
+        "UPDATE collections SET name = $1, updated_at = $2 WHERE id = $3 AND owner_id = $4 \
+         RETURNING id, owner_id, name, kind, created_at, updated_at",
+    )
+    .bind(name)
+    .bind(now)
+    .bind(id)
+    .bind(owner_id)
+    .fetch_optional(pool)
+    .await;
+    match result {
+        Ok(collection) => Ok(collection),
+        Err(sqlx::Error::Database(db_err)) if db_err.constraint() == Some("idx_collections_owner_name") => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// `DELETE /api/collections/{id}` — cascades away its `collection_gifs`
+/// rows only (`ON DELETE CASCADE`); the gifs themselves are never touched.
+/// `false` means no such collection owned by this caller (404) — the
+/// Favourites-can't-be-deleted rule is enforced by the route layer via
+/// `get_collection`, same as rename.
+pub async fn delete_collection(pool: &PgPool, id: &str, owner_id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM collections WHERE id = $1 AND owner_id = $2")
+        .bind(id)
+        .bind(owner_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// `POST /api/collections/{id}/gifs` — idempotent. The caller must own
+/// `collection_id` (checked by the route layer via `get_collection`); the
+/// gif's own visibility is re-checked here via `get_favouritable_gif`'s
+/// rule (own, or public) — the same eligibility Favourites has always
+/// enforced, now shared by every collection.
+pub async fn add_gif_to_collection(pool: &PgPool, collection_id: &str, gif_id: &str, added_at: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO collection_gifs (collection_id, gif_id, added_at) VALUES ($1, $2, $3) \
+         ON CONFLICT (collection_id, gif_id) DO NOTHING",
+    )
+    .bind(collection_id)
+    .bind(gif_id)
+    .bind(added_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `DELETE /api/collections/{id}/gifs/{gifId}` — idempotent, no
+/// visibility check: removing a gif you can no longer see from your own
+/// collection is still always allowed.
+pub async fn remove_gif_from_collection(pool: &PgPool, collection_id: &str, gif_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM collection_gifs WHERE collection_id = $1 AND gif_id = $2")
+        .bind(collection_id)
         .bind(gif_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-/// The caller's saved gifs (SPEC-CLOUD.md §14, `GET /api/favourites`),
-/// newest-favourited first — ordered by `favourites.created_at`, not the
-/// gif's own, so re-favouriting an old gif bumps it back to the top.
-/// Filtered to gifs still visible to the viewer (public, or owned by
-/// them): un-publishing a gif doesn't delete its favourite row (see
-/// migration 0013), so this filter is what makes it disappear from Saved
-/// and reappear if it's re-published later.
-pub async fn list_favourite_gifs(pool: &PgPool, user_id: &str) -> Result<Vec<PublicGif>> {
-    let sql = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
+/// `GET /api/collections/{id}/gifs` — same visibility-at-read-time rule
+/// and attributed shape as `list_favourite_gifs`, scoped to one
+/// collection instead of the fixed `kind = 'favourites'` one, with the
+/// same `q` search `list_gifs`/`list_library` already support.
+pub async fn list_collection_gifs(pool: &PgPool, collection_id: &str, owner_id: &str, q: Option<&str>) -> Result<Vec<PublicGif>> {
+    const BASE: &str = "SELECT gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
          gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
          users.handle AS owner_handle, users.slug AS owner_slug \
-         FROM favourites \
-         JOIN gifs ON gifs.id = favourites.gif_id \
+         FROM collection_gifs cg \
+         JOIN gifs ON gifs.id = cg.gif_id \
          JOIN users ON users.id = gifs.user_id \
-         WHERE favourites.user_id = $1 AND (gifs.is_public = true OR gifs.user_id = $1) \
-         ORDER BY favourites.created_at DESC";
-    sqlx::query_as::<_, PublicGif>(sql)
-        .bind(user_id)
-        .fetch_all(pool)
-        .await
-        .map_err(Into::into)
+         WHERE cg.collection_id = $1 AND (gifs.is_public = true OR gifs.user_id = $2)";
+
+    match q.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => {
+            let sql = format!("{BASE} AND (gifs.name ILIKE $3 ESCAPE '\\' OR gifs.caption_text ILIKE $3 ESCAPE '\\') ORDER BY cg.added_at DESC");
+            let pattern = format!("%{}%", escape_like(q));
+            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+                .bind(collection_id)
+                .bind(owner_id)
+                .bind(pattern)
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+        None => {
+            let sql = format!("{BASE} ORDER BY cg.added_at DESC");
+            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+                .bind(collection_id)
+                .bind(owner_id)
+                .fetch_all(pool)
+                .await
+                .map_err(Into::into)
+        }
+    }
+}
+
+/// For a gif's detail panel "In collections" chips — every collection the
+/// *viewer* owns that this gif belongs to (collections are private, so
+/// this never reveals anyone else's organization of the same gif).
+pub async fn collection_ids_for_gif(pool: &PgPool, owner_id: &str, gif_id: &str) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT cg.collection_id FROM collection_gifs cg JOIN collections c ON c.id = cg.collection_id \
+         WHERE c.owner_id = $1 AND cg.gif_id = $2",
+    )
+    .bind(owner_id)
+    .bind(gif_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn create_session(pool: &PgPool, id: &str, user_id: &str, now: &str) -> Result<()> {

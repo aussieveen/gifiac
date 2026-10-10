@@ -1,26 +1,41 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
+  addGifToCollection,
+  createCollection,
+  deleteCollection,
   deleteGif,
   favouriteGif,
+  gifCollectionIds,
+  listCollectionGifs,
+  listCollections,
   listFavourites,
   listGifs,
   recordGifUse,
+  removeGifFromCollection,
+  renameCollection,
   renameGif,
   setGifOneOff,
   setGifPublic,
   unfavouriteGif,
 } from './api'
+import { CollectionPicker } from './CollectionPicker'
+import { DeleteCollectionDialog, RenameCollectionDialog } from './CollectionDialogs'
+import { swatchColor } from './collectionSwatch'
 import { GifThumbnail } from './GifThumbnail'
 import { profileUrl } from './handles'
 import {
   ArrowLeftIcon,
+  BookmarkIcon,
   CheckIcon,
+  ChevronDownIcon,
   CodeIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  GridIcon,
   LinkIcon,
   LockIcon,
+  MoreIcon,
   PencilIcon,
   SearchIcon,
   ShareIcon,
@@ -28,20 +43,22 @@ import {
   TrashIcon,
   XIcon,
 } from './icons'
-import type { Gif, LibraryEntry } from './types'
+import type { LibraryView } from './LibrarySidebar'
+import { LibrarySidebar } from './LibrarySidebar'
+import type { CollectionWithCount, Gif, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
+import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
 
-// SPEC-CLOUD.md §14: a Favourites-mode row is `LibraryEntry`-shaped (owner
-// attribution included); a My-GIFs-mode row is a plain `Gif` (no
-// attribution — reusing `LibraryEntry`'s own field types keeps the two
-// owner fields' shape in one place rather than re-declared here). One
-// state type covers both modes rather than juggling two differently-typed
-// arrays.
-type ArchiveItem = Gif & Partial<Pick<LibraryEntry, 'owner_handle' | 'owner_slug'>>
+export type { LibraryView } from './LibrarySidebar'
 
-type Mode = 'mine' | 'favourites'
+// A Favourites/collection row is `LibraryEntry`-shaped (owner attribution
+// included); an All-GIFs row is a plain `Gif` (no attribution — reusing
+// `LibraryEntry`'s own field types keeps the two owner fields' shape in
+// one place rather than re-declared here). One state type covers every
+// view rather than juggling differently-typed arrays per view.
+type ArchiveItem = Gif & Partial<Pick<LibraryEntry, 'owner_handle' | 'owner_slug'>>
 
 /** `navigator.clipboard` only exists in secure contexts (HTTPS, or
  * localhost) — StrewthGif is a self-hosted LAN tool typically served over plain
@@ -80,10 +97,14 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'public', label: 'Public' },
   { id: 'private', label: 'Private' },
-  { id: 'one-offs', label: 'One-offs' },
+  { id: 'one-offs', label: 'Hidden' },
 ]
 
 interface Props {
+  /** Which sidebar nav item is open — All GIFs, Favourites, or a custom
+   * collection. Owned by the router (ArchiveRoute in App.tsx), not this
+   * component, since it's derived from the URL. */
+  view: LibraryView
   /** Pre-selects this GIF in the detail panel once it loads — used when
    * arriving here right after making a GIF, so its link/download/rename
    * actions are immediately at hand instead of the user having to find it
@@ -102,13 +123,16 @@ interface Props {
   refreshToken?: number
 }
 
-export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props) {
-  const [mode, setMode] = useState<Mode>('mine')
+export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: Props) {
   const [gifs, setGifs] = useState<ArchiveItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const [collections, setCollections] = useState<CollectionWithCount[]>([])
+  const [allGifsCount, setAllGifsCount] = useState(0)
+  const [collectionsRefreshToken, setCollectionsRefreshToken] = useState(0)
+  const activeCollection = view.kind === 'collection' ? collections.find((c) => c.id === view.id) : undefined
   const [selectedId, setSelectedIdState] = useState<string | null>(initialSelectedId ?? null)
   function setSelectedId(id: string | null) {
     setSelectedIdState(id)
@@ -132,6 +156,23 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
   const canShare = typeof navigator.share === 'function'
   const [deleting, setDeleting] = useState(false)
   const toast = useToast()
+  const navigate = useNavigate()
+
+  // The collection header's "⋯" menu (rename/delete) — custom collections
+  // only, see the lock note shown for Favourites instead.
+  const [collectionMenuOpen, setCollectionMenuOpen] = useState(false)
+  const collectionMenuRef = useRef<HTMLDivElement>(null)
+  useClickOutside(collectionMenuRef, collectionMenuOpen, () => setCollectionMenuOpen(false))
+  const [renamingCollection, setRenamingCollection] = useState(false)
+  const [deletingCollection, setDeletingCollection] = useState(false)
+
+  // 1024-1199px only (CSS-gated — see .library-nav-dropdown): the sidebar
+  // is hidden at that width, so the page title itself becomes a dropdown
+  // trigger listing the same nav items. Harmless to keep mounted outside
+  // that range; the CSS there just never shows it.
+  const [navDropdownOpen, setNavDropdownOpen] = useState(false)
+  const navDropdownRef = useRef<HTMLDivElement>(null)
+  useClickOutside(navDropdownRef, navDropdownOpen, () => setNavDropdownOpen(false))
 
   // Re-queries the backend on every keystroke — SPEC.md §8: "live-filtering
   // as you type, matching `GET /api/gifs?q={query}` exactly" — rather than
@@ -140,11 +181,12 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
   // public/private/one-off chips are a second, client-side filter layered
   // on top of that same result set.
   //
-  // SPEC-CLOUD.md §14: Favourites mode swaps the whole dataset via its own
-  // endpoint rather than filtering this one — it isn't a compatible
-  // client-side filter over "my gifs" the way the chips are, since Favourites
-  // can include other users' gifs. `query` has no effect there (no
-  // search/sort for Favourites yet — see the map's "Not yet specified").
+  // collections-design/COLLECTIONS.md: Favourites and a custom collection
+  // each swap the whole dataset via their own endpoint rather than
+  // filtering this one — neither is a compatible client-side filter over
+  // "my gifs" the way the chips are, since both can include other users'
+  // gifs. Favourites' endpoint has no search param (no search for
+  // Favourites yet); a collection's does.
   // `refreshToken` has no meaning of its own — it only exists to force
   // this effect to re-run when the global Import modal changes the
   // library out from under this already-mounted page.
@@ -152,7 +194,8 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
     let cancelled = false
     setLoading(true)
     setLoadError(null)
-    const request = mode === 'favourites' ? listFavourites() : listGifs(query)
+    const request =
+      view.kind === 'favourites' ? listFavourites() : view.kind === 'collection' ? listCollectionGifs(view.id, query) : listGifs(query)
     request
       .then((gs) => {
         if (!cancelled) setGifs(gs)
@@ -166,7 +209,41 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
     return () => {
       cancelled = true
     }
-  }, [query, mode, refreshToken])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, view.kind, view.kind === 'collection' ? view.id : null, refreshToken])
+
+  // Sidebar's collections list — fetched independently of the active
+  // view (every view needs the same sidebar) and refreshed whenever a
+  // collection is created/renamed/deleted (`collectionsRefreshToken`) or
+  // a collection's gif count might have changed (`refreshToken`).
+  useEffect(() => {
+    let cancelled = false
+    listCollections()
+      .then((cs) => {
+        if (!cancelled) setCollections(cs)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [refreshToken, collectionsRefreshToken])
+
+  // Sidebar's "All GIFs" count: while viewing All GIFs itself, `gifs`
+  // above already has the answer (`gifs.length`) — no need for a second
+  // request. Any other view needs its own fetch to know that count.
+  useEffect(() => {
+    if (view.kind === 'all') return
+    let cancelled = false
+    listGifs()
+      .then((gs) => {
+        if (!cancelled) setAllGifsCount(gs.length)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [view.kind, refreshToken])
+  const sidebarAllGifsCount = view.kind === 'all' ? gifs.length : allGifsCount
 
   // Desktop-only affordance (mobile's full-screen panel keeps its own back
   // arrow instead — see the `canEdit` gate on the × button below). Skipped
@@ -188,11 +265,33 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, canEdit])
 
+  // Mine/Others' — collections-design/COLLECTIONS.md §2: Favourites and a
+  // custom collection can hold other people's gifs, so (unlike the
+  // All-GIFs-only Public/Private/One-offs chips) they instead get this
+  // simpler scope filter. A gif's own `owner_slug` is always present on
+  // these rows (even for the caller's own), so "mine" is just an equality
+  // check against the signed-in user.
+  const [scope, setScope] = useState<'all' | 'mine' | 'others'>('all')
+  useEffect(() => {
+    setScope('all')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.kind, view.kind === 'collection' ? view.id : null])
+
   const filteredGifs = gifs.filter((g) => {
-    if (mode === 'favourites') return true
-    if (filter === 'public') return g.is_public
-    if (filter === 'private') return !g.is_public
-    if (filter === 'one-offs') return g.is_one_off
+    if (view.kind === 'all') {
+      // Hidden gifs are genuinely hidden — they only ever show up when
+      // the Hidden chip itself is active, never mixed into All/Public/
+      // Private (no more divider separating them out of an "All" that
+      // included them).
+      if (filter === 'one-offs') return g.is_one_off
+      if (g.is_one_off) return false
+      if (filter === 'public') return g.is_public
+      if (filter === 'private') return !g.is_public
+      return true
+    }
+    const isMine = !g.owner_slug || g.owner_slug === user?.slug
+    if (scope === 'mine') return isMine
+    if (scope === 'others') return !isMine
     return true
   })
 
@@ -205,6 +304,108 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
   // (`template_remixable`), so a public template's Remix can show on
   // someone else's gif too.
   const isOwnGif = !selected?.owner_slug || selected.owner_slug === user?.slug
+
+  // Which of the caller's own collections the selected gif is in — drives
+  // the "Save to collection" picker's checked state and the "In
+  // collections" chips below the primary action row. Re-fetched whenever
+  // the selection changes; cleared when nothing's selected.
+  const [memberIds, setMemberIds] = useState<string[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
+  useEffect(() => {
+    if (!selected) {
+      setMemberIds([])
+      return
+    }
+    let cancelled = false
+    gifCollectionIds(selected.id)
+      .then((ids) => {
+        if (!cancelled) setMemberIds(ids)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id])
+
+  // Shared by the picker's checkboxes and the detail panel's "Remove from
+  // '<collection>'" shortcut. Favourites routes through the existing
+  // favourite/unfavourite endpoints (keeps `is_favourited` and the star
+  // icon in sync — collections-design/COLLECTIONS.md §3: "The star and
+  // the Favourites checkbox in the picker are the same state"); every
+  // other collection goes through the generic membership endpoints.
+  async function toggleCollectionMembership(collectionId: string) {
+    if (!selected) return
+    const collection = collections.find((c) => c.id === collectionId)
+    const isMember = memberIds.includes(collectionId)
+    try {
+      if (collection?.kind === 'favourites') {
+        // Silent, matching the plain star button's existing behavior
+        // everywhere else in the app — no toast on a favourite toggle.
+        await toggleFavourite(selected.id, isMember)
+      } else if (isMember) {
+        await removeGifFromCollection(collectionId, selected.id)
+        if (view.kind === 'collection' && view.id === collectionId) {
+          setGifs((gs) => gs.filter((g) => g.id !== selected.id))
+        }
+        if (collection) toast.show(`Removed from '${collection.name}'`)
+      } else {
+        await addGifToCollection(collectionId, selected.id)
+        if (collection) toast.show(`Saved to '${collection.name}'`)
+      }
+      setMemberIds((ids) => (isMember ? ids.filter((id) => id !== collectionId) : [...ids, collectionId]))
+      setCollectionsRefreshToken((t) => t + 1)
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function createCollectionAndAdd(name: string) {
+    if (!selected) return
+    const created = await createCollection(name)
+    await addGifToCollection(created.id, selected.id)
+    setMemberIds((ids) => [...ids, created.id])
+    setCollectionsRefreshToken((t) => t + 1)
+    toast.show(`Saved to '${created.name}'`)
+  }
+
+  async function renameActiveCollection(name: string) {
+    if (view.kind !== 'collection') return
+    await renameCollection(view.id, name)
+    setCollectionsRefreshToken((t) => t + 1)
+    setRenamingCollection(false)
+  }
+
+  // Drops the collection and its membership rows only — the gifs
+  // themselves are untouched (collections-design/COLLECTIONS.md §4).
+  // Offers an 8-second "Undo" that recreates it (a fresh id; nothing
+  // external depends on the old one persisting) and re-adds every gif
+  // that was in it, from the list already loaded for this view.
+  async function deleteActiveCollection() {
+    if (view.kind !== 'collection' || !activeCollection) return
+    const { name } = activeCollection
+    const memberGifIds = gifs.map((g) => g.id)
+    await deleteCollection(view.id)
+    setDeletingCollection(false)
+    setCollectionsRefreshToken((t) => t + 1)
+    navigate('/library')
+    toast.show(`Deleted '${name}'`, {
+      durationMs: 8000,
+      action: {
+        label: 'Undo',
+        onClick: async () => {
+          try {
+            const recreated = await createCollection(name)
+            await Promise.all(memberGifIds.map((id) => addGifToCollection(recreated.id, id)))
+            setCollectionsRefreshToken((t) => t + 1)
+            navigate(`/library/c/${recreated.id}`)
+          } catch (err) {
+            toast.show(err instanceof Error ? err.message : String(err))
+          }
+        },
+      },
+    })
+  }
 
   async function rename(name: string) {
     if (!selected) return
@@ -271,7 +472,7 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
     try {
       const updated = await setGifOneOff(selected.id, !selected.is_one_off)
       setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
-      toast.show(updated.is_one_off ? 'Marked as one-off' : 'Marked as reusable')
+      toast.show(updated.is_one_off ? 'Marked as hidden' : 'Marked as visible')
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err))
     }
@@ -298,12 +499,13 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
   async function toggleFavourite(id: string, isFavourited: boolean) {
     try {
       const updated = isFavourited ? await unfavouriteGif(id) : await favouriteGif(id)
-      if (mode === 'favourites' && !updated.is_favourited) {
+      if (view.kind === 'favourites' && !updated.is_favourited) {
         setGifs((gs) => gs.filter((g) => g.id !== updated.id))
         if (selectedId === updated.id) setSelectedId(null)
       } else {
         setGifs((gs) => gs.map((g) => (g.id === updated.id ? { ...g, ...updated } : g)))
       }
+      setCollectionsRefreshToken((t) => t + 1)
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err))
     }
@@ -325,95 +527,166 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
     }
   }
 
+  const title = view.kind === 'all' ? 'My GIFs' : view.kind === 'favourites' ? 'Favourites' : activeCollection?.name ?? 'Collection'
+
   return (
     <div className="page">
-      <div className="archive-title-row">
-        <div className="archive-title-group">
-          <h1 className="page-title">My Library</h1>
-          <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
-        </div>
-      </div>
-
-      {/* SPEC-CLOUD.md §14: swaps the whole dataset/toolbar below, not a
-          filter over one already-fetched list — see the fetch effect. */}
-      <div className="mode-toggle" role="group" aria-label="My Library mode">
-        <button
-          type="button"
-          className={mode === 'mine' ? 'active' : ''}
-          onClick={() => {
-            setMode('mine')
-            setSelectedId(null)
-          }}
-        >
-          My GIFs
-        </button>
-        <button
-          type="button"
-          className={mode === 'favourites' ? 'active' : ''}
-          onClick={() => {
-            setMode('favourites')
-            setSelectedId(null)
-          }}
-        >
-          Favourites
-        </button>
-      </div>
-
-      {mode === 'mine' && (
-        <div className="archive-toolbar">
-          <div className="archive-search-wrap">
-            <SearchIcon size={16} className="archive-search-icon" />
-            <input
-              className="archive-search"
-              placeholder="Search names and captions"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label="Search archive"
-            />
-          </div>
-          <div className="archive-chips" role="group" aria-label="Filter GIFs">
-            {FILTERS.map((f) => (
+      <div className={`library-grid ${selected ? 'has-selection' : ''}`}>
+        <LibrarySidebar
+          view={view}
+          collections={collections}
+          allGifsCount={sidebarAllGifsCount}
+          onCollectionsChanged={() => setCollectionsRefreshToken((t) => t + 1)}
+        />
+        <div className="library-header">
+          <div className="archive-title-row">
+            <div className="library-nav-dropdown-wrap" ref={navDropdownRef}>
+              {/* Only interactive/visible as a dropdown at 1024-1199px
+                  (CSS-gated) — the sidebar is hidden there, so the title
+                  itself becomes the nav trigger. Harmless everywhere else:
+                  the chevron is hidden and the dropdown panel never shows. */}
               <button
-                key={f.id}
                 type="button"
-                className={`archive-chip ${filter === f.id ? 'active' : ''}`}
-                onClick={() => setFilter(f.id)}
+                className="archive-title-dropdown-trigger"
+                aria-haspopup="menu"
+                aria-expanded={navDropdownOpen}
+                onClick={() => setNavDropdownOpen((o) => !o)}
               >
-                {f.label}
+                <div className="archive-title-group">
+                  <h1 className="page-title">{title}</h1>
+                  <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
+                </div>
+                <ChevronDownIcon size={18} className="archive-title-dropdown-chevron" />
               </button>
-            ))}
+              {view.kind === 'favourites' && (
+                <p className="library-collection-subtitle">
+                  Your starred GIFs · <LockIcon size={12} /> Built in
+                </p>
+              )}
+              {view.kind === 'collection' && activeCollection && (
+                <p className="library-collection-subtitle">Created {new Date(activeCollection.createdAt).toLocaleDateString()}</p>
+              )}
+              {navDropdownOpen && (
+                <div className="library-nav-dropdown">
+                  <LibrarySidebar
+                    view={view}
+                    collections={collections}
+                    allGifsCount={sidebarAllGifsCount}
+                    onCollectionsChanged={() => setCollectionsRefreshToken((t) => t + 1)}
+                    onNavigate={() => setNavDropdownOpen(false)}
+                  />
+                </div>
+              )}
+            </div>
+            {view.kind === 'collection' && activeCollection && (
+              <div className="library-collection-menu" ref={collectionMenuRef}>
+                <button
+                  type="button"
+                  className="library-collection-menu-btn"
+                  aria-label="Collection options"
+                  aria-expanded={collectionMenuOpen}
+                  onClick={() => setCollectionMenuOpen((o) => !o)}
+                >
+                  <MoreIcon size={16} />
+                </button>
+                {collectionMenuOpen && (
+                  <div className="library-collection-menu-dropdown" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCollectionMenuOpen(false)
+                        setRenamingCollection(true)
+                      }}
+                    >
+                      <PencilIcon size={14} /> Rename
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="library-collection-menu-danger"
+                      onClick={() => {
+                        setCollectionMenuOpen(false)
+                        setDeletingCollection(true)
+                      }}
+                    >
+                      <TrashIcon size={14} /> Delete collection
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+
+          {renamingCollection && activeCollection && (
+            <RenameCollectionDialog
+              initialName={activeCollection.name}
+              onRename={renameActiveCollection}
+              onClose={() => setRenamingCollection(false)}
+            />
+          )}
+          {deletingCollection && activeCollection && (
+            <DeleteCollectionDialog
+              name={activeCollection.name}
+              gifCount={activeCollection.gifCount}
+              onDelete={deleteActiveCollection}
+              onClose={() => setDeletingCollection(false)}
+            />
+          )}
+
+          <div className="archive-toolbar">
+            {view.kind !== 'favourites' && (
+              <div className="archive-search-wrap">
+                <SearchIcon size={16} className="archive-search-icon" />
+                <input
+                  className="archive-search"
+                  placeholder={view.kind === 'collection' ? `Search in ${title}` : 'Search names and captions'}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search archive"
+                />
+              </div>
+            )}
+            {view.kind === 'all' ? (
+              <div className="archive-chips" role="group" aria-label="Filter GIFs">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={`archive-chip ${filter === f.id ? 'active' : ''}`}
+                    onClick={() => setFilter(f.id)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="archive-chips" role="group" aria-label="Filter by owner">
+                {(['all', 'mine', 'others'] as const).map((s) => (
+                  <button key={s} type="button" className={`archive-chip ${scope === s ? 'active' : ''}`} onClick={() => setScope(s)}>
+                    {s === 'all' ? 'All' : s === 'mine' ? 'Mine' : 'Borrowed'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {loading && <p className="va-hint">Loading…</p>}
+          {loadError && <p className="export-error">{loadError}</p>}
         </div>
-      )}
 
-      {loading && <p className="va-hint">Loading…</p>}
-      {loadError && <p className="export-error">{loadError}</p>}
-
-      <div className={`archive-layout ${selectedId ? 'has-selection' : ''}`}>
         <div
-          className="archive-grid"
-          onClick={(e) => {
-            // Only when the click landed on the grid itself, not a child
-            // (tile, divider, favourite badge) that bubbled up — those
-            // all have their own click handling.
-            if (canEdit && selectedId && e.target === e.currentTarget) closeDetail()
-          }}
-        >
-          {filteredGifs.map((g, i) => {
-            // SPEC.md §8: the backend already sorts reusable GIFs before
-            // one-offs (each group newest-first) — the divider goes
-            // wherever the flag first flips to true in that single
-            // ordered list. Only shown for the "All" chip — once a chip
-            // narrows the grid to a single group (or filters across both
-            // groups by visibility), a divider inside it stops being
-            // meaningful. Desktop only (CSS-hidden below 1024px) — on a
-            // phone/tablet the One-offs chip is the only way to isolate
-            // them, since the grid is too cramped for a divider to read.
-            const showDivider =
-              mode === 'mine' && filter === 'all' && g.is_one_off && (i === 0 || !filteredGifs[i - 1].is_one_off)
+            className="archive-grid"
+            onClick={(e) => {
+              // Only when the click landed on the grid itself, not a child
+              // (tile, divider, favourite badge) that bubbled up — those
+              // all have their own click handling.
+              if (canEdit && selectedId && e.target === e.currentTarget) closeDetail()
+            }}
+          >
+          {filteredGifs.map((g) => {
             return (
               <div key={g.id} className="archive-grid-item">
-                {showDivider && <div className="archive-grid-divider">One-offs</div>}
                 {/* A plain `div` (not `button`) — SPEC-CLOUD.md §14 nests a
                     real `<button>` star inside for the favourite toggle,
                     and a button-inside-a-button is invalid HTML that gets
@@ -466,17 +739,27 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
               </div>
             )
           })}
-          {!loading && mode === 'mine' && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
-          {!loading && mode === 'mine' && gifs.length > 0 && filteredGifs.length === 0 && (
+          {!loading && view.kind === 'all' && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
+          {!loading && view.kind === 'all' && gifs.length > 0 && filteredGifs.length === 0 && (
             <p className="va-hint">No GIFs match this filter.</p>
           )}
-          {!loading && mode === 'favourites' && gifs.length === 0 && (
+          {!loading && view.kind === 'favourites' && gifs.length === 0 && (
             <div className="archive-favourites-empty">
               <StarIcon size={32} />
               <h3>No favourites yet</h3>
               <p className="va-hint">Hit the star on any GIF in the Global Library to keep it here for later.</p>
               <Link className="btn btn-primary" to="/explore">
                 Browse Global Library
+              </Link>
+            </div>
+          )}
+          {!loading && view.kind === 'collection' && gifs.length === 0 && (
+            <div className="archive-favourites-empty">
+              <GridIcon size={32} />
+              <h3>Nothing in &lsquo;{title}&rsquo; yet</h3>
+              <p className="va-hint">Open any GIF and use the collection button next to the star to add it here.</p>
+              <Link className="btn btn-primary" to="/library">
+                Browse my GIFs
               </Link>
             </div>
           )}
@@ -535,12 +818,15 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
                   <input
                     className="archive-panel-name"
                     aria-label="GIF name"
+                    placeholder="Untitled GIF"
                     defaultValue={selected.name}
                     key={`name-${selected.id}`}
                     onBlur={(e) => rename(e.target.value)}
                   />
                 ) : (
-                  <p className="archive-panel-title-text">{selected.name}</p>
+                  <p className="archive-panel-title-text">
+                    {selected.name || <span className="archive-panel-untitled">Untitled GIF</span>}
+                  </p>
                 )}
                 <span className={`archive-visibility-pill ${selected.is_public ? 'public' : 'private'}`}>
                   {selected.is_public ? 'Public' : 'Private'}
@@ -550,7 +836,7 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
                   meaningful there — Favourites can hold other users' gifs. */}
               {selected.owner_handle && selected.owner_slug && (
                 <Link className="archive-owner-link" to={profileUrl(selected.owner_slug)}>
-                  {selected.owner_handle}
+                  by @{selected.owner_handle}
                 </Link>
               )}
               {selected.caption_text && <p className="archive-panel-caption">{selected.caption_text}</p>}
@@ -579,7 +865,57 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
                   >
                     <StarIcon filled={selected.is_favourited} />
                   </button>
+                  <div className="collection-picker-anchor">
+                    <button
+                      type="button"
+                      className="archive-favourite-btn"
+                      aria-label="Save to collection"
+                      aria-expanded={pickerOpen}
+                      onClick={() => setPickerOpen((o) => !o)}
+                    >
+                      <BookmarkIcon size={16} />
+                    </button>
+                    {pickerOpen && (
+                      <CollectionPicker
+                        collections={collections}
+                        memberIds={memberIds}
+                        onToggle={toggleCollectionMembership}
+                        onCreateAndAdd={createCollectionAndAdd}
+                        onClose={() => setPickerOpen(false)}
+                      />
+                    )}
+                  </div>
                 </div>
+              )}
+
+              {memberIds.length > 0 && (
+                <div className="library-in-collections">
+                  <p className="library-in-collections-label">In collections</p>
+                  <div className="library-in-collections-chips">
+                    {collections
+                      .filter((c) => memberIds.includes(c.id))
+                      .map((c) => (
+                        <Link
+                          key={c.id}
+                          className="library-collection-chip"
+                          to={c.kind === 'favourites' ? '/library/favourites' : `/library/c/${c.id}`}
+                        >
+                          {c.kind === 'favourites' ? (
+                            <StarIcon size={12} filled />
+                          ) : (
+                            <span className="library-sidebar-swatch collection-picker-swatch" style={{ background: swatchColor(c.id) }} />
+                          )}
+                          {c.name}
+                        </Link>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {view.kind === 'collection' && (
+                <button type="button" className="btn btn-secondary library-remove-from-collection" onClick={() => toggleCollectionMembership(view.id)}>
+                  <XIcon size={12} /> Remove from &lsquo;{title}&rsquo;
+                </button>
               )}
 
               <div className="archive-panel-secondary-row">
@@ -644,6 +980,26 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
                   >
                     <StarIcon filled={selected.is_favourited} />
                   </button>
+                  <div className="collection-picker-anchor">
+                    <button
+                      type="button"
+                      className="archive-favourite-btn"
+                      aria-label="Save to collection"
+                      aria-expanded={pickerOpen}
+                      onClick={() => setPickerOpen((o) => !o)}
+                    >
+                      <BookmarkIcon size={16} />
+                    </button>
+                    {pickerOpen && (
+                      <CollectionPicker
+                        collections={collections}
+                        memberIds={memberIds}
+                        onToggle={toggleCollectionMembership}
+                        onCreateAndAdd={createCollectionAndAdd}
+                        onClose={() => setPickerOpen(false)}
+                      />
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -667,14 +1023,14 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
                   </div>
                   <div className="archive-settings-row">
                     <div>
-                      <p className="archive-settings-title">One-off</p>
-                      <p className="archive-settings-help">Hide from search after use</p>
+                      <p className="archive-settings-title">Hide</p>
+                      <p className="archive-settings-help">Hide from GIF list</p>
                     </div>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={selected.is_one_off}
-                      aria-label="One-off"
+                      aria-label="Hide"
                       className={`archive-switch ${selected.is_one_off ? 'on' : ''}`}
                       onClick={toggleOneOff}
                     >
@@ -698,6 +1054,11 @@ export function Archive({ initialSelectedId, onSelectGif, refreshToken }: Props)
         <div className="archive-toast">
           <CheckIcon size={16} />
           <span>{toast.message}</span>
+          {toast.action && (
+            <button type="button" className="archive-toast-action" onClick={toast.action.onClick}>
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
     </div>
