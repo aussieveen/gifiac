@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::handle;
 use crate::models::{
-    AdminActionView, AdminUserView, Collection, CollectionWithCount, ExportFormat, ExportJob, Gif, IngestJob,
-    LibrarySort, LoginCode, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template, TemplatePayload,
-    TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
+    AdminActionView, AdminUserView, Collection, CollectionWithCount, ExportFormat, ExportJob, Gif, GifFilterCounts,
+    IngestJob, LibrarySort, LoginCode, NewGif, NewVideo, PreferencesView, PublicGif, Session, Template,
+    TemplatePayload, TemplateSummary, UpdatePreferencesRequest, User, Video, VideoListItem, VideoTemplate,
 };
 
 const VIDEO_COLUMNS: &str = "id, original_filename, extension, file_size_bytes, duration_seconds, width, height, uploaded_at";
@@ -313,6 +313,43 @@ pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>, page: u32
     };
     let (items, has_more) = paginate(rows);
     Ok((items, has_more, total))
+}
+
+/// The Archive's All/Public/Private/Hidden chip counts, scoped the same
+/// way `list_gifs` is (owner, optional search) — one conditional-
+/// aggregation query bounded by the `idx_gifs_user_id` index, so it costs
+/// nothing a per-page `COUNT(*)` scan over the whole table wouldn't
+/// already cost 4x worse. Computed live rather than denormalized: at this
+/// app's scale (a single user's own gifs) the aggregate is cheap, and a
+/// denormalized counter would need every write path that touches
+/// `is_public`/`is_one_off`/create/delete to keep it in sync forever.
+pub async fn gif_filter_counts(pool: &PgPool, owner_id: &str, q: Option<&str>) -> Result<GifFilterCounts> {
+    let counts_sql = "SELECT \
+         COUNT(*) FILTER (WHERE NOT is_one_off) AS all, \
+         COUNT(*) FILTER (WHERE is_public AND NOT is_one_off) AS public, \
+         COUNT(*) FILTER (WHERE NOT is_public AND NOT is_one_off) AS private, \
+         COUNT(*) FILTER (WHERE is_one_off) AS hidden \
+         FROM gifs WHERE user_id = $1";
+    match q.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => {
+            let sql = format!(
+                "{counts_sql} AND (name ILIKE $2 ESCAPE '\\' OR caption_text ILIKE $3 ESCAPE '\\')"
+            );
+            let pattern = format!("%{}%", escape_like(q));
+            sqlx::query_as::<_, GifFilterCounts>(sqlx::AssertSqlSafe(sql))
+                .bind(owner_id)
+                .bind(&pattern)
+                .bind(&pattern)
+                .fetch_one(pool)
+                .await
+                .map_err(Into::into)
+        }
+        None => sqlx::query_as::<_, GifFilterCounts>(sqlx::AssertSqlSafe(counts_sql.to_string()))
+            .bind(owner_id)
+            .fetch_one(pool)
+            .await
+            .map_err(Into::into),
+    }
 }
 
 /// Escapes `LIKE` wildcards (`%`, `_`) in user-supplied search text, paired
@@ -2233,6 +2270,55 @@ mod tests {
         let page2_ids: HashSet<&str> = page2.iter().map(|g| g.id.as_str()).collect();
         assert!(page1_ids.is_disjoint(&page2_ids));
         assert_eq!(page1_ids.len() + page2_ids.len(), 30);
+    }
+
+    #[tokio::test]
+    async fn gif_filter_counts_covers_all_public_private_and_hidden_buckets() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        let other = seed_user(&pool).await;
+
+        // 2 public (only one named "cat..."), 3 private, 1 hidden
+        // (one-off), owned by `user`.
+        insert_gif(&pool, &sample_gif("pub0", "cat video", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        set_gif_public(&pool, "pub0", &user, true).await.unwrap();
+        insert_gif(&pool, &sample_gif("pub1", "bird video", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        set_gif_public(&pool, "pub1", &user, true).await.unwrap();
+        for i in 0..3 {
+            let id = format!("priv{i}");
+            insert_gif(&pool, &sample_gif(&id, "dog video", "", &user), "2026-08-20T00:00:00Z")
+                .await
+                .unwrap();
+        }
+        insert_gif(&pool, &sample_gif("hidden0", "a", "", &user), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+        set_gif_one_off(&pool, "hidden0", &user, true).await.unwrap();
+        // A hidden gif can also be public — still counted once in `hidden`,
+        // never double-counted into `public` too (SPEC.md §8: hidden gifs
+        // are excluded from All/Public/Private entirely).
+        set_gif_public(&pool, "hidden0", &user, true).await.unwrap();
+
+        // Another user's gifs must never leak into these counts.
+        insert_gif(&pool, &sample_gif("someone-elses", "cat video", "", &other), "2026-08-20T00:00:00Z")
+            .await
+            .unwrap();
+
+        let counts = gif_filter_counts(&pool, &user, None).await.unwrap();
+        assert_eq!(counts.all, 5, "2 public + 3 private, hidden excluded");
+        assert_eq!(counts.public, 2);
+        assert_eq!(counts.private, 3);
+        assert_eq!(counts.hidden, 1);
+
+        let searched = gif_filter_counts(&pool, &user, Some("cat")).await.unwrap();
+        assert_eq!(searched.all, 1, "only the public 'cat video' one-offs excluded");
+        assert_eq!(searched.public, 1);
+        assert_eq!(searched.private, 0);
+        assert_eq!(searched.hidden, 0, "the hidden gif doesn't match 'cat'");
     }
 
     #[tokio::test]

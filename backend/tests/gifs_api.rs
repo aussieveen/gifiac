@@ -67,6 +67,73 @@ async fn list_gifs_filters_by_the_q_param_against_name_and_caption_text() {
     assert_eq!(names, vec!["dog running", "cat jumping"]);
 }
 
+/// `GET /api/gifs`'s `filter_counts` (Archive's All/Public/Private/Hidden
+/// chips) — computed server-side so it stays correct however much of the
+/// paginated `items` the client has actually loaded.
+#[tokio::test]
+async fn list_gifs_reports_filter_counts_for_all_public_private_and_hidden() {
+    let test_app = spawn_app().await;
+    let public_gif = create_gif(&test_app, "public one", "").await;
+    create_gif(&test_app, "private one", "").await;
+    let hidden_gif = create_gif(&test_app, "hidden one", "").await;
+    let public_id = public_gif["id"].as_str().unwrap();
+    let hidden_id = hidden_gif["id"].as_str().unwrap();
+
+    let make_public = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/gifs/{public_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_public": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(make_public.status(), StatusCode::OK);
+
+    let make_hidden = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .method("PATCH")
+                .uri(format!("/api/gifs/{hidden_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "is_one_off": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(make_hidden.status(), StatusCode::OK);
+
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            authed(&test_app, Request::builder())
+                .uri("/api/gifs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["total"], 3, "total still counts the hidden gif too");
+    assert_eq!(body["filter_counts"]["all"], 2, "all excludes the hidden gif");
+    assert_eq!(body["filter_counts"]["public"], 1);
+    assert_eq!(body["filter_counts"]["private"], 1);
+    assert_eq!(body["filter_counts"]["hidden"], 1);
+}
+
 #[tokio::test]
 async fn get_gif_returns_the_full_row_including_captions_json() {
     let test_app = spawn_app().await;

@@ -45,7 +45,7 @@ import {
 } from './icons'
 import type { LibraryView } from './LibrarySidebar'
 import { LibrarySidebar } from './LibrarySidebar'
-import type { CollectionWithCount, Gif, LibraryEntry } from './types'
+import type { CollectionWithCount, Gif, GifFilterCounts, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
@@ -136,6 +136,9 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
   // and a collection aren't paginated, so this is only ever meaningful
   // there (see `sidebarAllGifsCount`).
   const [total, setTotal] = useState(0)
+  // The All/Public/Private/Hidden chip counts — like `total`, only
+  // meaningful for the 'all' view (the only one with these chips at all).
+  const [filterCounts, setFilterCounts] = useState<GifFilterCounts>({ all: 0, public: 0, private: 0, hidden: 0 })
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -228,6 +231,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
           setGifs(result.items)
           setHasMore(result.has_more)
           setTotal(result.total)
+          setFilterCounts(result.filter_counts)
         })
         .catch((err) => {
           if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -251,6 +255,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
         setGifs((gs) => [...gs, ...result.items])
         setHasMore(result.has_more)
         setTotal(result.total)
+        setFilterCounts(result.filter_counts)
         setPage(nextPage)
       })
       .catch((err) => toast.show(err instanceof Error ? err.message : String(err)))
@@ -344,6 +349,15 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     if (scope === 'others') return !isMine
     return true
   })
+
+  // The header's count: for the 'all' view this is the server-computed
+  // total for whichever chip is active (`filterCounts`), not
+  // `filteredGifs.length` — that's only however much of the paginated
+  // list has been scrolled into, which undercounts once there's more
+  // than one page. Favourites/a collection aren't paginated, so
+  // `filteredGifs.length` is still exact for those.
+  const displayCount =
+    view.kind === 'all' ? filterCounts[filter === 'one-offs' ? 'hidden' : filter] : filteredGifs.length
 
   const selected = gifs.find((g) => g.id === selectedId) ?? null
   // SPEC-CLOUD.md §14: Favourites can hold someone else's gif — owner-only
@@ -522,6 +536,15 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     try {
       const updated = await setGifOneOff(selected.id, !selected.is_one_off)
       setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
+      if (view.kind === 'all') {
+        // Going hidden moves it out of `all` and its public/private
+        // bucket into `hidden`; coming back reverses that — one chip
+        // count changes by 1 each way, matching the server's own
+        // `NOT is_one_off` exclusion (db::gif_filter_counts).
+        const sign = updated.is_one_off ? -1 : 1
+        const bucket = updated.is_public ? 'public' : 'private'
+        setFilterCounts((c) => ({ ...c, all: c.all + sign, [bucket]: c[bucket] + sign, hidden: c.hidden - sign }))
+      }
       toast.show(updated.is_one_off ? 'Marked as hidden' : 'Marked as visible')
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err))
@@ -535,6 +558,14 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     try {
       const updated = await setGifPublic(selected.id, !selected.is_public)
       setGifs((gs) => gs.map((g) => (g.id === updated.id ? updated : g)))
+      // A hidden gif's public/private flip doesn't move it between the
+      // `public`/`private` chip counts — both are already scoped to
+      // `NOT is_one_off` server-side, same as `all`.
+      if (view.kind === 'all' && !updated.is_one_off) {
+        setFilterCounts((c) =>
+          updated.is_public ? { ...c, public: c.public + 1, private: c.private - 1 } : { ...c, public: c.public - 1, private: c.private + 1 },
+        )
+      }
       toast.show(updated.is_public ? 'Made public' : 'Made private')
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err))
@@ -568,7 +599,11 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     try {
       await deleteGif(selected.id)
       setGifs((gs) => gs.filter((g) => g.id !== selected.id))
-      if (view.kind === 'all') setTotal((t) => t - 1)
+      if (view.kind === 'all') {
+        setTotal((t) => t - 1)
+        const bucket = selected.is_one_off ? 'hidden' : selected.is_public ? 'public' : 'private'
+        setFilterCounts((c) => ({ ...c, [bucket]: c[bucket] - 1, all: selected.is_one_off ? c.all : c.all - 1 }))
+      }
       setSelectedId(null)
       toast.show('Deleted')
     } catch (err) {
@@ -605,7 +640,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
               >
                 <div className="archive-title-group">
                   <h1 className="page-title">{title}</h1>
-                  <span className="archive-count">{filteredGifs.length === 1 ? '1 GIF' : `${filteredGifs.length} GIFs`}</span>
+                  <span className="archive-count">{displayCount === 1 ? '1 GIF' : `${displayCount} GIFs`}</span>
                 </div>
                 <ChevronDownIcon size={18} className="archive-title-dropdown-chevron" />
               </button>

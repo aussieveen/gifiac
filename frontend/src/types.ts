@@ -215,6 +215,23 @@ export interface Page<T> {
   total: number
 }
 
+// `GET /api/gifs` only — the Archive's All/Public/Private/Hidden chip
+// totals (backend's `db::gif_filter_counts`), scoped the same way `total`
+// is (owner, optional search `q`). `all` excludes hidden gifs, matching
+// the "All" chip's own filter logic (Archive.tsx's `filteredGifs`).
+export interface GifFilterCounts {
+  all: number
+  public: number
+  private: number
+  hidden: number
+}
+
+// `GET /api/gifs`'s full response shape: `Page<Gif>`'s fields plus
+// `filter_counts`, flattened on the wire (backend's `routes::gifs::GifsPage`).
+export interface GifsPage extends Page<Gif> {
+  filter_counts: GifFilterCounts
+}
+
 // `GET/POST/PATCH /api/collections` response shape (collections-design/
 // COLLECTIONS.md §1) — camelCase, matching the backend's `Collection`.
 // `kind` is `'favourites'` for the one reserved, un-renameable/

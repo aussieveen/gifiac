@@ -7,6 +7,7 @@ import type {
   CurrentUser,
   FilmstripMeta,
   Gif,
+  GifsPage,
   LibraryEntry,
   LibrarySort,
   Page,
@@ -325,12 +326,12 @@ export function subscribeExportProgress(exportId: string, handlers: ExportProgre
 
 // Archive endpoints per SPEC.md §5/§8.
 
-export function listGifs(q?: string, page = 1): Promise<Page<Gif>> {
+export function listGifs(q?: string, page = 1): Promise<GifsPage> {
   const params: string[] = []
   if (q?.trim()) params.push(`q=${encodeURIComponent(q.trim())}`)
   if (page > 1) params.push(`page=${page}`)
   const query = params.length ? `?${params.join('&')}` : ''
-  return request<Page<Gif>>(`/api/gifs${query}`)
+  return request<GifsPage>(`/api/gifs${query}`)
 }
 
 export function getGif(id: string): Promise<Gif> {

@@ -126,7 +126,7 @@ function renderArchive(view: import('./LibrarySidebar').LibraryView = { kind: 'a
 }
 
 beforeEach(() => {
-  vi.mocked(listGifs).mockReset().mockResolvedValue({ items: [], has_more: false, total: 0 })
+  vi.mocked(listGifs).mockReset().mockResolvedValue({ items: [], has_more: false, total: 0, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 } })
   vi.mocked(listCollections).mockReset().mockResolvedValue([])
   vi.mocked(gifCollectionIds).mockReset().mockResolvedValue([])
   vi.mocked(listFavourites).mockReset()
@@ -155,7 +155,7 @@ afterEach(() => {
 
 describe('Archive', () => {
   it('lists gifs returned by the backend as grid thumbnails', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, gifB], has_more: false, total: 2 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, gifB], has_more: false, total: 2, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
 
     renderArchive()
 
@@ -172,7 +172,7 @@ describe('Archive', () => {
   })
 
   it('shows an empty state when there are no gifs', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false, total: 0 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false, total: 0, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
 
     renderArchive()
 
@@ -180,7 +180,7 @@ describe('Archive', () => {
   })
 
   it('re-queries the backend as the search box is typed into', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -193,7 +193,7 @@ describe('Archive', () => {
   })
 
   it('selecting a thumbnail opens its detail panel with a preview, name, caption, and date', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -206,7 +206,7 @@ describe('Archive', () => {
   })
 
   it('selecting a different gif swaps the preview image so its animation restarts', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, gifB], has_more: false, total: 2 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, gifB], has_more: false, total: 2, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -220,7 +220,7 @@ describe('Archive', () => {
   })
 
   it('the close button closes the panel and returns focus to the tile', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -235,7 +235,7 @@ describe('Archive', () => {
   })
 
   it('clicking the already-selected tile closes the panel', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -249,7 +249,7 @@ describe('Archive', () => {
   })
 
   it('clicking empty grid space closes the panel', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -265,7 +265,7 @@ describe('Archive', () => {
   })
 
   it('Escape closes the panel and returns focus to the tile', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -280,7 +280,7 @@ describe('Archive', () => {
   })
 
   it('Escape does not close the panel while focus is in the rename field', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -293,7 +293,7 @@ describe('Archive', () => {
   })
 
   it('renaming on blur calls the API and updates the grid', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(renameGif).mockResolvedValue({ ...gifA, name: 'cat leaping' })
     const user = userEvent.setup()
 
@@ -310,7 +310,7 @@ describe('Archive', () => {
   })
 
   it('copy link writes the gif url to the clipboard', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
@@ -330,7 +330,7 @@ describe('Archive', () => {
   })
 
   it('copy link falls back to execCommand when navigator.clipboard is unavailable (e.g. an insecure-context LAN deployment)', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -350,7 +350,7 @@ describe('Archive', () => {
   })
 
   it('copy embed writes an <img> tag to the clipboard', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
@@ -368,7 +368,7 @@ describe('Archive', () => {
   })
 
   it('copy embed falls back to execCommand when navigator.clipboard is unavailable', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -389,7 +389,7 @@ describe('Archive', () => {
 
   it('copy embed escapes HTML-sensitive characters in the alt attribute', async () => {
     const gifWithSpecialName = { ...gifA, name: 'cat & dog <"jumping">' }
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithSpecialName], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithSpecialName], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
@@ -408,7 +408,7 @@ describe('Archive', () => {
   })
 
   it('the download action links directly to the gif url', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -419,7 +419,7 @@ describe('Archive', () => {
   })
 
   it('copying a link bumps the use count and shows the updated total', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
@@ -440,7 +440,7 @@ describe('Archive', () => {
   })
 
   it('copying an embed bumps the use count', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
@@ -460,7 +460,7 @@ describe('Archive', () => {
   })
 
   it('clicking download bumps the use count', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(recordGifUse).mockResolvedValue({ ...gifA, use_count: 1 })
     const user = userEvent.setup()
 
@@ -474,7 +474,7 @@ describe('Archive', () => {
   })
 
   it('marking a gif as one-off calls the API and flips the One-off switch', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: true })
     const user = userEvent.setup()
 
@@ -492,7 +492,7 @@ describe('Archive', () => {
 
   it('marking a gif back as reusable calls the API with false', async () => {
     const oneOffGif = { ...gifA, is_one_off: true }
-    vi.mocked(listGifs).mockResolvedValue({ items: [oneOffGif], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [oneOffGif], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(setGifOneOff).mockResolvedValue({ ...gifA, is_one_off: false })
     const user = userEvent.setup()
 
@@ -510,7 +510,7 @@ describe('Archive', () => {
   })
 
   it('making a gif public calls the API and flips the Public switch', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: true })
     const user = userEvent.setup()
 
@@ -528,7 +528,7 @@ describe('Archive', () => {
 
   it('making a gif private calls the API with false', async () => {
     const publicGif = { ...gifA, is_public: true }
-    vi.mocked(listGifs).mockResolvedValue({ items: [publicGif], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [publicGif], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(setGifPublic).mockResolvedValue({ ...gifA, is_public: false })
     const user = userEvent.setup()
 
@@ -545,7 +545,7 @@ describe('Archive', () => {
   })
 
   it('a hidden gif never shows under All/Public/Private — only the Hidden chip reveals it', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, { ...gifB, is_one_off: true, is_public: true }], has_more: false, total: 2 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, { ...gifB, is_one_off: true, is_public: true }], has_more: false, total: 2, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
     renderArchive()
 
@@ -561,7 +561,7 @@ describe('Archive', () => {
   })
 
   it('deleting asks for confirmation, then calls the API and clears the selection', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(deleteGif).mockResolvedValue(undefined)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const user = userEvent.setup()
@@ -576,7 +576,7 @@ describe('Archive', () => {
   })
 
   it('declining the confirmation does not delete', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
 
@@ -591,7 +591,7 @@ describe('Archive', () => {
   it('the filter chips narrow the grid client-side', async () => {
     const publicGif = { ...gifA, is_public: true }
     const privateOneOff = { ...gifB, is_public: false, is_one_off: true }
-    vi.mocked(listGifs).mockResolvedValue({ items: [publicGif, privateOneOff], has_more: false, total: 2 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [publicGif, privateOneOff], has_more: false, total: 2, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -613,7 +613,7 @@ describe('Archive', () => {
   })
 
   it('shows an external badge only for a linked gif, not a native/imported one', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, linkedGif], has_more: false, total: 2 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA, linkedGif], has_more: false, total: 2, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
 
     renderArchive()
     await screen.findByRole('button', { name: 'cat jumping' })
@@ -625,7 +625,7 @@ describe('Archive', () => {
   })
 
   it('a linked gif shows "Open original" instead of Download, linking to the external url', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [linkedGif], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [linkedGif], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -637,7 +637,7 @@ describe('Archive', () => {
   })
 
   it('a native gif still shows Download, not "Open original"', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -649,7 +649,7 @@ describe('Archive', () => {
 
   it('a gif with remixable template lineage offers a "Remix this GIF" link to that template', async () => {
     const gifWithTemplate = { ...gifA, template_id: 't1', template_remixable: true }
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithTemplate], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithTemplate], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -661,7 +661,7 @@ describe('Archive', () => {
 
   it('a gif with template lineage that is no longer remixable (template deleted/made private) has no Remix link', async () => {
     const gifWithStaleTemplate = { ...gifA, template_id: 't1', template_remixable: false }
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithStaleTemplate], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifWithStaleTemplate], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -671,7 +671,7 @@ describe('Archive', () => {
   })
 
   it('a gif with no template lineage has no Remix link', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [linkedGif], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [linkedGif], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     const user = userEvent.setup()
 
     renderArchive()
@@ -681,7 +681,7 @@ describe('Archive', () => {
   })
 
   it('marks the layout as having a selection, and the Back button clears it', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -702,7 +702,7 @@ describe('Archive', () => {
   })
 
   it('has no close button below the editor breakpoint — the Back arrow is the only way to close', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -714,7 +714,7 @@ describe('Archive', () => {
 
   it('hides Remix below the editor breakpoint', async () => {
     const videoGif = { ...gifA, video_id: 'v1' }
-    vi.mocked(listGifs).mockResolvedValue({ items: [videoGif], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [videoGif], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -725,7 +725,7 @@ describe('Archive', () => {
   })
 
   it('shows a pinned Share/Copy-link bar below the editor breakpoint', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -739,7 +739,7 @@ describe('Archive', () => {
 // SPEC-CLOUD.md §14.
 describe('Archive favourites', () => {
   it('clicking a thumbnail star favourites it without opening the detail panel', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(favouriteGif).mockResolvedValue({ ...gifA, is_favourited: true })
     const user = userEvent.setup()
 
@@ -753,7 +753,7 @@ describe('Archive favourites', () => {
   })
 
   it('the detail panel favourite button unfavourites an already-saved gif', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [{ ...gifA, is_favourited: true }], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [{ ...gifA, is_favourited: true }], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(unfavouriteGif).mockResolvedValue({ ...gifA, is_favourited: false })
     const user = userEvent.setup()
 
@@ -866,7 +866,7 @@ const roadtripCollection: CollectionWithCount = {
 
 describe('Archive collections', () => {
   it('opening the Save to collection picker shows every collection with its checked state', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(listCollections).mockResolvedValue([favouritesCollection, roadtripCollection])
     vi.mocked(gifCollectionIds).mockResolvedValue(['c-roadtrip'])
     const user = userEvent.setup()
@@ -881,7 +881,7 @@ describe('Archive collections', () => {
   })
 
   it('checking a custom collection in the picker saves it there; unchecking removes it', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
     vi.mocked(gifCollectionIds).mockResolvedValue([])
     vi.mocked(addGifToCollection).mockResolvedValue(undefined)
@@ -902,7 +902,7 @@ describe('Archive collections', () => {
   })
 
   it('checking the Favourites row in the picker favourites the gif, same as the star', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(listCollections).mockResolvedValue([favouritesCollection])
     vi.mocked(gifCollectionIds).mockResolvedValue([])
     vi.mocked(favouriteGif).mockResolvedValue({ ...gifA, is_favourited: true })
@@ -920,7 +920,7 @@ describe('Archive collections', () => {
   })
 
   it('creating a new collection from the picker creates it and adds the open gif', async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(listCollections).mockResolvedValue([])
     vi.mocked(gifCollectionIds).mockResolvedValue([])
     vi.mocked(createCollection).mockResolvedValue({
@@ -946,7 +946,7 @@ describe('Archive collections', () => {
   })
 
   it("the detail panel's \"In collections\" chips link to the gif's collections", async () => {
-    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1 })
+    vi.mocked(listGifs).mockResolvedValue({ items: [gifA], has_more: false, total: 1, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(listCollections).mockResolvedValue([roadtripCollection])
     vi.mocked(gifCollectionIds).mockResolvedValue(['c-roadtrip'])
     const user = userEvent.setup()

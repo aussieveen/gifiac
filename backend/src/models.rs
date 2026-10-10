@@ -188,6 +188,19 @@ pub struct ExportRequest {
     pub gif_range_end: f64,
 }
 
+/// The Archive's four filter chips (All/Public/Private/Hidden) each need
+/// their own total — computed server-side in one conditional-aggregation
+/// query (`db::gif_filter_counts`) rather than client-side over however
+/// much of the paginated list happens to be loaded, which undercounts
+/// once there's more than one page.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GifFilterCounts {
+    pub all: i64,
+    pub public: i64,
+    pub private: i64,
+    pub hidden: i64,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Gif {
     pub id: String,

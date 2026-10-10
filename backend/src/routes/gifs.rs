@@ -18,7 +18,7 @@ use crate::auth::{CurrentUser, OptionalCurrentUser};
 use crate::db;
 use crate::error::AppError;
 use crate::exports::{ExportEvent, transcode_and_upload};
-use crate::models::{Gif, LibrarySort, NewGif};
+use crate::models::{Gif, GifFilterCounts, LibrarySort, NewGif};
 use crate::paths;
 use crate::state::AppState;
 use crate::storage::Storage;
@@ -120,13 +120,27 @@ pub struct Page<T> {
     total: i64,
 }
 
+/// `GET /api/gifs`'s response: a `Page<GifResponse>` plus the Archive's
+/// four filter-chip totals (All/Public/Private/Hidden) — flattened so the
+/// wire shape stays `{ items, has_more, total, filter_counts }` rather
+/// than nesting `page` as its own object. `list_library` has no
+/// equivalent chips, so this stays specific to `list_gifs` rather than
+/// growing `Page<T>` itself.
+#[derive(Debug, Serialize)]
+pub struct GifsPage {
+    #[serde(flatten)]
+    page: Page<GifResponse>,
+    filter_counts: GifFilterCounts,
+}
+
 pub async fn list_gifs(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     Query(query): Query<ListQuery>,
-) -> Result<Json<Page<GifResponse>>, AppError> {
+) -> Result<Json<GifsPage>, AppError> {
     let page = query.page.unwrap_or(1);
     let (gifs, has_more, total) = db::list_gifs(&state.pool, &user.id, query.q.as_deref(), page).await?;
+    let filter_counts = db::gif_filter_counts(&state.pool, &user.id, query.q.as_deref()).await?;
     let favourited = db::list_favourite_gif_ids(&state.pool, &user.id).await?;
     let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
     let remixable = db::remixable_template_ids(&state.pool, &template_ids, Some(&user.id)).await?;
@@ -138,7 +152,7 @@ pub async fn list_gifs(
             with_urls(gif, &state.storage, is_favourited, template_remixable)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(Page { items, has_more, total }))
+    Ok(Json(GifsPage { page: Page { items, has_more, total }, filter_counts }))
 }
 
 pub async fn get_gif(
