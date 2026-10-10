@@ -480,13 +480,13 @@ describe('Archive', () => {
 
     renderArchive()
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    const oneOffSwitch = screen.getByRole('switch', { name: 'Hidden' })
+    const oneOffSwitch = screen.getByRole('switch', { name: 'Hide' })
     expect(oneOffSwitch).toHaveAttribute('aria-checked', 'false')
 
     await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', true)
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'true'))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hide' })).toHaveAttribute('aria-checked', 'true'))
     await screen.findByText(/marked as hidden/i)
   })
 
@@ -499,13 +499,13 @@ describe('Archive', () => {
     renderArchive()
     await user.click(screen.getByRole('button', { name: 'Hidden' }))
     await user.click(await screen.findByRole('button', { name: 'cat jumping' }))
-    const oneOffSwitch = screen.getByRole('switch', { name: 'Hidden' })
+    const oneOffSwitch = screen.getByRole('switch', { name: 'Hide' })
     expect(oneOffSwitch).toHaveAttribute('aria-checked', 'true')
 
     await user.click(oneOffSwitch)
 
     expect(setGifOneOff).toHaveBeenCalledWith('g1', false)
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'false'))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Hide' })).toHaveAttribute('aria-checked', 'false'))
     await screen.findByText(/Marked as visible/i)
   })
 
@@ -824,7 +824,7 @@ describe('Archive favourites', () => {
     expect(screen.queryByLabelText('GIF name')).not.toBeInTheDocument()
     expect(screen.getByText('cat jumping')).toBeInTheDocument()
     expect(screen.queryByRole('switch', { name: 'Public' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('switch', { name: 'Hidden' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Hide' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Remix' })).not.toBeInTheDocument()
   })
