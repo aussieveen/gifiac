@@ -26,7 +26,13 @@ const INSERT_GIF_COLUMNS: &str =
 const TEMPLATE_COLUMNS: &str = "id, video_id, user_id, name, is_public, payload_json, saved_at";
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool> {
-    let pool = PgPoolOptions::new().connect(database_url).await?;
+    // sqlx defaults to 10, which queues requests under concurrent load
+    // (load-testing showed this as a real, if secondary, bottleneck
+    // alongside the unpaginated list endpoints' response size) — 25 is
+    // comfortably under Postgres' own default `max_connections` of 100,
+    // and this is the only non-trivial consumer on a single-instance
+    // deployment (SPEC-CLOUD.md).
+    let pool = PgPoolOptions::new().max_connections(25).connect(database_url).await?;
     Ok(pool)
 }
 
