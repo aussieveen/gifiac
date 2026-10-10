@@ -96,6 +96,9 @@ export function Library({ hideHeader = false }: Props = {}) {
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  // The real matching count from the backend (SPEC perf note: "24+" was
+  // only ever a has_more-derived guess) — for the header, not paging.
+  const [total, setTotal] = useState(0)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -141,6 +144,7 @@ export function Library({ hideHeader = false }: Props = {}) {
         if (cancelled) return
         setItems(page.items)
         setHasMore(page.has_more)
+        setTotal(page.total)
       })
       .catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -160,6 +164,7 @@ export function Library({ hideHeader = false }: Props = {}) {
       .then((result) => {
         setItems((its) => [...its, ...result.items])
         setHasMore(result.has_more)
+        setTotal(result.total)
         setPage(nextPage)
       })
       .catch((err) => toast.show(err instanceof Error ? err.message : String(err)))
@@ -295,6 +300,7 @@ export function Library({ hideHeader = false }: Props = {}) {
     try {
       await adminDeleteGif(selected.id)
       setItems((its) => its.filter((it) => it.id !== selected.id))
+      setTotal((t) => t - 1)
       setSelectedId(null)
       toast.show('Deleted')
     } catch (err) {
@@ -310,7 +316,7 @@ export function Library({ hideHeader = false }: Props = {}) {
         <div className="archive-title-row">
           <div className="archive-title-group">
             <h1 className="page-title">Global Library</h1>
-            <span className="archive-count">{items.length === 1 ? '1 GIF' : `${items.length} GIFs`}</span>
+            <span className="archive-count">{total === 1 ? '1 GIF' : `${total} GIFs`}</span>
           </div>
         </div>
       )}

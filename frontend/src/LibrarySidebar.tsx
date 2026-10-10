@@ -10,10 +10,9 @@ export type LibraryView = { kind: 'all' } | { kind: 'favourites' } | { kind: 'co
 interface Props {
   view: LibraryView
   collections: CollectionWithCount[]
-  /** A plain number once every page is loaded (or for a view other than
-   * 'all', always); `"<n>+"` while there's at least one more unloaded
-   * page — see Archive.tsx's `sidebarAllGifsCount`. */
-  allGifsCount: number | string
+  /** The real total gif count (backend's `Page.total`), not the number
+   * of items currently loaded — see Archive.tsx's `sidebarAllGifsCount`. */
+  allGifsCount: number
   /** Bumped after a create/rename/delete so counts and the collection
    * list stay current — the parent owns the actual fetch. */
   onCollectionsChanged: () => void

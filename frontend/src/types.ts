@@ -205,10 +205,14 @@ export type LibrarySort = 'newest' | 'most-used'
 
 // Shared shape for `GET /api/gifs` and `GET /api/library` — 24 items per
 // page (backend's `db::PAGE_SIZE`), `has_more` tells the caller whether a
-// `page + 1` request would return anything.
+// `page + 1` request would return anything, and `total` is the real
+// matching row count (scoped by owner/`is_public` and any search `q`,
+// same as `items`) — for display (a sidebar badge, a page header), never
+// for paging logic.
 export interface Page<T> {
   items: T[]
   has_more: boolean
+  total: number
 }
 
 // `GET/POST/PATCH /api/collections` response shape (collections-design/

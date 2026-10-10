@@ -132,13 +132,17 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  // The 'all' view's real matching count from the backend — Favourites
+  // and a collection aren't paginated, so this is only ever meaningful
+  // there (see `sidebarAllGifsCount`).
+  const [total, setTotal] = useState(0)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [collections, setCollections] = useState<CollectionWithCount[]>([])
-  const [allGifsCount, setAllGifsCount] = useState<number | string>(0)
+  const [allGifsCount, setAllGifsCount] = useState(0)
   const [collectionsRefreshToken, setCollectionsRefreshToken] = useState(0)
   const activeCollection = view.kind === 'collection' ? collections.find((c) => c.id === view.id) : undefined
   const [selectedId, setSelectedIdState] = useState<string | null>(initialSelectedId ?? null)
@@ -223,6 +227,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
           if (cancelled) return
           setGifs(result.items)
           setHasMore(result.has_more)
+          setTotal(result.total)
         })
         .catch((err) => {
           if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -245,6 +250,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
       .then((result) => {
         setGifs((gs) => [...gs, ...result.items])
         setHasMore(result.has_more)
+        setTotal(result.total)
         setPage(nextPage)
       })
       .catch((err) => toast.show(err instanceof Error ? err.message : String(err)))
@@ -270,25 +276,24 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     }
   }, [refreshToken, collectionsRefreshToken])
 
-  // Sidebar's "All GIFs" count: while viewing All GIFs itself, `gifs`
-  // above already has the answer (`gifs.length`) — no need for a second
-  // request. Any other view needs its own fetch to know that count. Since
-  // `listGifs` is now paginated, a single page can't report an exact
-  // total without a second `COUNT(*)` query nobody asked for — "24+"
-  // when `has_more` is honest about the one thing it doesn't know.
+  // Sidebar's "All GIFs" count: while viewing All GIFs itself, `total`
+  // above already has the answer (from the same paginated fetch) — no
+  // need for a second request. Any other view needs its own fetch to
+  // know that count; `listGifs`'s response carries the real total
+  // regardless of page size, so this is exact, not has_more-derived.
   useEffect(() => {
     if (view.kind === 'all') return
     let cancelled = false
     listGifs()
       .then((result) => {
-        if (!cancelled) setAllGifsCount(result.has_more ? `${result.items.length}+` : result.items.length)
+        if (!cancelled) setAllGifsCount(result.total)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [view.kind, refreshToken])
-  const sidebarAllGifsCount = view.kind === 'all' ? (hasMore ? `${gifs.length}+` : gifs.length) : allGifsCount
+  const sidebarAllGifsCount = view.kind === 'all' ? total : allGifsCount
 
   // Desktop-only affordance (mobile's full-screen panel keeps its own back
   // arrow instead — see the `canEdit` gate on the × button below). Skipped
@@ -563,6 +568,7 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     try {
       await deleteGif(selected.id)
       setGifs((gs) => gs.filter((g) => g.id !== selected.id))
+      if (view.kind === 'all') setTotal((t) => t - 1)
       setSelectedId(null)
       toast.show('Deleted')
     } catch (err) {

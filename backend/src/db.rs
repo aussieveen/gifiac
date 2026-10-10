@@ -265,9 +265,9 @@ fn paginate<T>(mut rows: Vec<T>) -> (Vec<T>, bool) {
     (rows, has_more)
 }
 
-pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>, page: u32) -> Result<(Vec<Gif>, bool)> {
+pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>, page: u32) -> Result<(Vec<Gif>, bool, i64)> {
     let offset = (page.saturating_sub(1) as i64) * PAGE_SIZE;
-    let rows = match q.map(str::trim).filter(|q| !q.is_empty()) {
+    let (rows, total) = match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             // `ILIKE`, not `LIKE`: SQLite's `LIKE` is case-insensitive for
             // ASCII by default, Postgres' isn't — `ILIKE` is what
@@ -276,28 +276,43 @@ pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>, page: u32
                 "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 AND (name ILIKE $2 ESCAPE '\\' OR caption_text ILIKE $3 ESCAPE '\\') ORDER BY is_one_off ASC, created_at DESC LIMIT $4 OFFSET $5"
             );
             let pattern = format!("%{}%", escape_like(q));
-            sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+            let rows = sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
                 .bind(owner_id)
                 .bind(&pattern)
                 .bind(&pattern)
                 .bind(PAGE_SIZE + 1)
                 .bind(offset)
                 .fetch_all(pool)
-                .await?
+                .await?;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM gifs WHERE user_id = $1 AND (name ILIKE $2 ESCAPE '\\' OR caption_text ILIKE $3 ESCAPE '\\')",
+            )
+            .bind(owner_id)
+            .bind(&pattern)
+            .bind(&pattern)
+            .fetch_one(pool)
+            .await?;
+            (rows, total)
         }
         None => {
             let sql = format!(
                 "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 ORDER BY is_one_off ASC, created_at DESC LIMIT $2 OFFSET $3"
             );
-            sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
+            let rows = sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
                 .bind(owner_id)
                 .bind(PAGE_SIZE + 1)
                 .bind(offset)
                 .fetch_all(pool)
-                .await?
+                .await?;
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gifs WHERE user_id = $1")
+                .bind(owner_id)
+                .fetch_one(pool)
+                .await?;
+            (rows, total)
         }
     };
-    Ok(paginate(rows))
+    let (items, has_more) = paginate(rows);
+    Ok((items, has_more, total))
 }
 
 /// Escapes `LIKE` wildcards (`%`, `_`) in user-supplied search text, paired
@@ -1098,7 +1113,7 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 /// creator's handle for attribution. `sort` picks `Newest` (creation-time,
 /// the only option before M5c) or `MostUsed` (`use_count` descending, with
 /// creation-time as a tiebreaker for equally-used gifs).
-pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort, page: u32) -> Result<(Vec<PublicGif>, bool)> {
+pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort, page: u32) -> Result<(Vec<PublicGif>, bool, i64)> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
          gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
@@ -1108,7 +1123,9 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort,
         LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
     };
     let offset = (page.saturating_sub(1) as i64) * PAGE_SIZE;
-    let rows = match q.map(str::trim).filter(|q| !q.is_empty()) {
+    // The count never needs the `users` join — `is_public`/`name`/
+    // `caption_text` all live on `gifs` itself.
+    let (rows, total) = match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
@@ -1116,27 +1133,40 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort,
                  ORDER BY {order_by} LIMIT $3 OFFSET $4"
             );
             let pattern = format!("%{}%", escape_like(q));
-            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+            let rows = sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
                 .bind(&pattern)
                 .bind(&pattern)
                 .bind(PAGE_SIZE + 1)
                 .bind(offset)
                 .fetch_all(pool)
-                .await?
+                .await?;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM gifs WHERE is_public = true AND (name ILIKE $1 ESCAPE '\\' OR caption_text ILIKE $2 ESCAPE '\\')",
+            )
+            .bind(&pattern)
+            .bind(&pattern)
+            .fetch_one(pool)
+            .await?;
+            (rows, total)
         }
         None => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
                  WHERE gifs.is_public = true ORDER BY {order_by} LIMIT $1 OFFSET $2"
             );
-            sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+            let rows = sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
                 .bind(PAGE_SIZE + 1)
                 .bind(offset)
                 .fetch_all(pool)
-                .await?
+                .await?;
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gifs WHERE is_public = true")
+                .fetch_one(pool)
+                .await?;
+            (rows, total)
         }
     };
-    Ok(paginate(rows))
+    let (items, has_more) = paginate(rows);
+    Ok((items, has_more, total))
 }
 
 pub async fn is_favourited(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<bool> {
@@ -2115,10 +2145,11 @@ mod tests {
             .await
             .unwrap();
 
-        let (gifs, has_more) = list_gifs(&pool, &user, None, 1).await.unwrap();
+        let (gifs, has_more, total) = list_gifs(&pool, &user, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["newer", "older"]);
         assert!(!has_more);
+        assert_eq!(total, 2);
     }
 
     #[tokio::test]
@@ -2133,9 +2164,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (gifs, _has_more) = list_gifs(&pool, &owner, None, 1).await.unwrap();
+        let (gifs, _has_more, total) = list_gifs(&pool, &owner, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["mine"]);
+        assert_eq!(total, 1, "total is scoped to the owner, not every gif in the table");
     }
 
     #[tokio::test]
@@ -2156,9 +2188,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (gifs, _has_more) = list_gifs(&pool, &user, Some("cat"), 1).await.unwrap();
+        let (gifs, _has_more, total) = list_gifs(&pool, &user, Some("cat"), 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["g2", "g1"]); // matched via caption_text and name respectively, newest first
+        assert_eq!(total, 2, "total reflects the search filter, not the owner's full gif count");
     }
 
     #[tokio::test]
@@ -2169,8 +2202,9 @@ mod tests {
             .await
             .unwrap();
 
-        let (gifs, _has_more) = list_gifs(&pool, &user, Some("   "), 1).await.unwrap();
+        let (gifs, _has_more, total) = list_gifs(&pool, &user, Some("   "), 1).await.unwrap();
         assert_eq!(gifs.len(), 1);
+        assert_eq!(total, 1);
     }
 
     #[tokio::test]
@@ -2185,13 +2219,15 @@ mod tests {
                 .unwrap();
         }
 
-        let (page1, has_more1) = list_gifs(&pool, &user, None, 1).await.unwrap();
+        let (page1, has_more1, total1) = list_gifs(&pool, &user, None, 1).await.unwrap();
         assert_eq!(page1.len(), PAGE_SIZE as usize);
         assert!(has_more1);
+        assert_eq!(total1, 30, "total is the full count, not just this page's size");
 
-        let (page2, has_more2) = list_gifs(&pool, &user, None, 2).await.unwrap();
+        let (page2, has_more2, total2) = list_gifs(&pool, &user, None, 2).await.unwrap();
         assert_eq!(page2.len(), 30 - PAGE_SIZE as usize);
         assert!(!has_more2);
+        assert_eq!(total2, 30, "total stays the same across pages");
 
         let page1_ids: HashSet<&str> = page1.iter().map(|g| g.id.as_str()).collect();
         let page2_ids: HashSet<&str> = page2.iter().map(|g| g.id.as_str()).collect();
@@ -2326,15 +2362,18 @@ mod tests {
         set_gif_public(&pool, "public", &owner, true).await.unwrap();
         set_gif_public(&pool, "someone-elses", &other, true).await.unwrap();
 
-        let (all, _has_more) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
+        let (all, _has_more, total) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
         let ids: Vec<&str> = all.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["someone-elses", "public"]);
         let public_entry = all.iter().find(|g| g.id == "public").unwrap();
         assert_eq!(public_entry.owner_handle.as_deref(), Some("owner-handle"));
+        assert_eq!(total, 2, "total excludes the private gif");
 
-        let (filtered, _has_more) = list_public_gifs(&pool, Some("cat"), LibrarySort::Newest, 1).await.unwrap();
+        let (filtered, _has_more, filtered_total) =
+            list_public_gifs(&pool, Some("cat"), LibrarySort::Newest, 1).await.unwrap();
         let filtered_ids: Vec<&str> = filtered.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(filtered_ids, vec!["public"]);
+        assert_eq!(filtered_total, 1, "total reflects the search filter");
     }
 
     #[tokio::test]
@@ -2350,13 +2389,15 @@ mod tests {
             set_gif_public(&pool, &id, &owner, true).await.unwrap();
         }
 
-        let (page1, has_more1) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
+        let (page1, has_more1, total1) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
         assert_eq!(page1.len(), PAGE_SIZE as usize);
         assert!(has_more1);
+        assert_eq!(total1, 30);
 
-        let (page2, has_more2) = list_public_gifs(&pool, None, LibrarySort::Newest, 2).await.unwrap();
+        let (page2, has_more2, total2) = list_public_gifs(&pool, None, LibrarySort::Newest, 2).await.unwrap();
         assert_eq!(page2.len(), 30 - PAGE_SIZE as usize);
         assert!(!has_more2);
+        assert_eq!(total2, 30);
 
         let page1_ids: HashSet<&str> = page1.iter().map(|g| g.id.as_str()).collect();
         let page2_ids: HashSet<&str> = page2.iter().map(|g| g.id.as_str()).collect();
@@ -2392,7 +2433,7 @@ mod tests {
         set_gif_one_off(&pool, "new-one-off", &user, true).await.unwrap();
         set_gif_one_off(&pool, "old-one-off", &user, true).await.unwrap();
 
-        let (gifs, _has_more) = list_gifs(&pool, &user, None, 1).await.unwrap();
+        let (gifs, _has_more, _total) = list_gifs(&pool, &user, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -2895,7 +2936,7 @@ mod tests {
             increment_gif_use_count(&pool, "tied-older").await.unwrap();
         }
 
-        let (sorted, _has_more) = list_public_gifs(&pool, None, LibrarySort::MostUsed, 1).await.unwrap();
+        let (sorted, _has_more, _total) = list_public_gifs(&pool, None, LibrarySort::MostUsed, 1).await.unwrap();
         let ids: Vec<&str> = sorted.iter().map(|g| g.id.as_str()).collect();
         // "high" (3) first, then the tied-at-2 pair broken by recency
         // (newer first), then "low" (1) last.
