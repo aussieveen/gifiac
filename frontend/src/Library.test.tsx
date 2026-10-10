@@ -98,33 +98,33 @@ function renderLibrary() {
 
 describe('Library', () => {
   it('lists gifs returned by the backend as grid thumbnails', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     renderLibrary()
 
     expect(await screen.findByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
   })
 
   it('shows an empty state with no public gifs', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [], has_more: false })
     renderLibrary()
 
     expect(await screen.findByText(/no public gifs yet/i)).toBeInTheDocument()
   })
 
   it('re-queries as the search input changes', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
-    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'newest'))
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'newest', 1))
 
     await user.type(screen.getByLabelText('Search the library'), 'cat')
 
-    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('cat', 'newest'))
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('cat', 'newest', 1))
   })
 
   it('selecting a tile opens its detail panel with attribution linking to the owner profile', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -139,7 +139,7 @@ describe('Library', () => {
     // owner_slug is a real, backend-assigned field independent of
     // owner_handle's display case — including a collision suffix
     // (migration 0012) — so it must never be re-derived on the frontend.
-    vi.mocked(listLibrary).mockResolvedValue([{ ...entryA, owner_handle: 'Simon_Mc', owner_slug: 'simon_mc2' }])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [{ ...entryA, owner_handle: 'Simon_Mc', owner_slug: 'simon_mc2' }], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -150,7 +150,7 @@ describe('Library', () => {
   })
 
   it('the close button closes the panel and returns focus to the tile', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -165,7 +165,7 @@ describe('Library', () => {
   })
 
   it('clicking the already-selected tile closes the panel', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -177,7 +177,7 @@ describe('Library', () => {
   })
 
   it('clicking empty grid space closes the panel', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -190,7 +190,7 @@ describe('Library', () => {
   })
 
   it('Escape closes the panel and returns focus to the tile', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -204,7 +204,7 @@ describe('Library', () => {
   })
 
   it('Escape does not close the panel while focus is in the search box', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -217,7 +217,7 @@ describe('Library', () => {
   })
 
   it('has no close button below the editor breakpoint — the Back arrow is the only way to close', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     resizeTo(390)
     const user = userEvent.setup()
     renderLibrary()
@@ -228,7 +228,7 @@ describe('Library', () => {
   })
 
   it('the copy-link button copies the gif url and bumps its use count', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     vi.mocked(recordGifUse).mockResolvedValue({ ...entryA, use_count: 1 })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
@@ -249,7 +249,7 @@ describe('Library', () => {
   })
 
   it('the embed button copies an <img> tag', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
 
@@ -268,19 +268,19 @@ describe('Library', () => {
   })
 
   it('switching the sort chip re-queries with the most-used sort', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
-    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'newest'))
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'newest', 1))
 
     await user.click(screen.getByRole('button', { name: 'Most used' }))
 
-    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'most-used'))
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledWith('', 'most-used', 1))
   })
 
   it('does not show a Delete button for a plain user', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -291,7 +291,7 @@ describe('Library', () => {
 
   it('an admin can delete a gif from the detail panel', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({ ...plainUser, role: 'admin' })
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     vi.mocked(adminDeleteGif).mockResolvedValue(undefined)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const user = userEvent.setup()
@@ -306,7 +306,7 @@ describe('Library', () => {
   })
 
   it('shows a mobile top bar with a Back button below the editor breakpoint', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -320,7 +320,7 @@ describe('Library', () => {
   })
 
   it('shows a pinned Share/Copy-link bar below the editor breakpoint', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     resizeTo(390)
     const user = userEvent.setup()
 
@@ -334,7 +334,7 @@ describe('Library', () => {
 // SPEC-CLOUD.md §14.
 describe('Library favourites', () => {
   it('clicking a thumbnail star favourites it without opening the detail panel', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     vi.mocked(favouriteGif).mockResolvedValue({ ...entryA, is_favourited: true })
     const user = userEvent.setup()
 
@@ -348,7 +348,7 @@ describe('Library favourites', () => {
   })
 
   it('the detail panel favourite button unfavourites an already-saved gif', async () => {
-    vi.mocked(listLibrary).mockResolvedValue([{ ...entryA, is_favourited: true }])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [{ ...entryA, is_favourited: true }], has_more: false })
     vi.mocked(unfavouriteGif).mockResolvedValue({ ...entryA, is_favourited: false })
     const user = userEvent.setup()
 
@@ -365,7 +365,7 @@ describe('Library favourites', () => {
 describe('Library logged out', () => {
   it('shows no favourite or save-to-collection button on a grid tile', async () => {
     vi.mocked(getCurrentUser).mockReset().mockResolvedValue(null)
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     renderLibrary()
 
     await screen.findByRole('button', { name: 'cat jumping' })
@@ -374,7 +374,7 @@ describe('Library logged out', () => {
 
   it('shows no favourite or save-to-collection button in the detail panel', async () => {
     vi.mocked(getCurrentUser).mockReset().mockResolvedValue(null)
-    vi.mocked(listLibrary).mockResolvedValue([entryA])
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: false })
     const user = userEvent.setup()
     renderLibrary()
 
@@ -383,5 +383,47 @@ describe('Library logged out', () => {
     expect(screen.queryByRole('button', { name: 'Favourite' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save to collection' })).not.toBeInTheDocument()
     expect(listCollections).not.toHaveBeenCalled()
+  })
+})
+
+describe('Library infinite scroll', () => {
+  // jsdom has no real IntersectionObserver — useInfiniteScroll.ts's one
+  // instance per enabled sentinel is captured so the test can fire its
+  // callback directly, the same way a real scroll-into-view would.
+  class FakeIntersectionObserver {
+    static instances: FakeIntersectionObserver[] = []
+    callback: IntersectionObserverCallback
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback
+      FakeIntersectionObserver.instances.push(this)
+    }
+    observe() {}
+    disconnect() {}
+  }
+
+  beforeEach(() => {
+    FakeIntersectionObserver.instances = []
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
+  })
+
+  it('requests page 2 and appends it below page 1 when the sentinel intersects, never a Load More button', async () => {
+    const entryB: LibraryEntry = { ...entryA, id: 'g2', name: 'dog running' }
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryA], has_more: true })
+    renderLibrary()
+
+    await screen.findByRole('button', { name: 'cat jumping' })
+    expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument()
+
+    vi.mocked(listLibrary).mockResolvedValue({ items: [entryB], has_more: false })
+    const observer = FakeIntersectionObserver.instances.at(-1)
+    observer?.callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      observer as unknown as IntersectionObserver,
+    )
+
+    await screen.findByRole('button', { name: 'dog running' })
+    expect(listLibrary).toHaveBeenLastCalledWith('', 'newest', 2)
+    // Page 1's item is still there — page 2 appends, it doesn't replace.
+    expect(screen.getByRole('button', { name: 'cat jumping' })).toBeInTheDocument()
   })
 })

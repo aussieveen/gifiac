@@ -291,7 +291,7 @@ async fn library_and_my_gifs_report_is_favourited_per_viewer() {
             .unwrap();
         serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
     };
-    let entry_before = library_before.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
+    let entry_before = library_before["items"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
     assert_eq!(entry_before["is_favourited"], false);
 
     favourite(&test_app, &saver_cookie, id).await;
@@ -312,7 +312,7 @@ async fn library_and_my_gifs_report_is_favourited_per_viewer() {
             .unwrap();
         serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
     };
-    let entry_after = library_after.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
+    let entry_after = library_after["items"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
     assert_eq!(entry_after["is_favourited"], true);
 
     // ...but the owner's own My Library view, and a logged-out visitor's
@@ -326,7 +326,7 @@ async fn library_and_my_gifs_report_is_favourited_per_viewer() {
             .unwrap();
         serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
     };
-    let mine = my_gifs.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
+    let mine = my_gifs["items"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
     assert_eq!(mine["is_favourited"], false);
 
     let library_logged_out: serde_json::Value = {
@@ -338,6 +338,6 @@ async fn library_and_my_gifs_report_is_favourited_per_viewer() {
             .unwrap();
         serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
     };
-    let logged_out_entry = library_logged_out.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
+    let logged_out_entry = library_logged_out["items"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap();
     assert_eq!(logged_out_entry["is_favourited"], false);
 }

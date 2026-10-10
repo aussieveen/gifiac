@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   addGifToCollection,
@@ -49,6 +49,7 @@ import type { CollectionWithCount, Gif, LibraryEntry } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
+import { useInfiniteScroll } from './useInfiniteScroll'
 import { useToast } from './useToast'
 
 export type { LibraryView } from './LibrarySidebar'
@@ -125,12 +126,19 @@ interface Props {
 
 export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: Props) {
   const [gifs, setGifs] = useState<ArchiveItem[]>([])
+  // Infinite scroll (never a "Load more" button) — only the 'all' view is
+  // paginated server-side (`GET /api/gifs`); Favourites and a collection's
+  // gifs stay unpaginated, so `hasMore` simply never goes true for them.
+  const [page, setPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const sentinelRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [collections, setCollections] = useState<CollectionWithCount[]>([])
-  const [allGifsCount, setAllGifsCount] = useState(0)
+  const [allGifsCount, setAllGifsCount] = useState<number | string>(0)
   const [collectionsRefreshToken, setCollectionsRefreshToken] = useState(0)
   const activeCollection = view.kind === 'collection' ? collections.find((c) => c.id === view.id) : undefined
   const [selectedId, setSelectedIdState] = useState<string | null>(initialSelectedId ?? null)
@@ -194,23 +202,57 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
     let cancelled = false
     setLoading(true)
     setLoadError(null)
-    const request =
-      view.kind === 'favourites' ? listFavourites() : view.kind === 'collection' ? listCollectionGifs(view.id, query) : listGifs(query)
-    request
-      .then((gs) => {
-        if (!cancelled) setGifs(gs)
-      })
-      .catch((err) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    setPage(1)
+    if (view.kind === 'favourites' || view.kind === 'collection') {
+      const request = view.kind === 'favourites' ? listFavourites() : listCollectionGifs(view.id, query)
+      request
+        .then((gs) => {
+          if (cancelled) return
+          setGifs(gs)
+          setHasMore(false)
+        })
+        .catch((err) => {
+          if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    } else {
+      listGifs(query, 1)
+        .then((result) => {
+          if (cancelled) return
+          setGifs(result.items)
+          setHasMore(result.has_more)
+        })
+        .catch((err) => {
+          if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, view.kind, view.kind === 'collection' ? view.id : null, refreshToken])
+
+  const loadMore = useCallback(() => {
+    if (view.kind !== 'all') return
+    setLoadingMore(true)
+    const nextPage = page + 1
+    listGifs(query, nextPage)
+      .then((result) => {
+        setGifs((gs) => [...gs, ...result.items])
+        setHasMore(result.has_more)
+        setPage(nextPage)
+      })
+      .catch((err) => toast.show(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoadingMore(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.kind, query, page])
+
+  useInfiniteScroll(sentinelRef, hasMore && !loading && !loadingMore, loadMore)
 
   // Sidebar's collections list — fetched independently of the active
   // view (every view needs the same sidebar) and refreshed whenever a
@@ -230,20 +272,23 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
 
   // Sidebar's "All GIFs" count: while viewing All GIFs itself, `gifs`
   // above already has the answer (`gifs.length`) — no need for a second
-  // request. Any other view needs its own fetch to know that count.
+  // request. Any other view needs its own fetch to know that count. Since
+  // `listGifs` is now paginated, a single page can't report an exact
+  // total without a second `COUNT(*)` query nobody asked for — "24+"
+  // when `has_more` is honest about the one thing it doesn't know.
   useEffect(() => {
     if (view.kind === 'all') return
     let cancelled = false
     listGifs()
-      .then((gs) => {
-        if (!cancelled) setAllGifsCount(gs.length)
+      .then((result) => {
+        if (!cancelled) setAllGifsCount(result.has_more ? `${result.items.length}+` : result.items.length)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [view.kind, refreshToken])
-  const sidebarAllGifsCount = view.kind === 'all' ? gifs.length : allGifsCount
+  const sidebarAllGifsCount = view.kind === 'all' ? (hasMore ? `${gifs.length}+` : gifs.length) : allGifsCount
 
   // Desktop-only affordance (mobile's full-screen panel keeps its own back
   // arrow instead — see the `canEdit` gate on the × button below). Skipped
@@ -739,6 +784,8 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
               </div>
             )
           })}
+          {hasMore && <div ref={sentinelRef} className="archive-grid-sentinel" aria-hidden="true" />}
+          {loadingMore && <p className="va-hint">Loading more…</p>}
           {!loading && view.kind === 'all' && gifs.length === 0 && <p className="va-hint">No GIFs yet.</p>}
           {!loading && view.kind === 'all' && gifs.length > 0 && filteredGifs.length === 0 && (
             <p className="va-hint">No GIFs match this filter.</p>

@@ -186,7 +186,7 @@ beforeEach(() => {
   vi.mocked(subscribeIngestProgress).mockReset()
   vi.mocked(getFilmstripMeta).mockReset()
   vi.mocked(getVideo).mockReset()
-  vi.mocked(listGifs).mockReset().mockResolvedValue([])
+  vi.mocked(listGifs).mockReset().mockResolvedValue({ items: [], has_more: false })
   vi.mocked(listCollections).mockReset().mockResolvedValue([])
   vi.mocked(gifCollectionIds).mockReset().mockResolvedValue([])
   vi.mocked(createExport).mockReset()
@@ -198,7 +198,7 @@ beforeEach(() => {
   vi.mocked(verifyEmailCode).mockReset()
   vi.mocked(listAdminUsers).mockReset().mockResolvedValue([])
   vi.mocked(logout).mockReset().mockResolvedValue(undefined)
-  vi.mocked(listLibrary).mockReset().mockResolvedValue([])
+  vi.mocked(listLibrary).mockReset().mockResolvedValue({ items: [], has_more: false })
   vi.mocked(listMyTemplates).mockReset().mockResolvedValue([])
   vi.mocked(listOtherTemplates).mockReset().mockResolvedValue([])
   vi.mocked(uploadGifFile).mockReset()
@@ -347,7 +347,7 @@ describe('App', () => {
   it('shows the handle picker prefilled with the suggestion, and proceeds once set', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(userWithoutAHandle)
     vi.mocked(setHandle).mockResolvedValue({ ...loggedInUser, handle: 'sim-on' })
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -362,7 +362,7 @@ describe('App', () => {
   })
 
   it('/library shows my library', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     renderAppAt('/library')
     await screen.findByText(/no gifs yet/i)
     expect(screen.getByRole('link', { name: 'My Library' })).toHaveClass('active')
@@ -392,7 +392,7 @@ describe('App', () => {
   })
 
   it('does not show an Admin tab for a plain user', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     renderApp()
     await screen.findByText(/no gifs yet/i)
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
@@ -400,7 +400,7 @@ describe('App', () => {
 
   it('shows an Admin tab for an admin user and switches to the admin page', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, role: 'admin' })
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -412,7 +412,7 @@ describe('App', () => {
   })
 
   it('the + New GIF button switches to the video picker', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -424,7 +424,7 @@ describe('App', () => {
   })
 
   it('uploading a video loads its film-strip and opens the editor', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
     vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
       handlers.onComplete?.(video)
@@ -451,7 +451,7 @@ describe('App', () => {
   })
 
   it('shows an error and lets you go back if the film-strip fails to load', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
     vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
       handlers.onComplete?.(video)
@@ -474,7 +474,7 @@ describe('App', () => {
   })
 
   it("never renders one upload against a second upload's stale film-strip", async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(uploadVideo).mockImplementation((file: File) =>
       Promise.resolve(
         file.name === 'clip.mp4' ? { video_id: video.id, job_id: 'job1' } : { video_id: otherVideo.id, job_id: 'job2' },
@@ -512,7 +512,7 @@ describe('App', () => {
   })
 
   it('the My Library nav tab returns from the video picker to my library', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -527,7 +527,7 @@ describe('App', () => {
   })
 
   it('the account pill opens a menu linking to the current user\'s own profile', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
     renderApp()
     await screen.findByText(/no gifs yet/i)
@@ -543,7 +543,7 @@ describe('App', () => {
     // display case — including a collision suffix (migration 0012) — so
     // it must never be re-derived from the handle on the frontend.
     vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, handle: 'Simon_Mc', slug: 'simon_mc2' })
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
     renderApp()
     await screen.findByText(/no gifs yet/i)
@@ -556,7 +556,7 @@ describe('App', () => {
   })
 
   it('sign out (from the account menu) calls the logout API', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     // window.location.reload isn't implemented in jsdom — stub it so the
     // post-logout reload the button triggers doesn't error the test.
     vi.stubGlobal('location', { ...window.location, reload: vi.fn() })
@@ -571,7 +571,7 @@ describe('App', () => {
   })
 
   it('making a GIF switches to the archive with it already selected', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(uploadVideo).mockResolvedValue({ video_id: video.id, job_id: 'job1' })
     vi.mocked(subscribeIngestProgress).mockImplementation((_jobId: string, handlers: IngestProgressHandlers) => {
       handlers.onComplete?.(video)
@@ -614,7 +614,7 @@ describe('App', () => {
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     await user.upload(input, new File(['bytes'], 'clip.mp4', { type: 'video/mp4' }))
     await screen.findByText(/clip\.mp4/)
-    vi.mocked(listGifs).mockResolvedValue([createdGif])
+    vi.mocked(listGifs).mockResolvedValue({ items: [createdGif], has_more: false })
     await user.click(screen.getByRole('button', { name: 'Make GIF' }))
     const dialog = await screen.findByRole('dialog', { name: 'Make GIF' })
     await user.type(within(dialog).getByLabelText('GIF name'), 'my clip')
@@ -629,7 +629,7 @@ describe('App', () => {
   })
 
   it('shows the New GIF button at desktop width but not at phone width', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
 
     resizeTo(1280)
     const desktop = renderApp()
@@ -644,7 +644,7 @@ describe('App', () => {
   })
 
   it('shows the "bigger screen" message instead of the editor at phone width', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
 
@@ -656,7 +656,7 @@ describe('App', () => {
   })
 
   it('renders the editor immediately once resized above the breakpoint, without a reload', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     vi.mocked(getVideo).mockResolvedValue(video)
     vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
 
@@ -672,7 +672,7 @@ describe('App', () => {
 
   it('returns a signed-in-from-a-deep-link visitor to the page they started on', async () => {
     vi.mocked(getCurrentUser).mockResolvedValueOnce(null as unknown as typeof loggedInUser)
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderAppAt('/library/abc123')
@@ -689,7 +689,7 @@ describe('App', () => {
   })
 
   it('"Import" sits in the global header next to "New GIF" and opens the Import modal', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -703,7 +703,7 @@ describe('App', () => {
   })
 
   it('Esc closes the Import modal and returns focus to the header Import button', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderApp()
@@ -718,8 +718,8 @@ describe('App', () => {
   })
 
   it('clicking Import from outside My Library navigates there first, then opens the modal', async () => {
-    vi.mocked(listGifs).mockResolvedValue([])
-    vi.mocked(listLibrary).mockResolvedValue([])
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false })
+    vi.mocked(listLibrary).mockResolvedValue({ items: [], has_more: false })
     const user = userEvent.setup()
 
     renderAppAt('/')
@@ -732,7 +732,9 @@ describe('App', () => {
   })
 
   it('adding a gif via the global Import modal refreshes My Library and shows a toast', async () => {
-    vi.mocked(listGifs).mockResolvedValueOnce([]).mockResolvedValueOnce([makeGif('g1', 'linked meme')])
+    vi.mocked(listGifs)
+      .mockResolvedValueOnce({ items: [], has_more: false })
+      .mockResolvedValueOnce({ items: [makeGif('g1', 'linked meme')], has_more: false })
     vi.mocked(checkLink).mockResolvedValue({ width: 480, height: 270, sizeBytes: 1_400_000 })
     vi.mocked(linkGif).mockResolvedValue(makeGif('g1', 'linked meme'))
     const user = userEvent.setup()
@@ -752,7 +754,9 @@ describe('App', () => {
   })
 
   it('uploading a file via the global Import modal refreshes My Library', async () => {
-    vi.mocked(listGifs).mockResolvedValueOnce([]).mockResolvedValueOnce([makeGif('g1', 'Dog running')])
+    vi.mocked(listGifs)
+      .mockResolvedValueOnce({ items: [], has_more: false })
+      .mockResolvedValueOnce({ items: [makeGif('g1', 'Dog running')], has_more: false })
     vi.mocked(uploadGifFile).mockResolvedValue(makeGif('g1', 'Dog running'))
     const user = userEvent.setup()
 

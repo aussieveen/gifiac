@@ -276,7 +276,7 @@ async fn deleting_a_collection_does_not_delete_its_gifs_or_remove_them_from_othe
         .await
         .unwrap();
     let my_gifs: Value = serde_json::from_slice(&axum::body::to_bytes(my_gifs.into_body(), usize::MAX).await.unwrap()).unwrap();
-    assert!(my_gifs.as_array().unwrap().iter().any(|g| g["id"] == gif_id));
+    assert!(my_gifs["items"].as_array().unwrap().iter().any(|g| g["id"] == gif_id));
 
     // ...and still in collection B.
     let response = list_collection_gifs(&test_app, &test_app.owner_cookie, &b_id).await;

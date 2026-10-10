@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   addGifToCollection,
@@ -34,6 +34,7 @@ import {
 import type { CollectionWithCount, LibraryEntry, LibrarySort } from './types'
 import { useCanEdit } from './useCanEdit'
 import { useCurrentUser } from './useCurrentUser'
+import { useInfiniteScroll } from './useInfiniteScroll'
 import { useToast } from './useToast'
 
 /** `navigator.clipboard` only exists in secure contexts — see the matching
@@ -89,6 +90,13 @@ export function Library({ hideHeader = false }: Props = {}) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<LibrarySort>('newest')
+  // Infinite scroll (never a "Load more" button) — `page`/`hasMore` reset
+  // to their initial values every time `query`/`sort` change, same as
+  // `items` itself.
+  const [page, setPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const sentinelRef = useRef<HTMLDivElement>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const toast = useToast()
@@ -127,9 +135,12 @@ export function Library({ hideHeader = false }: Props = {}) {
     let cancelled = false
     setLoading(true)
     setLoadError(null)
-    listLibrary(query, sort)
-      .then((gifs) => {
-        if (!cancelled) setItems(gifs)
+    setPage(1)
+    listLibrary(query, sort, 1)
+      .then((page) => {
+        if (cancelled) return
+        setItems(page.items)
+        setHasMore(page.has_more)
       })
       .catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -141,6 +152,22 @@ export function Library({ hideHeader = false }: Props = {}) {
       cancelled = true
     }
   }, [query, sort])
+
+  const loadMore = useCallback(() => {
+    setLoadingMore(true)
+    const nextPage = page + 1
+    listLibrary(query, sort, nextPage)
+      .then((result) => {
+        setItems((its) => [...its, ...result.items])
+        setHasMore(result.has_more)
+        setPage(nextPage)
+      })
+      .catch((err) => toast.show(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoadingMore(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, sort, page])
+
+  useInfiniteScroll(sentinelRef, hasMore && !loading && !loadingMore, loadMore)
 
   const selected = items.find((i) => i.id === selectedId) ?? null
 
@@ -375,6 +402,8 @@ export function Library({ hideHeader = false }: Props = {}) {
               )}
             </div>
           ))}
+          {hasMore && <div ref={sentinelRef} className="archive-grid-sentinel" aria-hidden="true" />}
+          {loadingMore && <p className="va-hint">Loading more…</p>}
           {!loading && items.length === 0 && <p className="va-hint">No public GIFs yet.</p>}
         </div>
 

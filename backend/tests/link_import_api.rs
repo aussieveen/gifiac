@@ -93,13 +93,13 @@ async fn link_gif_appears_in_the_archive_list_and_can_be_fetched_by_id() {
         .oneshot(authed(&test_app, Request::builder()).uri("/api/gifs").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+    let list_body: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(list_response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    assert!(gifs.iter().any(|g| g["id"] == id));
+    assert!(list_body["items"].as_array().unwrap().iter().any(|g| g["id"] == id));
 }
 
 /// Deleting a linked GIF only removes the row — there's nothing in R2 to
@@ -345,13 +345,13 @@ async fn check_link_reports_dimensions_and_size_for_a_real_gif() {
         .oneshot(authed(&test_app, Request::builder()).uri("/api/gifs").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+    let list_body: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(list_response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    assert!(gifs.is_empty(), "check-link must never create a row");
+    assert!(list_body["items"].as_array().unwrap().is_empty(), "check-link must never create a row");
 }
 
 /// A reachable, non-GIF page gets the specific "that link isn't a GIF"

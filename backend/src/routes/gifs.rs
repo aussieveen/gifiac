@@ -104,18 +104,30 @@ pub struct ListQuery {
     /// sort by use, only `is_one_off` then recency.
     #[serde(default)]
     sort: LibrarySort,
+    /// 1-indexed; missing/0 both mean the first page (`db::list_gifs`/
+    /// `db::list_public_gifs` already saturate on underflow).
+    page: Option<u32>,
+}
+
+/// A page of list results plus whether there's a next one — the frontend's
+/// infinite scroll keeps requesting `page + 1` until this is `false`.
+#[derive(Debug, Serialize)]
+pub struct Page<T> {
+    items: Vec<T>,
+    has_more: bool,
 }
 
 pub async fn list_gifs(
     State(state): State<Arc<AppState>>,
     CurrentUser(user): CurrentUser,
     Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<GifResponse>>, AppError> {
-    let gifs = db::list_gifs(&state.pool, &user.id, query.q.as_deref()).await?;
+) -> Result<Json<Page<GifResponse>>, AppError> {
+    let page = query.page.unwrap_or(1);
+    let (gifs, has_more) = db::list_gifs(&state.pool, &user.id, query.q.as_deref(), page).await?;
     let favourited = db::list_favourite_gif_ids(&state.pool, &user.id).await?;
     let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
     let remixable = db::remixable_template_ids(&state.pool, &template_ids, Some(&user.id)).await?;
-    let responses = gifs
+    let items = gifs
         .into_iter()
         .map(|gif| {
             let is_favourited = favourited.contains(&gif.id);
@@ -123,7 +135,7 @@ pub async fn list_gifs(
             with_urls(gif, &state.storage, is_favourited, template_remixable)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(responses))
+    Ok(Json(Page { items, has_more }))
 }
 
 pub async fn get_gif(
@@ -297,13 +309,14 @@ pub async fn list_library(
     State(state): State<Arc<AppState>>,
     OptionalCurrentUser(viewer): OptionalCurrentUser,
     Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<LibraryEntry>>, AppError> {
+) -> Result<Json<Page<LibraryEntry>>, AppError> {
     let viewer_id = viewer.as_ref().map(|CurrentUser(user)| user.id.as_str());
+    let page = query.page.unwrap_or(1);
     let favourited = db::favourited_ids_for_viewer(&state.pool, viewer_id).await?;
-    let gifs = db::list_public_gifs(&state.pool, query.q.as_deref(), query.sort).await?;
+    let (gifs, has_more) = db::list_public_gifs(&state.pool, query.q.as_deref(), query.sort, page).await?;
     let template_ids: Vec<String> = gifs.iter().filter_map(|g| g.template_id.clone()).collect();
     let remixable = db::remixable_template_ids(&state.pool, &template_ids, viewer_id).await?;
-    let entries = gifs
+    let items = gifs
         .into_iter()
         .map(|public_gif| {
             let owner_handle = public_gif.owner_handle.clone();
@@ -314,7 +327,7 @@ pub async fn list_library(
                 .map(|gif| LibraryEntry { gif, owner_handle, owner_slug })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(entries))
+    Ok(Json(Page { items, has_more }))
 }
 
 /// Removes the SQLite row first, then best-effort deletes all three R2

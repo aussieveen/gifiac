@@ -2951,6 +2951,14 @@ h1.profile-handle {
   gap: 14px;
 }
 
+/* Invisible IntersectionObserver target (useInfiniteScroll.ts) — spans
+   every column so it sits below the last row regardless of how many
+   items are in it. */
+.archive-grid-sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
+}
+
 .archive-thumb {
   position: relative;
   padding: 0;

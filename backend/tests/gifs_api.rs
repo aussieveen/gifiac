@@ -25,12 +25,13 @@ async fn list_gifs_returns_everything_newest_first_with_no_query() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+    let list_body: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
+    let gifs = list_body["items"].as_array().unwrap();
     let names: Vec<&str> = gifs.iter().map(|g| g.get("name").unwrap().as_str().unwrap()).collect();
     assert_eq!(names, vec!["second", "first"]);
 }
@@ -55,12 +56,13 @@ async fn list_gifs_filters_by_the_q_param_against_name_and_caption_text() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+    let list_body: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
+    let gifs = list_body["items"].as_array().unwrap();
     let names: Vec<&str> = gifs.iter().map(|g| g.get("name").unwrap().as_str().unwrap()).collect();
     assert_eq!(names, vec!["dog running", "cat jumping"]);
 }
@@ -308,12 +310,13 @@ async fn list_gifs_sorts_one_off_gifs_after_reusable_gifs() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let gifs: Vec<serde_json::Value> = serde_json::from_slice(
+    let list_body: serde_json::Value = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
+    let gifs = list_body["items"].as_array().unwrap();
     // "one-off" was created after "reusable" (newer), but the one-off
     // flag still sorts it last, after all reusable GIFs (SPEC.md §8).
     let ids: Vec<&str> = gifs.iter().map(|g| g.get("id").unwrap().as_str().unwrap()).collect();
@@ -421,7 +424,7 @@ async fn a_second_user_cannot_see_fetch_rename_or_delete_the_first_users_gif() {
             .unwrap(),
     )
     .unwrap();
-    assert!(list.as_array().unwrap().is_empty());
+    assert!(list["items"].as_array().unwrap().is_empty());
 
     let rename_response = test_app
         .app
@@ -586,7 +589,7 @@ async fn get_library_requires_no_auth_and_includes_only_public_gifs_with_attribu
             .unwrap(),
     )
     .unwrap();
-    let entries = entries.as_array().unwrap();
+    let entries = entries["items"].as_array().unwrap();
     assert!(entries.iter().any(|e| e["id"] == public_id));
     assert!(!entries.iter().any(|e| e["id"] == private_id));
     let entry = entries.iter().find(|e| e["id"] == public_id).unwrap();
@@ -735,7 +738,7 @@ async fn get_library_sorted_most_used_orders_by_use_count_descending() {
             .unwrap(),
     )
     .unwrap();
-    let ids: Vec<&str> = entries
+    let ids: Vec<&str> = entries["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -784,7 +787,7 @@ async fn get_library_filters_by_q() {
             .unwrap(),
     )
     .unwrap();
-    let entries = entries.as_array().unwrap();
+    let entries = entries["items"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["id"], cat_gif["id"]);
 }

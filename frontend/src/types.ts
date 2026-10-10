@@ -203,6 +203,14 @@ export interface LibraryEntry extends Gif {
 // `LibrarySort`, kebab-case on the wire.
 export type LibrarySort = 'newest' | 'most-used'
 
+// Shared shape for `GET /api/gifs` and `GET /api/library` — 24 items per
+// page (backend's `db::PAGE_SIZE`), `has_more` tells the caller whether a
+// `page + 1` request would return anything.
+export interface Page<T> {
+  items: T[]
+  has_more: boolean
+}
+
 // `GET/POST/PATCH /api/collections` response shape (collections-design/
 // COLLECTIONS.md §1) — camelCase, matching the backend's `Collection`.
 // `kind` is `'favourites'` for the one reserved, un-renameable/

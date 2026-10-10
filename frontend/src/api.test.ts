@@ -10,6 +10,7 @@ import {
   LinkCheckError,
   linkGif,
   listGifs,
+  listLibrary,
   listVideos,
   putTemplate,
   renameGif,
@@ -190,6 +191,37 @@ describe('listGifs', () => {
     await listGifs('   ')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/gifs', undefined)
+  })
+
+  it('omits the page param for page 1, but includes it for later pages', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listGifs(undefined, 1)
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs', undefined)
+
+    await listGifs(undefined, 2)
+    expect(fetchMock).toHaveBeenCalledWith('/api/gifs?page=2', undefined)
+  })
+})
+
+describe('listLibrary', () => {
+  it('GETs /api/library with no query string when q/sort/page are omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listLibrary()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/library', undefined)
+  })
+
+  it('combines q, sort, and page into one query string', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listLibrary('cat', 'most-used', 3)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/library?q=cat&sort=most-used&page=3', undefined)
   })
 })
 

@@ -246,35 +246,52 @@ pub async fn update_preferences(
 /// the flag flips in this single ordered list. Scoped to `owner_id`
 /// throughout (SPEC-CLOUD.md §3) — the global library (all users' public
 /// gifs) is a separate, later query, not this one.
-pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>) -> Result<Vec<Gif>> {
-    match q.map(str::trim).filter(|q| !q.is_empty()) {
+/// Page size every paginated list endpoint uses (`list_gifs`,
+/// `list_public_gifs`) — `fetch_all` always pulls one extra row beyond
+/// this so `paginate` can derive `has_more` without a separate `COUNT(*)`.
+pub const PAGE_SIZE: i64 = 24;
+
+/// Splits a `PAGE_SIZE + 1`-row fetch into the page itself plus whether
+/// there's a next one, without a second round-trip to count the total.
+fn paginate<T>(mut rows: Vec<T>) -> (Vec<T>, bool) {
+    let has_more = rows.len() as i64 > PAGE_SIZE;
+    rows.truncate(PAGE_SIZE as usize);
+    (rows, has_more)
+}
+
+pub async fn list_gifs(pool: &PgPool, owner_id: &str, q: Option<&str>, page: u32) -> Result<(Vec<Gif>, bool)> {
+    let offset = (page.saturating_sub(1) as i64) * PAGE_SIZE;
+    let rows = match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             // `ILIKE`, not `LIKE`: SQLite's `LIKE` is case-insensitive for
             // ASCII by default, Postgres' isn't — `ILIKE` is what
             // reproduces that original case-insensitive search behavior.
             let sql = format!(
-                "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 AND (name ILIKE $2 ESCAPE '\\' OR caption_text ILIKE $3 ESCAPE '\\') ORDER BY is_one_off ASC, created_at DESC"
+                "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 AND (name ILIKE $2 ESCAPE '\\' OR caption_text ILIKE $3 ESCAPE '\\') ORDER BY is_one_off ASC, created_at DESC LIMIT $4 OFFSET $5"
             );
             let pattern = format!("%{}%", escape_like(q));
             sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
                 .bind(owner_id)
                 .bind(&pattern)
                 .bind(&pattern)
+                .bind(PAGE_SIZE + 1)
+                .bind(offset)
                 .fetch_all(pool)
-                .await
-                .map_err(Into::into)
+                .await?
         }
         None => {
             let sql = format!(
-                "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 ORDER BY is_one_off ASC, created_at DESC"
+                "SELECT {GIF_COLUMNS} FROM gifs WHERE user_id = $1 ORDER BY is_one_off ASC, created_at DESC LIMIT $2 OFFSET $3"
             );
             sqlx::query_as::<_, Gif>(sqlx::AssertSqlSafe(sql))
                 .bind(owner_id)
+                .bind(PAGE_SIZE + 1)
+                .bind(offset)
                 .fetch_all(pool)
-                .await
-                .map_err(Into::into)
+                .await?
         }
-    }
+    };
+    Ok(paginate(rows))
 }
 
 /// Escapes `LIKE` wildcards (`%`, `_`) in user-supplied search text, paired
@@ -1075,7 +1092,7 @@ pub async fn list_public_gifs_by_user(pool: &PgPool, user_id: &str) -> Result<Ve
 /// creator's handle for attribution. `sort` picks `Newest` (creation-time,
 /// the only option before M5c) or `MostUsed` (`use_count` descending, with
 /// creation-time as a tiebreaker for equally-used gifs).
-pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort) -> Result<Vec<PublicGif>> {
+pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort, page: u32) -> Result<(Vec<PublicGif>, bool)> {
     let columns = "gifs.id, gifs.video_id, gifs.name, gifs.caption_text, gifs.captions_json, \
          gifs.gif_range_start, gifs.gif_range_end, gifs.width, gifs.height, gifs.external_url, \
          gifs.created_at, gifs.is_one_off, gifs.is_public, gifs.use_count, gifs.thumbnail_status, gifs.template_id, \
@@ -1084,32 +1101,36 @@ pub async fn list_public_gifs(pool: &PgPool, q: Option<&str>, sort: LibrarySort)
         LibrarySort::Newest => "gifs.created_at DESC",
         LibrarySort::MostUsed => "gifs.use_count DESC, gifs.created_at DESC",
     };
-    match q.map(str::trim).filter(|q| !q.is_empty()) {
+    let offset = (page.saturating_sub(1) as i64) * PAGE_SIZE;
+    let rows = match q.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
                  WHERE gifs.is_public = true AND (gifs.name ILIKE $1 ESCAPE '\\' OR gifs.caption_text ILIKE $2 ESCAPE '\\') \
-                 ORDER BY {order_by}"
+                 ORDER BY {order_by} LIMIT $3 OFFSET $4"
             );
             let pattern = format!("%{}%", escape_like(q));
             sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
                 .bind(&pattern)
                 .bind(&pattern)
+                .bind(PAGE_SIZE + 1)
+                .bind(offset)
                 .fetch_all(pool)
-                .await
-                .map_err(Into::into)
+                .await?
         }
         None => {
             let sql = format!(
                 "SELECT {columns} FROM gifs JOIN users ON users.id = gifs.user_id \
-                 WHERE gifs.is_public = true ORDER BY {order_by}"
+                 WHERE gifs.is_public = true ORDER BY {order_by} LIMIT $1 OFFSET $2"
             );
             sqlx::query_as::<_, PublicGif>(sqlx::AssertSqlSafe(sql))
+                .bind(PAGE_SIZE + 1)
+                .bind(offset)
                 .fetch_all(pool)
-                .await
-                .map_err(Into::into)
+                .await?
         }
-    }
+    };
+    Ok(paginate(rows))
 }
 
 pub async fn is_favourited(pool: &PgPool, user_id: &str, gif_id: &str) -> Result<bool> {
@@ -2065,9 +2086,10 @@ mod tests {
             .await
             .unwrap();
 
-        let gifs = list_gifs(&pool, &user, None).await.unwrap();
+        let (gifs, has_more) = list_gifs(&pool, &user, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["newer", "older"]);
+        assert!(!has_more);
     }
 
     #[tokio::test]
@@ -2082,7 +2104,7 @@ mod tests {
             .await
             .unwrap();
 
-        let gifs = list_gifs(&pool, &owner, None).await.unwrap();
+        let (gifs, _has_more) = list_gifs(&pool, &owner, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["mine"]);
     }
@@ -2105,7 +2127,7 @@ mod tests {
             .await
             .unwrap();
 
-        let gifs = list_gifs(&pool, &user, Some("cat")).await.unwrap();
+        let (gifs, _has_more) = list_gifs(&pool, &user, Some("cat"), 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["g2", "g1"]); // matched via caption_text and name respectively, newest first
     }
@@ -2118,8 +2140,34 @@ mod tests {
             .await
             .unwrap();
 
-        let gifs = list_gifs(&pool, &user, Some("   ")).await.unwrap();
+        let (gifs, _has_more) = list_gifs(&pool, &user, Some("   "), 1).await.unwrap();
         assert_eq!(gifs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_gifs_paginates_at_page_size_with_no_overlap_or_gaps() {
+        let pool = test_pool().await;
+        let user = seed_user(&pool).await;
+        for i in 0..30 {
+            let id = format!("g{i:02}");
+            let created_at = format!("2026-08-{:02}T00:00:00Z", i + 1);
+            insert_gif(&pool, &sample_gif(&id, "a", "", &user), &created_at)
+                .await
+                .unwrap();
+        }
+
+        let (page1, has_more1) = list_gifs(&pool, &user, None, 1).await.unwrap();
+        assert_eq!(page1.len(), PAGE_SIZE as usize);
+        assert!(has_more1);
+
+        let (page2, has_more2) = list_gifs(&pool, &user, None, 2).await.unwrap();
+        assert_eq!(page2.len(), 30 - PAGE_SIZE as usize);
+        assert!(!has_more2);
+
+        let page1_ids: HashSet<&str> = page1.iter().map(|g| g.id.as_str()).collect();
+        let page2_ids: HashSet<&str> = page2.iter().map(|g| g.id.as_str()).collect();
+        assert!(page1_ids.is_disjoint(&page2_ids));
+        assert_eq!(page1_ids.len() + page2_ids.len(), 30);
     }
 
     #[tokio::test]
@@ -2249,15 +2297,42 @@ mod tests {
         set_gif_public(&pool, "public", &owner, true).await.unwrap();
         set_gif_public(&pool, "someone-elses", &other, true).await.unwrap();
 
-        let all = list_public_gifs(&pool, None, LibrarySort::Newest).await.unwrap();
+        let (all, _has_more) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
         let ids: Vec<&str> = all.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(ids, vec!["someone-elses", "public"]);
         let public_entry = all.iter().find(|g| g.id == "public").unwrap();
         assert_eq!(public_entry.owner_handle.as_deref(), Some("owner-handle"));
 
-        let filtered = list_public_gifs(&pool, Some("cat"), LibrarySort::Newest).await.unwrap();
+        let (filtered, _has_more) = list_public_gifs(&pool, Some("cat"), LibrarySort::Newest, 1).await.unwrap();
         let filtered_ids: Vec<&str> = filtered.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(filtered_ids, vec!["public"]);
+    }
+
+    #[tokio::test]
+    async fn list_public_gifs_paginates_at_page_size_with_no_overlap_or_gaps() {
+        let pool = test_pool().await;
+        let owner = seed_user(&pool).await;
+        for i in 0..30 {
+            let id = format!("g{i:02}");
+            let created_at = format!("2026-08-{:02}T00:00:00Z", i + 1);
+            insert_gif(&pool, &sample_gif(&id, "a", "", &owner), &created_at)
+                .await
+                .unwrap();
+            set_gif_public(&pool, &id, &owner, true).await.unwrap();
+        }
+
+        let (page1, has_more1) = list_public_gifs(&pool, None, LibrarySort::Newest, 1).await.unwrap();
+        assert_eq!(page1.len(), PAGE_SIZE as usize);
+        assert!(has_more1);
+
+        let (page2, has_more2) = list_public_gifs(&pool, None, LibrarySort::Newest, 2).await.unwrap();
+        assert_eq!(page2.len(), 30 - PAGE_SIZE as usize);
+        assert!(!has_more2);
+
+        let page1_ids: HashSet<&str> = page1.iter().map(|g| g.id.as_str()).collect();
+        let page2_ids: HashSet<&str> = page2.iter().map(|g| g.id.as_str()).collect();
+        assert!(page1_ids.is_disjoint(&page2_ids));
+        assert_eq!(page1_ids.len() + page2_ids.len(), 30);
     }
 
     #[tokio::test]
@@ -2288,7 +2363,7 @@ mod tests {
         set_gif_one_off(&pool, "new-one-off", &user, true).await.unwrap();
         set_gif_one_off(&pool, "old-one-off", &user, true).await.unwrap();
 
-        let gifs = list_gifs(&pool, &user, None).await.unwrap();
+        let (gifs, _has_more) = list_gifs(&pool, &user, None, 1).await.unwrap();
         let ids: Vec<&str> = gifs.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -2766,7 +2841,7 @@ mod tests {
             increment_gif_use_count(&pool, "tied-older").await.unwrap();
         }
 
-        let sorted = list_public_gifs(&pool, None, LibrarySort::MostUsed).await.unwrap();
+        let (sorted, _has_more) = list_public_gifs(&pool, None, LibrarySort::MostUsed, 1).await.unwrap();
         let ids: Vec<&str> = sorted.iter().map(|g| g.id.as_str()).collect();
         // "high" (3) first, then the tied-at-2 pair broken by recency
         // (newer first), then "low" (1) last.

@@ -9,6 +9,7 @@ import type {
   Gif,
   LibraryEntry,
   LibrarySort,
+  Page,
   Preferences,
   Profile,
   TemplateDetail,
@@ -324,9 +325,12 @@ export function subscribeExportProgress(exportId: string, handlers: ExportProgre
 
 // Archive endpoints per SPEC.md §5/§8.
 
-export function listGifs(q?: string): Promise<Gif[]> {
-  const query = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
-  return request<Gif[]>(`/api/gifs${query}`)
+export function listGifs(q?: string, page = 1): Promise<Page<Gif>> {
+  const params: string[] = []
+  if (q?.trim()) params.push(`q=${encodeURIComponent(q.trim())}`)
+  if (page > 1) params.push(`page=${page}`)
+  const query = params.length ? `?${params.join('&')}` : ''
+  return request<Page<Gif>>(`/api/gifs${query}`)
 }
 
 export function getGif(id: string): Promise<Gif> {
@@ -364,12 +368,13 @@ export function setGifPublic(id: string, isPublic: boolean): Promise<Gif> {
 // SPEC-CLOUD.md §8: the global library — every user's public gifs, no
 // sign-in required. `sort` defaults to newest-first on the backend when
 // omitted.
-export function listLibrary(q?: string, sort?: LibrarySort): Promise<LibraryEntry[]> {
+export function listLibrary(q?: string, sort?: LibrarySort, page = 1): Promise<Page<LibraryEntry>> {
   const params = new URLSearchParams()
   if (q?.trim()) params.set('q', q.trim())
   if (sort) params.set('sort', sort)
+  if (page > 1) params.set('page', String(page))
   const query = params.toString()
-  return request<LibraryEntry[]>(`/api/library${query ? `?${query}` : ''}`)
+  return request<Page<LibraryEntry>>(`/api/library${query ? `?${query}` : ''}`)
 }
 
 // SPEC-CLOUD.md §8: bumps a gif's use counter — fired by copy-link,
