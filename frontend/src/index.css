@@ -3913,11 +3913,13 @@ h1.profile-handle {
     gap: 16px;
   }
 
-  .library-grid.has-selection .archive-grid {
+  .library-grid.has-selection .archive-grid,
+  .archive-layout.has-selection .archive-grid {
     display: none;
   }
 
-  .library-grid.has-selection .archive-panel {
+  .library-grid.has-selection .archive-panel,
+  .archive-layout.has-selection .archive-panel {
     display: flex;
   }
 
