@@ -1538,13 +1538,221 @@ button {
 }
 
 .editor-timecode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-family: var(--font-mono);
   font-size: 15px;
   color: var(--text);
 }
 
+/* The ‹ value › stepper group. Transparent/idle by default; hover and
+   editing each get their own border/background treatment below. Sized in
+   real px (not em/ch) so it never visibly reflows between idle, hover and
+   editing — that reflow was exactly what used to clip the leading "0:" off
+   the edit-mode value. `position: relative` anchors the tooltip and the
+   editing hint, both absolutely positioned off this box. */
+.editor-timecode-stepper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+}
+
+.editor-timecode-stepper:hover {
+  border-color: #3a3b46;
+  background: var(--surface);
+}
+
+.editor-timecode-stepper.editing {
+  border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.2);
+}
+
+.editor-timecode-stepper.editing.invalid {
+  border-color: var(--danger);
+  box-shadow: none;
+}
+
+.editor-timecode-step-btn {
+  width: 30px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.editor-timecode-step-btn:hover {
+  color: var(--text);
+}
+
+.editor-timecode-step-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Fixed width, shared by the idle span and the editing input alike, so the
+   box never changes size across idle/hover/editing — see the stepper's own
+   comment. `m:ss.cc` (formatTimecode) is at most 8 characters (e.g.
+   "12:34.56"); 84px comfortably fits that at 17px mono with room to spare,
+   so typing never scrolls the leading minute out of view. */
+.editor-timecode-value {
+  width: 84px;
+  flex-shrink: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+span.editor-timecode-value {
+  cursor: text;
+}
+
+span.editor-timecode-current:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.editor-timecode-input {
+  font-weight: inherit;
+  background: transparent;
+  color: var(--accent);
+  border: none;
+  padding: 0;
+}
+
+.editor-timecode-input:focus {
+  outline: none;
+}
+
 .editor-timecode-total {
   color: var(--text-subtle);
+}
+
+.editor-timecode-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  width: 270px;
+  background: var(--raised);
+  border: 1px solid #34353f;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.editor-timecode-tooltip::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--raised);
+  border: 1px solid #34353f;
+  border-right: none;
+  border-bottom: none;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.editor-timecode-tooltip-title {
+  margin: 0 0 4px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.editor-timecode-tooltip-subtitle {
+  margin: 0 0 6px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.editor-timecode-tooltip-row {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+
+.editor-timecode-tooltip kbd,
+.editor-timecode-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.editor-timecode-hint {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  margin: 0;
+  white-space: nowrap;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.editor-timecode-hint-error {
+  color: var(--danger);
+  white-space: normal;
+  width: 220px;
+}
+
+/* Rides on top of the playhead line (SPEC.md §14's .va-playhead), in sync
+   with the transport stepper above — same formatTimecode value, same
+   currentTime driving both, so stepping one visibly moves the other. */
+.va-playhead-label {
+  position: absolute;
+  /* Sits within .va-filmstrip-wrap's reserved PLAYHEAD_LABEL_CLEARANCE
+     band above the (marginTop-shifted) filmstrip — never translated
+     further up than that, or .va-timeline-scroll's overflow-y: hidden
+     would clip it whenever there are no caption rows above to borrow
+     space from. */
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 4px 6px;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 4;
 }
 
 /* ---------- inspector (design brief §6) ---------- */

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createExport, createTemplateExport, getTemplate, subscribeExportProgress, templateClipUrl, videoFileUrl } from './api'
 import mark from './assets/brand/strewthgif-mark.svg'
 import { ExportProgressModal, type ExportProgressState } from './ExportProgressModal'
@@ -9,6 +9,8 @@ import {
   ArrowLeftIcon,
   BookmarkIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   MinusIcon,
   PauseIcon,
   PlayheadIcon,
@@ -272,6 +274,23 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   const [captions, setCaptions] = useState<Caption[]>(() => (isTemplateSource ? source.template.captions : []))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
+  // Click-to-edit transport timecode (design brief §6 fine-control): typing
+  // or arrow-stepping a value edits a local draft string, independent of
+  // `currentTime`, so a mid-type invalid string never corrupts playback.
+  const [isEditingTime, setIsEditingTime] = useState(false)
+  const [timeDraft, setTimeDraft] = useState('')
+  const editOriginalTimeRef = useRef(0)
+  // Enter/Escape already drive their own commit/cancel — without this, the
+  // blur that follows (from hiding the input or moving focus) would commit
+  // or re-revert a second time.
+  const skipTimeBlurRef = useRef(false)
+  // Hover-to-nudge + tooltip state for the transport's stepper group.
+  const [isTimecodeHovered, setIsTimecodeHovered] = useState(false)
+  const [showTimecodeTooltip, setShowTimecodeTooltip] = useState(false)
+  const timecodeWrapRef = useRef<HTMLDivElement>(null)
+  const timeInputRef = useRef<HTMLInputElement>(null)
+  const tooltipShowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const tooltipHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [gifRange, setGifRange] = useState({ start: 0, end: duration })
   const [applyToAll, setApplyToAll] = useState(false)
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX)
@@ -333,6 +352,14 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
     el.focus()
     el.setSelectionRange(el.value.length, el.value.length)
   }, [makeGifPopoverOpen])
+
+  useEffect(
+    () => () => {
+      if (tooltipShowTimerRef.current) clearTimeout(tooltipShowTimerRef.current)
+      if (tooltipHideTimerRef.current) clearTimeout(tooltipHideTimerRef.current)
+    },
+    [],
+  )
 
   function closeMakeGifPopover() {
     setMakeGifPopoverOpen(false)
@@ -612,6 +639,177 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
     if (videoRef.current) videoRef.current.currentTime = time
   }
 
+  /** Accepts either the displayed `M:SS.ss` timecode or plain seconds
+   * (e.g. "5.18"), matching whatever the user has `timeDraft`'d — the
+   * colon is what disambiguates the two. */
+  function parseTimecodeInput(raw: string): number | null {
+    const str = raw.trim()
+    if (!str) return null
+    if (str.includes(':')) {
+      const parts = str.split(':')
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return null
+      const minutes = Number(parts[0])
+      const seconds = Number(parts[1])
+      if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null
+      return minutes * 60 + seconds
+    }
+    const seconds = Number(str)
+    return Number.isFinite(seconds) ? seconds : null
+  }
+
+  function enterTimeEdit() {
+    if (isEditingTime) return
+    // Frame-accurate stepping against a moving playhead is close to
+    // meaningless, so editing always starts from a still frame.
+    videoRef.current?.pause()
+    editOriginalTimeRef.current = currentTime
+    setTimeDraft(formatTimecode(currentTime))
+    setIsEditingTime(true)
+    hideTimecodeTooltip()
+  }
+
+  function exitTimeEdit() {
+    // Enter/Escape already drive their own commit/cancel via this —
+    // without it, the blur that follows (from hiding the input or moving
+    // focus) would commit or re-revert a second time.
+    skipTimeBlurRef.current = true
+    setIsEditingTime(false)
+  }
+
+  // useCallback (not a plain function, unlike its neighbours here) so the
+  // hover-keydown effect below can list it as a dependency without
+  // reattaching its document listener on every unrelated render.
+  const stepTime = useCallback(
+    (deltaSeconds: number) => {
+      // Same reasoning as entering edit mode — nudging only makes sense
+      // against a still frame.
+      videoRef.current?.pause()
+      const next = clamp(currentTime + deltaSeconds, 0, duration)
+      seekTo(next)
+      if (isEditingTime) setTimeDraft(formatTimecode(next))
+    },
+    [currentTime, duration, isEditingTime],
+  )
+
+  // Arrow-key nudging while the pointer merely hovers the stepper, without
+  // clicking into edit mode first — edit mode has its own keydown handler
+  // with the same mapping, so this only needs to apply while idle.
+  useEffect(() => {
+    if (!isTimecodeHovered || isEditingTime) return
+    function onKeyDown(e: KeyboardEvent) {
+      const active = document.activeElement
+      // Don't hijack arrow keys meant for some other field (e.g. a
+      // caption's text area) that just happens to be focused while the
+      // pointer sits over the stepper.
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
+        !timecodeWrapRef.current?.contains(active)
+      ) {
+        return
+      }
+      const forward = e.key === 'ArrowUp' || e.key === 'ArrowRight'
+      const backward = e.key === 'ArrowDown' || e.key === 'ArrowLeft'
+      if (!forward && !backward) return
+      e.preventDefault()
+      const step = e.shiftKey ? 0.1 : 0.01
+      stepTime(forward ? step : -step)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isTimecodeHovered, isEditingTime, stepTime])
+
+  /** Returns whether it actually committed (and exited edit mode) — an
+   * out-of-range number is left uncommitted, with the input still focused
+   * and `timeDraftOutOfRange`'s error shown, so the user can correct it
+   * instead of having it silently clamped out from under them. */
+  function commitTimeEdit(): boolean {
+    const parsed = parseTimecodeInput(timeDraft)
+    if (parsed === null) {
+      // Unparseable text reverts fully, same as Escape.
+      seekTo(editOriginalTimeRef.current)
+      exitTimeEdit()
+      return true
+    }
+    if (parsed < 0 || parsed > duration) return false
+    seekTo(parsed)
+    exitTimeEdit()
+    return true
+  }
+
+  function cancelTimeEdit() {
+    seekTo(editOriginalTimeRef.current)
+    exitTimeEdit()
+  }
+
+  /** Live-seeks as soon as what's typed parses to a valid in-range time —
+   * not just on commit — so an arrow press right after typing nudges from
+   * the typed value, not wherever the playhead happened to be before you
+   * started typing. An invalid or out-of-range draft just doesn't seek
+   * (the red-border error already covers that case), leaving the playhead
+   * at its last valid position. */
+  function handleTimeDraftChange(value: string) {
+    setTimeDraft(value)
+    const parsed = parseTimecodeInput(value)
+    if (parsed !== null && parsed >= 0 && parsed <= duration) seekTo(parsed)
+  }
+
+  function handleTimeInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelTimeEdit()
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      commitTimeEdit()
+      return
+    }
+    // Left/right move the text cursor normally while typing — now that
+    // typing live-seeks (see handleTimeDraftChange), also stepping on
+    // left/right here would fight a correction mid-type (e.g. arrowing
+    // left to fix a digit would itself nudge the now-live playhead).
+    // Up/down nudge instead, same as hovering.
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      const step = e.shiftKey ? 0.1 : 0.01
+      stepTime(e.key === 'ArrowUp' ? step : -step)
+    }
+  }
+
+  function handleTimeInputBlur() {
+    if (skipTimeBlurRef.current) {
+      skipTimeBlurRef.current = false
+      return
+    }
+    if (!commitTimeEdit()) {
+      // Out-of-range — keep the user editing instead of losing focus on
+      // an error they haven't fixed yet.
+      timeInputRef.current?.focus()
+    }
+  }
+
+  function hideTimecodeTooltip() {
+    if (tooltipShowTimerRef.current) clearTimeout(tooltipShowTimerRef.current)
+    if (tooltipHideTimerRef.current) clearTimeout(tooltipHideTimerRef.current)
+    setShowTimecodeTooltip(false)
+  }
+
+  function handleTimecodeMouseEnter() {
+    setIsTimecodeHovered(true)
+    if (isEditingTime) return
+    tooltipShowTimerRef.current = setTimeout(() => {
+      setShowTimecodeTooltip(true)
+      // Fades on its own even if the pointer never leaves.
+      tooltipHideTimerRef.current = setTimeout(() => setShowTimecodeTooltip(false), 4000)
+    }, 400)
+  }
+
+  function handleTimecodeMouseLeave() {
+    setIsTimecodeHovered(false)
+    hideTimecodeTooltip()
+  }
+
   function scrubTo(e: React.MouseEvent<HTMLDivElement>) {
     // Scrubbing implies "let me look at this exact frame" — pause first so
     // playback doesn't immediately carry the playhead away from it again.
@@ -716,6 +914,9 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
 
   const activeCaptions = captions.filter((c) => currentTime >= c.startTime && currentTime <= c.endTime)
 
+  const parsedTimeDraft = isEditingTime ? parseTimecodeInput(timeDraft) : null
+  const timeDraftOutOfRange = parsedTimeDraft !== null && (parsedTimeDraft < 0 || parsedTimeDraft > duration)
+
   // 'fit': the largest whole-number scale that still fits the stage —
   // never a fraction, so a pixel in the preview always maps to a whole
   // number of real output pixels. viewportWidth is only ever an estimate
@@ -744,6 +945,13 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
   // absolute-position overflow) so .va-filmstrip-wrap's own box already
   // includes it — nothing needs to scroll or clip to show it.
   const PLAYHEAD_ADD_CLEARANCE = 26
+  // Vertical room above the strip for the playhead's floating time label —
+  // same reasoning as PLAYHEAD_ADD_CLEARANCE below it: real layout height
+  // on .va-filmstrip-wrap (via .va-filmstrip's own marginTop, so its
+  // internal range/playhead coordinates stay relative to its own box)
+  // rather than overflow that'd get clipped by .va-timeline-scroll's
+  // overflow-y: hidden.
+  const PLAYHEAD_LABEL_CLEARANCE = 22
   // The sprite samples a frame every 0.25s, so a long clip has far more
   // frames than fit the timeline at a reasonable size — rendering all of
   // them at low zoom squeezed each one down to just a few px wide, an
@@ -1093,10 +1301,90 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
             >
               {isPlaying ? <PauseIcon /> : <PlayIcon />}
             </button>
-            <span className="editor-timecode">
-              <span className="editor-timecode-current">{formatTimecode(currentTime)}</span>
+            <div className="editor-timecode">
+              <div
+                ref={timecodeWrapRef}
+                className={`editor-timecode-stepper ${isEditingTime ? 'editing' : ''} ${timeDraftOutOfRange ? 'invalid' : ''}`}
+                onMouseEnter={handleTimecodeMouseEnter}
+                onMouseLeave={handleTimecodeMouseLeave}
+              >
+                <button
+                  type="button"
+                  className="editor-timecode-step-btn"
+                  aria-label="Back 0.01 seconds"
+                  onClick={(e) => stepTime(e.shiftKey ? -0.1 : -0.01)}
+                >
+                  <ChevronLeftIcon size={14} />
+                </button>
+
+                {isEditingTime ? (
+                  <input
+                    ref={timeInputRef}
+                    className="editor-timecode-value editor-timecode-input"
+                    value={timeDraft}
+                    onChange={(e) => handleTimeDraftChange(e.target.value)}
+                    onKeyDown={handleTimeInputKeyDown}
+                    onBlur={handleTimeInputBlur}
+                    onFocus={(e) => e.currentTarget.select()}
+                    aria-label="Edit current time"
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    className="editor-timecode-value editor-timecode-current"
+                    role="button"
+                    tabIndex={0}
+                    onClick={enterTimeEdit}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        enterTimeEdit()
+                      }
+                    }}
+                    aria-label="Current time, click to edit"
+                  >
+                    {formatTimecode(currentTime)}
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  className="editor-timecode-step-btn"
+                  aria-label="Forward 0.01 seconds"
+                  onClick={(e) => stepTime(e.shiftKey ? 0.1 : 0.01)}
+                >
+                  <ChevronRightIcon size={14} />
+                </button>
+
+                {showTimecodeTooltip && !isEditingTime && (
+                  <div className="editor-timecode-tooltip" role="tooltip">
+                    <p className="editor-timecode-tooltip-title">Click to type a time</p>
+                    <p className="editor-timecode-tooltip-subtitle">While your pointer is here:</p>
+                    <p className="editor-timecode-tooltip-row">
+                      <kbd>↑</kbd> <kbd>→</kbd> forward 0.01s
+                    </p>
+                    <p className="editor-timecode-tooltip-row">
+                      <kbd>↓</kbd> <kbd>←</kbd> back 0.01s
+                    </p>
+                    <p className="editor-timecode-tooltip-row">
+                      <kbd>Shift</kbd> + arrow: 0.1s
+                    </p>
+                  </div>
+                )}
+
+                {isEditingTime &&
+                  (timeDraftOutOfRange ? (
+                    <p className="editor-timecode-hint editor-timecode-hint-error">
+                      Clip is {duration.toFixed(2)}s long. Try {formatTimecode(0)} – {formatTimecode(duration)}
+                    </p>
+                  ) : (
+                    <p className="editor-timecode-hint">
+                      <kbd>Enter</kbd> confirm · <kbd>Esc</kbd> cancel · <kbd>↑</kbd> <kbd>↓</kbd> nudge
+                    </p>
+                  ))}
+              </div>
               <span className="editor-timecode-total"> / {formatTimecode(duration)}</span>
-            </span>
+            </div>
             <div className="editor-preview-zoom">
               <div className="editor-segmented" role="group" aria-label="Preview zoom">
                 <button
@@ -1408,8 +1696,15 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
               </div>
             ))}
 
-            <div className="va-filmstrip-wrap" style={{ height: FILMSTRIP_HEIGHT + PLAYHEAD_ADD_CLEARANCE }}>
-              <div className="va-filmstrip" style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT }} onClick={scrubTo}>
+            <div
+              className="va-filmstrip-wrap"
+              style={{ height: FILMSTRIP_HEIGHT + PLAYHEAD_ADD_CLEARANCE + PLAYHEAD_LABEL_CLEARANCE }}
+            >
+              <div
+                className="va-filmstrip"
+                style={{ width: timelineWidth, height: FILMSTRIP_HEIGHT, marginTop: PLAYHEAD_LABEL_CLEARANCE }}
+                onClick={scrubTo}
+              >
                 {filmstrip &&
                   frameIndices.map((frameIndex) => (
                     <div
@@ -1459,13 +1754,24 @@ export function CaptionEditor({ source, filmstrip, onBack, onGifCreated, belowBr
               <button
                 type="button"
                 className="va-playhead-add"
-                style={{ left: timeToX(currentTime, duration, timelineWidth), top: FILMSTRIP_HEIGHT + 4 }}
+                style={{
+                  left: timeToX(currentTime, duration, timelineWidth),
+                  top: PLAYHEAD_LABEL_CLEARANCE + FILMSTRIP_HEIGHT + 4,
+                }}
                 aria-label="Add caption at playhead"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={addCaption}
               >
                 +
               </button>
+              {/* Rides the playhead itself (same timeToX value) so the two
+                  obviously move together as you step through the clip. */}
+              <div
+                className="va-playhead-label"
+                style={{ left: timeToX(currentTime, duration, timelineWidth), top: 0 }}
+              >
+                {formatTimecode(currentTime)}
+              </div>
             </div>
           </div>
         </div>

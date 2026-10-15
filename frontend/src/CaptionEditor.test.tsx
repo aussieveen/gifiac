@@ -698,7 +698,7 @@ describe('CaptionEditor', () => {
       videoEl.dispatchEvent(new Event('timeupdate'))
     })
 
-    expect(screen.getByText('0:03.25')).toBeInTheDocument()
+    expect(document.querySelector('.editor-timecode-value')).toHaveTextContent('0:03.25')
   })
 
   it('pauses the video and seeks it when the film-strip is clicked', () => {
@@ -735,6 +735,239 @@ describe('CaptionEditor', () => {
 
     expect(videoEl.currentTime).toBeCloseTo(video.duration_seconds / 2, 1)
     pauseSpy.mockRestore()
+  })
+
+  it('steps the playhead by 10ms per up/down arrow press, 100ms with shift, while editing the timecode', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(videoEl.currentTime).toBeCloseTo(0.01, 5)
+    expect(input).toHaveValue('0:00.01')
+
+    fireEvent.keyDown(input, { key: 'ArrowUp', shiftKey: true })
+    expect(videoEl.currentTime).toBeCloseTo(0.11, 5)
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(videoEl.currentTime).toBeCloseTo(0.1, 5)
+
+    fireEvent.keyDown(input, { key: 'ArrowDown', shiftKey: true })
+    expect(videoEl.currentTime).toBeCloseTo(0, 5)
+  })
+
+  it('leaves left/right alone while editing, so they move the text cursor instead of stepping', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+
+    fireEvent.keyDown(input, { key: 'ArrowRight' })
+    fireEvent.keyDown(input, { key: 'ArrowLeft' })
+
+    expect(videoEl.currentTime).toBeCloseTo(0, 5)
+  })
+
+  it('steps the playhead on all four arrow keys while merely hovered, without clicking into edit mode', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    const stepper = document.querySelector('.editor-timecode-stepper') as HTMLElement
+
+    fireEvent.mouseEnter(stepper)
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(videoEl.currentTime).toBeCloseTo(0.01, 5)
+
+    fireEvent.keyDown(document, { key: 'ArrowLeft', shiftKey: true })
+    expect(videoEl.currentTime).toBeCloseTo(0, 5) // 0.01 - 0.1 clamps to 0
+
+    fireEvent.mouseLeave(stepper)
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(videoEl.currentTime).toBeCloseTo(0, 5) // no longer hovered — no step
+  })
+
+  it('the stepper buttons nudge by 0.01s, or 0.1s with shift-click', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 0.01 seconds' }))
+    expect(videoEl.currentTime).toBeCloseTo(0.01, 5)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 0.01 seconds' }), { shiftKey: true })
+    expect(videoEl.currentTime).toBeCloseTo(0.11, 5)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back 0.01 seconds' }))
+    expect(videoEl.currentTime).toBeCloseTo(0.1, 5)
+  })
+
+  it('pauses playback when entering timecode edit mode', () => {
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+    pauseSpy.mockRestore()
+  })
+
+  it('commits a typed value on Enter, accepting plain seconds or M:SS.ss', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+    fireEvent.change(input, { target: { value: '3.5' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(videoEl.currentTime).toBeCloseTo(3.5, 5)
+    expect(document.querySelector('.editor-timecode-value')).toHaveTextContent('0:03.50')
+    expect(screen.queryByLabelText('Edit current time')).not.toBeInTheDocument()
+  })
+
+  it('live-seeks as soon as a typed value is valid, so an arrow press right after steps from it — not the old playhead', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+
+    fireEvent.change(input, { target: { value: '5' } })
+    // Not committed (no Enter/blur yet) — but already seeked live.
+    expect(videoEl.currentTime).toBeCloseTo(5, 5)
+
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(videoEl.currentTime).toBeCloseTo(5.01, 5)
+  })
+
+  it('does not live-seek while the typed value is out of range or unparseable', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+
+    fireEvent.change(input, { target: { value: '9999' } })
+    expect(videoEl.currentTime).toBeCloseTo(0, 5)
+
+    fireEvent.change(input, { target: { value: 'abc' } })
+    expect(videoEl.currentTime).toBeCloseTo(0, 5)
+  })
+
+  it('commits on blur (click-away)', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+    fireEvent.change(input, { target: { value: '0:02.00' } })
+    fireEvent.blur(input)
+
+    expect(videoEl.currentTime).toBeCloseTo(2, 5)
+    expect(screen.queryByLabelText('Edit current time')).not.toBeInTheDocument()
+  })
+
+  it('blocks commit on an out-of-range typed value, showing an inline error and keeping focus', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+    fireEvent.change(input, { target: { value: '9999' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // Not committed — still editing, playback position unchanged.
+    expect(videoEl.currentTime).toBeCloseTo(0, 5)
+    expect(input).toBeInTheDocument()
+    expect(screen.getByText(/Clip is 8\.00s long\. Try 0:00\.00 – 0:08\.00/)).toBeInTheDocument()
+
+    // Correcting it to an in-range value and committing works normally.
+    fireEvent.change(input, { target: { value: '2' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(videoEl.currentTime).toBeCloseTo(2, 5)
+    expect(screen.queryByLabelText('Edit current time')).not.toBeInTheDocument()
+  })
+
+  it('reverts to the pre-edit value on unparseable text', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 2, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+    fireEvent.change(input, { target: { value: 'abc' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(videoEl.currentTime).toBeCloseTo(2, 5)
+  })
+
+  it('reverts to the pre-edit value on Escape, discarding any arrow-stepped change', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(videoEl, 'currentTime', { value: 1, configurable: true, writable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    const input = screen.getByLabelText('Edit current time')
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(videoEl.currentTime).toBeCloseTo(1.01, 5)
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(videoEl.currentTime).toBeCloseTo(1, 5)
+    expect(screen.queryByLabelText('Edit current time')).not.toBeInTheDocument()
+  })
+
+  it('shows the hover tooltip after 400ms, then fades it after 4s even if still hovering', () => {
+    vi.useFakeTimers()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const stepper = document.querySelector('.editor-timecode-stepper') as HTMLElement
+
+    fireEvent.mouseEnter(stepper)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+    expect(screen.getByText('Click to type a time')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(4000))
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+
+  it('hides the tooltip immediately on mouse leave, and never shows it while editing', () => {
+    vi.useFakeTimers()
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const stepper = document.querySelector('.editor-timecode-stepper') as HTMLElement
+
+    fireEvent.mouseEnter(stepper)
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    fireEvent.mouseLeave(stepper)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    fireEvent.mouseEnter(stepper)
+    fireEvent.click(screen.getByRole('button', { name: 'Current time, click to edit' }))
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+
+  it('mirrors the current time in a label riding the timeline playhead', () => {
+    render(<CaptionEditor source={{ kind: 'video', video }} filmstrip={filmstrip} onBack={() => {}} />)
+    const videoEl = document.querySelector('video') as HTMLVideoElement
+
+    expect(document.querySelector('.va-playhead-label')).toHaveTextContent('0:00.00')
+
+    Object.defineProperty(videoEl, 'currentTime', { value: 3.25, configurable: true })
+    act(() => videoEl.dispatchEvent(new Event('timeupdate')))
+
+    expect(document.querySelector('.va-playhead-label')).toHaveTextContent('0:03.25')
   })
 
   it('"Set start"/"Set end" set the GIF range to the current playhead time', () => {

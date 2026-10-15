@@ -56,6 +56,22 @@ export function ChevronDownIcon({ size = 14, className }: IconProps) {
   )
 }
 
+export function ChevronLeftIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className}>
+      <path d="M15 6l-6 6 6 6" />
+    </svg>
+  )
+}
+
+export function ChevronRightIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base} width={size} height={size} className={className}>
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  )
+}
+
 export function LogInIcon({ size = 18, className }: IconProps) {
   return (
     <svg {...base} width={size} height={size} className={className}>
