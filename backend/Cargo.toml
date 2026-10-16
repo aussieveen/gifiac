@@ -10,6 +10,10 @@ default-run = "gifiac-backend"
 [dependencies]
 anyhow = "1.0.104"
 aws-config = "1"
+# Loads backend/.env.local (gitignored, local-dev-only) before main() reads
+# any env var — never touches backend/.env, which is production's R2
+# credentials for docker-compose.yml, not something this binary reads.
+dotenvy = "0.15"
 # Direct async invocation of the ingest/export Lambda functions
 # (wayfinder gifiac#32) — `aws-sdk-*` directly, no separate abstraction
 # crate, same approach as aws-sdk-s3/aws-sdk-sesv2 below.

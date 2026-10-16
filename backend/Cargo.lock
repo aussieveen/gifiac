@@ -1470,6 +1470,7 @@ dependencies = [
  "axum-extra",
  "chrono",
  "cookie",
+ "dotenvy",
  "ffmpeg-next",
  "futures-util",
  "hmac 0.12.1",

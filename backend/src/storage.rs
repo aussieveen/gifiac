@@ -6,7 +6,10 @@ use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 
 /// R2 credentials/settings read from env vars at startup per SPEC.md §10 —
-/// all required, no defaults (never exposed to the frontend or logged).
+/// all required except `endpoint_url_override` (never exposed to the
+/// frontend or logged). `account_id` is still required even when the
+/// override is set — it's just unused in that case — so callers don't
+/// need to special-case a second "local" shape of this config.
 #[derive(Debug, Clone)]
 pub struct R2Config {
     pub account_id: String,
@@ -14,6 +17,11 @@ pub struct R2Config {
     pub secret_access_key: String,
     pub bucket_name: String,
     pub public_base_url: String,
+    /// MinIO-only; unset in production, where the endpoint is derived
+    /// from `account_id` instead. Same pattern as
+    /// `SourceStorageConfig`/`TemplateAssetsConfig`'s field of the same
+    /// name.
+    pub endpoint_url_override: Option<String>,
 }
 
 impl R2Config {
@@ -24,12 +32,16 @@ impl R2Config {
             secret_access_key: require_env("R2_SECRET_ACCESS_KEY")?,
             bucket_name: require_env("R2_BUCKET_NAME")?,
             public_base_url: require_env("R2_PUBLIC_BASE_URL")?,
+            endpoint_url_override: non_empty_env("R2_ENDPOINT_URL_OVERRIDE"),
         })
     }
 
-    /// R2's S3-compatible API endpoint for this account.
+    /// R2's S3-compatible API endpoint for this account, or
+    /// `endpoint_url_override` when set.
     pub fn endpoint_url(&self) -> String {
-        format!("https://{}.r2.cloudflarestorage.com", self.account_id)
+        self.endpoint_url_override
+            .clone()
+            .unwrap_or_else(|| format!("https://{}.r2.cloudflarestorage.com", self.account_id))
     }
 }
 

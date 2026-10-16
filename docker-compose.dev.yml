@@ -28,11 +28,17 @@ services:
 
   # S3-compatible stand-in for Cloudflare R2 (real R2 credentials aren't
   # needed for local dev/tests — see backend/tests/common::test_storage,
-  # which points at this same host/bucket/credentials). Exposed on 19000,
-  # not MinIO's default 9000, so it doesn't collide with anything else
-  # listening on 9000.
+  # which points at this same host/bucket/credentials; `cargo run`
+  # against it is R2_ENDPOINT_URL_OVERRIDE, see storage.rs's R2Config).
+  # Exposed on 19000, not MinIO's default 9000, so it doesn't collide with
+  # anything else listening on 9000.
+  #
+  # Uses Chainguard's build rather than `minio/minio` — MinIO stopped
+  # publishing free images to Docker Hub in October 2025 (the last public
+  # `minio/minio` tag is stuck on a known high-severity CVE and won't be
+  # updated).
   minio:
-    image: minio/minio
+    image: cgr.dev/chainguard/minio
     container_name: gifiac-dev-minio
     restart: unless-stopped
     command: server /data
@@ -54,7 +60,9 @@ services:
   # *without* a public policy, matching the real buckets' privacy. Exits
   # after. Safe to re-run (`--ignore-existing`) on every `docker compose up`.
   minio-init:
-    image: minio/mc
+    # `-dev` tag specifically — it's the only one with a shell; the plain
+    # `latest` tag is shell-less and breaks this service's `sh -c` script.
+    image: cgr.dev/chainguard/minio-client:latest-dev
     container_name: gifiac-dev-minio-init
     depends_on:
       - minio

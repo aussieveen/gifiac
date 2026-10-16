@@ -84,6 +84,7 @@ finished GIFs/clips live in R2.
 | `R2_SECRET_ACCESS_KEY` | *(required)* | R2 API token secret |
 | `R2_BUCKET_NAME` | *(required)* | Target R2 bucket, public-read |
 | `R2_PUBLIC_BASE_URL` | *(required)* | Public base URL GIF/clip links are derived from |
+| `R2_ENDPOINT_URL_OVERRIDE` | *(optional)* | Overrides the derived `https://{account_id}.r2.cloudflarestorage.com` endpoint — only set this in local dev, pointing at MinIO |
 | `GOOGLE_CLIENT_ID` | *(required)* | Google OAuth client id |
 | `GOOGLE_CLIENT_SECRET` | *(required)* | Google OAuth client secret |
 | `APP_BASE_URL` | *(required)* | Public site origin (e.g. `https://strewthgif.example.com`) — builds the Google redirect URI and the post-login redirect target. `http://localhost:5173` in local dev; session cookies are only marked `Secure` when this is `https://` |
@@ -134,8 +135,9 @@ Run the backend and frontend as two separate dev processes; Vite proxies
 
 **Backend** (from `backend/`):
 
-Local dev/test dependencies (Postgres + a MinIO stand-in for R2, used only
-by the test suite) run via [`docker-compose.dev.yml`](docker-compose.dev.yml):
+Local dev/test dependencies (Postgres + a MinIO stand-in for R2 — used by
+the test suite, and by `cargo run` too via `R2_ENDPOINT_URL_OVERRIDE`) run
+via [`docker-compose.dev.yml`](docker-compose.dev.yml):
 
 ```sh
 docker compose -f docker-compose.dev.yml up -d
@@ -146,34 +148,59 @@ This matches `config.rs`'s default `DATABASE_URL`
 `backend/tests/common::test_storage`'s hardcoded MinIO endpoint/bucket
 exactly, so no env var overrides are needed to use either as-is.
 
+`cargo run` loads `backend/.env.local` automatically (gitignored, via
+`dotenvy` — see `main.rs`) before reading any env var, so copy the
+template below into that file once rather than exporting it every
+session. It points `R2_*`/`SOURCE_VIDEOS_S3_*`/`TEMPLATE_ASSETS_S3_*` at
+the MinIO stand-in (same bucket/credentials
+`backend/tests/common::test_storage` already hardcodes) and fills in
+`LOGIN_CODE_HMAC_KEY`. This file is unrelated to `backend/.env`, which
+holds real production R2 credentials for `docker-compose.yml` — don't
+confuse the two.
+
 ```sh
-export GIFIAC_VIDEO_DIR=./data/videos
-export R2_ACCOUNT_ID=...          # real Cloudflare R2 credentials — MinIO
-export R2_ACCESS_KEY_ID=...       # above is a test-only stand-in, not
-export R2_SECRET_ACCESS_KEY=...   # something `cargo run` talks to; a
-export R2_BUCKET_NAME=...         # running server still needs real R2.
-export R2_PUBLIC_BASE_URL=...
-export GOOGLE_CLIENT_ID=...        # real Google OAuth client — see
-export GOOGLE_CLIENT_SECRET=...    # SPEC-CLOUD.md §2 for the flow
-export APP_BASE_URL=http://localhost:5173
-# Same MinIO stand-in as above, but the private source-video bucket
-# (SPEC-CLOUD.md §6) — see backend/tests/common::test_source_storage.
-export SOURCE_VIDEOS_S3_ACCESS_KEY_ID=gifiac
-export SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
-export SOURCE_VIDEOS_S3_BUCKET=gifiac-source-videos-test
-export SOURCE_VIDEOS_S3_REGION=us-east-1
-export SOURCE_VIDEOS_S3_ENDPOINT_URL=http://localhost:19000
+# backend/.env.local
+GIFIAC_VIDEO_DIR=./data/videos
+
+# MinIO stand-in for R2 (finished GIF/MP4/WebM storage). `account_id` is
+# unused when R2_ENDPOINT_URL_OVERRIDE is set; any placeholder works.
+R2_ACCOUNT_ID=local
+R2_ACCESS_KEY_ID=gifiac
+R2_SECRET_ACCESS_KEY=gifiac-test-secret
+R2_BUCKET_NAME=gifiac-test
+R2_PUBLIC_BASE_URL=http://localhost:19000/gifiac-test
+R2_ENDPOINT_URL_OVERRIDE=http://localhost:19000
+
+# Same MinIO stand-in, but the private source-video bucket (SPEC-CLOUD.md
+# §6) — see backend/tests/common::test_source_storage.
+SOURCE_VIDEOS_S3_ACCESS_KEY_ID=gifiac
+SOURCE_VIDEOS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
+SOURCE_VIDEOS_S3_BUCKET=gifiac-source-videos-test
+SOURCE_VIDEOS_S3_REGION=us-east-1
+SOURCE_VIDEOS_S3_ENDPOINT_URL=http://localhost:19000
+
 # Same MinIO stand-in again, but the private template-assets bucket
 # (SPEC-CLOUD.md §10) — see backend/tests/common::test_template_assets_storage.
-export TEMPLATE_ASSETS_S3_ACCESS_KEY_ID=gifiac
-export TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
-export TEMPLATE_ASSETS_S3_BUCKET=gifiac-template-assets-test
-export TEMPLATE_ASSETS_S3_REGION=us-east-1
-export TEMPLATE_ASSETS_S3_ENDPOINT_URL=http://localhost:19000
+TEMPLATE_ASSETS_S3_ACCESS_KEY_ID=gifiac
+TEMPLATE_ASSETS_S3_SECRET_ACCESS_KEY=gifiac-test-secret
+TEMPLATE_ASSETS_S3_BUCKET=gifiac-template-assets-test
+TEMPLATE_ASSETS_S3_REGION=us-east-1
+TEMPLATE_ASSETS_S3_ENDPOINT_URL=http://localhost:19000
+
 # Email login (SPEC-EMAIL-AUTH.md) — MAILER defaults to `log`, which
 # prints the code instead of sending it, so this is the only one of the
-# new vars local dev actually needs.
-export LOGIN_CODE_HMAC_KEY=$(openssl rand -base64 32)
+# new vars local dev actually needs. Generate your own with
+# `openssl rand -base64 32`.
+LOGIN_CODE_HMAC_KEY=...
+```
+
+Google OAuth still needs a real client id/secret — no local stand-in
+exists for it (see SPEC-CLOUD.md §2 for the flow):
+
+```sh
+export GOOGLE_CLIENT_ID=...
+export GOOGLE_CLIENT_SECRET=...
+export APP_BASE_URL=http://localhost:5173
 
 cargo run
 ```
