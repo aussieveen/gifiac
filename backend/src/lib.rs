@@ -103,9 +103,18 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     // the source bucket does — the Lambda functions are AWS-native, so
     // the SDK's default chain (the EC2 instance role via IMDS) is always
     // the right one, same reasoning as `Storage::new_for_source_bucket`.
-    let lambda_sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest()).load().await;
-    let lambda_client = aws_sdk_lambda::Client::new(&lambda_sdk_config);
+    // `endpoint_url_override` (local dev only, pointing at `cargo lambda
+    // watch`) still needs *some* credentials to be present for the SDK to
+    // sign requests with, even though the local emulator never checks
+    // them — see backend/.env.local's dummy AWS_ACCESS_KEY_ID/SECRET.
     let lambda_config = lambda_jobs::LambdaConfig::from_env()?;
+    let lambda_sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest()).load().await;
+    let lambda_client = match &lambda_config.endpoint_url_override {
+        Some(url) => aws_sdk_lambda::Client::from_conf(
+            aws_sdk_lambda::config::Builder::from(&lambda_sdk_config).endpoint_url(url).build(),
+        ),
+        None => aws_sdk_lambda::Client::new(&lambda_sdk_config),
+    };
 
     spawn_login_code_cleanup(pool.clone());
 

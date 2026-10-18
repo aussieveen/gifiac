@@ -23,6 +23,13 @@ pub struct LambdaConfig {
     /// Lambda has no user session, so this is the only auth on those
     /// routes (see `routes::internal::verify_callback_token`).
     pub callback_token: String,
+    /// Local-dev-only — points the Lambda client at a `cargo lambda
+    /// watch` instance (which serves both `ingest_lambda` and
+    /// `export_lambda`, routed by function name, from one endpoint —
+    /// confirmed it handles `InvocationType::Event` the same as real
+    /// Lambda) instead of real AWS. Unset in production. Same pattern as
+    /// `storage::R2Config`'s field of the same name.
+    pub endpoint_url_override: Option<String>,
 }
 
 impl LambdaConfig {
@@ -32,8 +39,13 @@ impl LambdaConfig {
             export_function_name: require_env("EXPORT_LAMBDA_FUNCTION_NAME")?,
             callback_base_url: require_env("CALLBACK_BASE_URL")?,
             callback_token: require_env("LAMBDA_CALLBACK_TOKEN")?,
+            endpoint_url_override: non_empty_env("LAMBDA_ENDPOINT_URL_OVERRIDE"),
         })
     }
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 fn require_env(key: &str) -> Result<String> {

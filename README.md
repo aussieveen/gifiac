@@ -98,6 +98,11 @@ finished GIFs/clips live in R2.
 | `TEMPLATE_ASSETS_S3_BUCKET` | *(required)* | Bucket name |
 | `TEMPLATE_ASSETS_S3_REGION` | *(required)* | AWS region the bucket lives in — also used to derive the S3 endpoint URL |
 | `TEMPLATE_ASSETS_S3_ENDPOINT_URL` | *(optional)* | Overrides the derived endpoint — only set this in local dev, pointing at MinIO |
+| `INGEST_LAMBDA_FUNCTION_NAME` | *(required)* | Name of the deployed ingest Lambda function (wayfinder gifiac#32) — `ingest_lambda` in local dev, matching the bin name `cargo lambda watch` serves |
+| `EXPORT_LAMBDA_FUNCTION_NAME` | *(required)* | Name of the deployed export Lambda function — `export_lambda` in local dev |
+| `CALLBACK_BASE_URL` | *(required)* | This backend's own public base URL — the Lambdas POST progress callbacks to `{CALLBACK_BASE_URL}/api/internal/callbacks/*` |
+| `LAMBDA_CALLBACK_TOKEN` | *(required)* | Shared bearer token the callback routes check for (Lambda has no user session) |
+| `LAMBDA_ENDPOINT_URL_OVERRIDE` | *(optional)* | Overrides the AWS SDK's Lambda endpoint — only set this in local dev, pointing at `cargo lambda watch` |
 | `LOGIN_CODE_HMAC_KEY` | *(required)* | ≥32 random bytes, base64 (e.g. `openssl rand -base64 32`) — HMACs the email login code before it's stored (SPEC-EMAIL-AUTH.md §2) |
 | `MAILER` | `log` | `log` prints the login code instead of sending it (local dev/test); `ses` sends via AWS SES and requires `EMAIL_FROM_ADDRESS`/`SES_REGION` |
 | `EMAIL_FROM_ADDRESS` | *(required if `MAILER=ses`)* | The `From:` address for login-code emails |
@@ -192,16 +197,69 @@ TEMPLATE_ASSETS_S3_ENDPOINT_URL=http://localhost:19000
 # new vars local dev actually needs. Generate your own with
 # `openssl rand -base64 32`.
 LOGIN_CODE_HMAC_KEY=...
+
+# Local stand-in for the ingest/export Lambdas — see the `cargo lambda
+# watch` instructions below. Function names must match the bin names in
+# Cargo.toml exactly; the AWS SDK still needs *some* credentials to sign
+# requests with, even against a local endpoint that never checks them.
+INGEST_LAMBDA_FUNCTION_NAME=ingest_lambda
+EXPORT_LAMBDA_FUNCTION_NAME=export_lambda
+CALLBACK_BASE_URL=http://localhost:8080
+LAMBDA_CALLBACK_TOKEN=...
+LAMBDA_ENDPOINT_URL_OVERRIDE=http://localhost:9000
+AWS_ACCESS_KEY_ID=test
+AWS_SECRET_ACCESS_KEY=test
+AWS_REGION=us-east-1
 ```
 
-Google OAuth still needs a real client id/secret — no local stand-in
-exists for it (see SPEC-CLOUD.md §2 for the flow):
+A third dev process runs the ingest/export Lambda handlers locally via
+[`cargo-lambda`](https://www.cargo-lambda.info/) (`cargo install
+cargo-lambda --locked`), alongside `cargo run` and the frontend's
+`npm run dev`:
 
 ```sh
-export GOOGLE_CLIENT_ID=...
-export GOOGLE_CLIENT_SECRET=...
-export APP_BASE_URL=http://localhost:5173
+cargo lambda watch
+```
 
+This serves both `ingest_lambda` and `export_lambda` from one local
+endpoint (`:9000` by default), routed by function name, compiling each
+on its first invocation. It also loads `backend/.env.local` itself (same
+`dotenvy` call as `main.rs`), so it needs no separate env setup. Uploading
+a video (or exporting a GIF/MP4/WebM) through the running app then drives
+the real ingest/export pipeline end to end — real `ffmpeg` probing,
+thumbnail/filmstrip generation, and progress callbacks back to the
+backend — exactly as it would against real AWS Lambda.
+
+Google OAuth still needs a real client id/secret — no local stand-in
+exists for it (see SPEC-CLOUD.md §2 for the flow). Use a **separate OAuth
+client from production**, not the same one — otherwise the real
+production client secret ends up sitting in `backend/.env.local` on your
+machine for no benefit:
+
+1. In [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials),
+   create a new **OAuth client ID** (Application type: **Web
+   application**).
+2. Under **Authorized redirect URIs**, add exactly
+   `http://localhost:5173/api/auth/callback` (this is
+   `GoogleAuthConfig::redirect_uri()` — `{APP_BASE_URL}/api/auth/callback`
+   — derived from `APP_BASE_URL` below, so it must match that value
+   exactly, scheme and port included).
+3. Under **Authorized JavaScript origins**, add
+   `http://localhost:5173`.
+4. If the consent screen is in **Testing** mode (the default for a new
+   project), add your own Google account under **Test users** — only
+   listed accounts can complete the flow until the app is published.
+5. Copy the new client's id/secret into `backend/.env.local` (never
+   `backend/.env` — that one's production's):
+
+```sh
+# backend/.env.local
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+APP_BASE_URL=http://localhost:5173
+```
+
+```sh
 cargo run
 ```
 

@@ -31,6 +31,7 @@ fn test_lambda_config() -> LambdaConfig {
         export_function_name: "test-export".to_string(),
         callback_base_url: "http://127.0.0.1:1".to_string(),
         callback_token: TEST_CALLBACK_TOKEN.to_string(),
+        endpoint_url_override: None,
     }
 }
 

@@ -199,6 +199,8 @@ async fn upload_to_source_bucket(storage: &storage::Storage, key: &str, path: &P
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Local-dev-only — see export_lambda.rs's main() for why.
+    let _ = dotenvy::from_filename(".env.local");
     tracing_subscriber::fmt().without_time().init();
     run(service_fn(handler)).await
 }

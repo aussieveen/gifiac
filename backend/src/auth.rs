@@ -132,11 +132,11 @@ pub async fn fetch_userinfo(http_client: &reqwest::Client, access_token: &str) -
 }
 
 /// Creates a session row and adds its cookie to `jar` — the one real path
-/// every login provider ends in (Google's callback, the email-passcode
-/// verify handler, and the local-dev bypass), so a session created any of
-/// those ways is indistinguishable to the rest of the app. Previously this
-/// was duplicated inline in `routes::auth::callback` and `::dev_login`;
-/// consolidated here so a third copy didn't need writing for email login.
+/// every login provider ends in (Google's callback and the email-passcode
+/// verify handler), so a session created either way is indistinguishable
+/// to the rest of the app. Previously this was duplicated inline in
+/// `routes::auth::callback`; consolidated here so a second copy didn't
+/// need writing for email login.
 pub async fn create_session_and_set_cookie(
     pool: &sqlx::PgPool,
     cookies_require_https: bool,

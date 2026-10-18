@@ -245,6 +245,13 @@ fn output_content_type(format: &str) -> Result<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Local-dev-only — missing in the real deployed Lambda, which gets
+    // its env vars from the function's own configuration instead. Lets
+    // `cargo lambda watch` (which spawns this as `cargo run --bin
+    // export_lambda` in a separate process/terminal) pick up the same
+    // SOURCE_VIDEOS_S3_*/TEMPLATE_ASSETS_S3_* vars as `cargo run`'s main
+    // backend, without having to export them a second time by hand.
+    let _ = dotenvy::from_filename(".env.local");
     tracing_subscriber::fmt().without_time().init();
     run(service_fn(handler)).await
 }
