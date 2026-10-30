@@ -15,11 +15,14 @@ export function BottomSheet({
   label,
   onClose,
   dismissible = true,
+  maxHeight,
   children,
 }: {
   label: string
   onClose: () => void
   dismissible?: boolean
+  /** Overrides the default 90dvh cap, e.g. to follow the on-screen keyboard. */
+  maxHeight?: number
   children: ReactNode
 }) {
   const sheetRef = useRef<HTMLDivElement>(null)
@@ -92,7 +95,10 @@ export function BottomSheet({
         aria-modal="true"
         aria-label={label}
         tabIndex={-1}
-        style={dragOffset ? { transform: `translateY(${dragOffset}px)`, transition: 'none' } : undefined}
+        style={{
+          ...(maxHeight ? { maxHeight } : null),
+          ...(dragOffset ? { transform: `translateY(${dragOffset}px)`, transition: 'none' } : null),
+        }}
         onKeyDown={onKeyDown}
       >
         <div

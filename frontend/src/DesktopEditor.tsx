@@ -1,6 +1,7 @@
 import mark from './assets/brand/strewthgif-mark.svg'
 import { ExportProgressModal } from './ExportProgressModal'
 import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowLeftIcon, BookmarkIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, MinusIcon, PauseIcon, PlayheadIcon, PlayIcon, PlusIcon, XIcon } from './icons'
+import { MAX_LINE_HEIGHT, MIN_LINE_HEIGHT, outlineTextShadow, SWATCH_COLORS } from './captionStyle'
 import { spriteBackgroundStyle, timeToX } from './timeline'
 import { type CaptionEditorState, formatTimecode, FONTS, ZOOM_LEVELS } from './useCaptionEditor'
 
@@ -34,16 +35,7 @@ function ColorSwatches({
 }
 // SPEC.md §14: quick-select swatches shown alongside the native color
 // pickers for caption text and outline color.
-const SWATCH_COLORS = ['#fff35c', '#00ff99', '#00ccff', '#ff6666', '#9933ff', '#fcfcfc', '#000000']
-const MAX_LINE_HEIGHT = 1.5
-const MIN_LINE_HEIGHT = 0.3
 
-/** Mirrors the backend's optional ASS outline: `null` renders no border. */
-function outlineTextShadow(outlineColor: string | null, scale: number): string {
-  if (!outlineColor) return 'none'
-  const o = 2 * scale
-  return `${o}px ${o}px 0 ${outlineColor}, -${o}px -${o}px 0 ${outlineColor}, ${o}px -${o}px 0 ${outlineColor}, -${o}px ${o}px 0 ${outlineColor}`
-}
 export function DesktopEditor({ editor }: { editor: CaptionEditorState }) {
   const {
     source,
@@ -123,6 +115,7 @@ export function DesktopEditor({ editor }: { editor: CaptionEditorState }) {
     togglePlayback,
     handleVideoTimeUpdate,
     handleVideoEnded,
+    handleVideoLoadedMetadata,
     startPositionDrag,
     startWidthDrag,
     activeCaptions,
@@ -327,6 +320,7 @@ export function DesktopEditor({ editor }: { editor: CaptionEditorState }) {
               preload="auto"
               onTimeUpdate={handleVideoTimeUpdate}
               onEnded={handleVideoEnded}
+              onLoadedMetadata={handleVideoLoadedMetadata}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
             />

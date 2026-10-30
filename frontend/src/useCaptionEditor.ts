@@ -46,8 +46,8 @@ const INITIAL_EXPORT_PROGRESS: ExportProgressState = {
 }
 
 export const FONTS = ['Anton, sans-serif', 'Impact, sans-serif', 'Georgia, serif', 'system-ui, sans-serif', "'Courier New', monospace"]
-const MIN_CAPTION_DURATION = 0.25
-const MIN_GIF_RANGE = 0.1
+export const MIN_CAPTION_DURATION = 0.25
+export const MIN_GIF_RANGE = 0.1
 const DEFAULT_CAPTION_WIDTH = 0.6
 const MIN_CAPTION_WIDTH = 0.05
 const MAX_CAPTION_WIDTH = 1
@@ -435,6 +435,18 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     setSelectedId((current) => (current === id ? null : current))
   }
 
+  /** Copies a caption to just after the original, selecting the copy. */
+  function duplicateCaption(id: string) {
+    const original = captions.find((c) => c.id === id)
+    if (!original) return
+    const copyId = newCaptionId()
+    const length = original.endTime - original.startTime
+    const start = clamp(original.endTime, 0, Math.max(0, duration - MIN_CAPTION_DURATION))
+    const end = clamp(start + length, start + MIN_CAPTION_DURATION, duration)
+    setCaptions((cs) => [...cs, { ...original, id: copyId, startTime: start, endTime: end }])
+    setSelectedId(copyId)
+  }
+
   function patchStyle(patch: Partial<Caption>) {
     if (!selected) return
     if (applyToAll) {
@@ -795,6 +807,15 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     setCurrentTime(video.currentTime)
   }
 
+  // A layout swap (crossing 1024px) remounts the <video>, which starts paused
+  // at 0: put it back where the playhead was and clear a stale "playing".
+  function handleVideoLoadedMetadata() {
+    const video = videoRef.current
+    if (!video) return
+    if (Math.abs(video.currentTime - currentTime) > 0.01) video.currentTime = currentTime
+    setIsPlaying(false)
+  }
+
   // Covers the case where `gifRange.end` sits at (or past) the clip's real
   // duration: `timeupdate` may not catch the boundary before the browser's
   // own 'ended' event fires and pauses playback, which would otherwise stop
@@ -1075,6 +1096,10 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     selected,
     addCaption,
     deleteCaption,
+    duplicateCaption,
+    updateCaption,
+    seekTo,
+    setGifRange,
     patchStyle,
     startPillDrag,
     startRangeDrag,
@@ -1093,6 +1118,7 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     togglePlayback,
     handleVideoTimeUpdate,
     handleVideoEnded,
+    handleVideoLoadedMetadata,
     startPositionDrag,
     startWidthDrag,
     activeCaptions,
