@@ -18,6 +18,9 @@ import type {
   TemplateSummary,
   Video,
 } from './types'
+import { UploadError } from './uploadError'
+
+export { UploadError }
 
 // Deliberately doesn't include the request URL/route — that's an
 // implementation detail, not something a user should see in an error
@@ -175,21 +178,6 @@ export interface UploadOptions {
   onProgress?: (progress: UploadProgress) => void
   /** Aborting rejects with an `UploadError` of kind `'aborted'`. */
   signal?: AbortSignal
-}
-
-/** `kind` lets callers tell "the connection dropped" or "the user cancelled"
- * from a server rejection without parsing the message; `status` is set for
- * `'http'` only. */
-export class UploadError extends Error {
-  kind: 'http' | 'network' | 'aborted'
-  status?: number
-
-  constructor(message: string, kind: 'http' | 'network' | 'aborted', status?: number) {
-    super(message)
-    this.name = 'UploadError'
-    this.kind = kind
-    this.status = status
-  }
 }
 
 // XHR rather than fetch: fetch can't report upload progress or be aborted

@@ -655,6 +655,51 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Make GIF' })).not.toBeInTheDocument()
   })
 
+  it('gives insiders the mobile New GIF page and header button at phone width', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, role: 'insider' })
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false, total: 0, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
+    vi.mocked(listMyTemplates).mockResolvedValue([])
+    vi.mocked(listOtherTemplates).mockResolvedValue([])
+
+    resizeTo(390)
+    renderAppAt('/new')
+
+    expect(await screen.findByRole('button', { name: /upload a video/i })).toBeInTheDocument()
+    expect(screen.queryByText('The editor needs a bigger screen')).not.toBeInTheDocument()
+    const newGif = screen.getByRole('link', { name: 'New GIF' })
+    expect(newGif).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keeps plain users on the "bigger screen" message for /new at phone width', async () => {
+    vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false, total: 0, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
+
+    resizeTo(390)
+    renderAppAt('/new')
+
+    await screen.findByText('The editor needs a bigger screen')
+    expect(screen.queryByRole('button', { name: /upload a video/i })).not.toBeInTheDocument()
+  })
+
+  it('opens the editor for an insider at phone width, and keeps it when shrinking from desktop', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ ...loggedInUser, role: 'insider' })
+    vi.mocked(getVideo).mockResolvedValue(video)
+    vi.mocked(getFilmstripMeta).mockResolvedValue(filmstrip)
+
+    resizeTo(390)
+    const phone = renderAppAt('/edit/v1')
+    expect(await screen.findByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
+    expect(screen.queryByText('The editor needs a bigger screen')).not.toBeInTheDocument()
+    phone.unmount()
+
+    resizeTo(1280)
+    renderAppAt('/edit/v1')
+    await screen.findByRole('button', { name: 'Make GIF' })
+    act(() => resizeTo(390))
+
+    expect(screen.getByRole('button', { name: 'Make GIF' })).toBeInTheDocument()
+    expect(screen.queryByText(/widen the window/i)).not.toBeInTheDocument()
+  })
+
   it('renders the editor immediately once resized above the breakpoint, without a reload', async () => {
     vi.mocked(listGifs).mockResolvedValue({ items: [], has_more: false, total: 0, filter_counts: { all: 0, public: 0, private: 0, hidden: 0 }  })
     vi.mocked(getVideo).mockResolvedValue(video)

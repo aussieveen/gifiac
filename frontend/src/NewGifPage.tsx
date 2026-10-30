@@ -14,6 +14,9 @@ import {
 } from './api'
 import { IngestLoadingModal, type IngestStage } from './IngestLoadingModal'
 import { PencilIcon, PlusIcon, TrashIcon, XIcon } from './icons'
+import { MobileNewGif } from './MobileNewGif'
+import { UploadError } from './uploadError'
+import { MAX_UPLOAD_BYTES, UploadSheet, type UploadFailure } from './UploadSheet'
 import type { TemplateDetail, TemplateSummary, Video } from './types'
 
 interface Props {
@@ -22,6 +25,9 @@ interface Props {
   /** Picking a template (own or someone else's) always starts flow B
    * (locked trim range/dimensions, "start from a template"). */
   onStartFromTemplate: (templateId: string) => void
+  /** `mobile` swaps the side panel and centred modals for the phone layout
+   * (bottom sheets); everything else about the page is shared. */
+  layout?: 'desktop' | 'mobile'
 }
 
 type Pill = 'all' | 'mine' | 'shared'
@@ -44,7 +50,21 @@ function parsePill(value: string | null): Pill {
  * with a detail panel showing the selected template's preview, captions,
  * and (owner-only) rename/share/delete controls.
  */
-export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
+/** How long to wait after the page comes back to the foreground for the
+ * upload to make progress again before deciding it died in the background. */
+const RESUME_STALL_MS = 4000
+
+function classifyUploadError(err: unknown): UploadFailure {
+  if (err instanceof UploadError) {
+    if (err.kind === 'network') return 'network'
+    if (err.status === 413) return 'too_large'
+    if (err.status !== undefined && err.status >= 400 && err.status < 500) return 'unsupported'
+  }
+  return 'failed'
+}
+
+export function NewGifPage({ onUploaded, onStartFromTemplate, layout = 'desktop' }: Props) {
+  const mobile = layout === 'mobile'
   const [searchParams, setSearchParams] = useSearchParams()
   const pill = parsePill(searchParams.get('show'))
 
@@ -69,7 +89,14 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [ingestStage, setIngestStage] = useState<IngestStage>('done')
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
+  const [uploadFailure, setUploadFailure] = useState<UploadFailure | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadFileRef = useRef<File | null>(null)
+  const uploadAbortRef = useRef<AbortController | null>(null)
+  const uploadStalledRef = useRef(false)
+  const requestInFlightRef = useRef(false)
+  const progressRef = useRef<UploadProgress | null>(null)
   const ingestUnsubscribeRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -90,7 +117,8 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
         setMyTemplates(myList)
         setOtherTemplates(otherList)
         const initial = pill === 'mine' ? myList : pill === 'shared' ? otherList : [...myList, ...otherList]
-        setSelectedId(initial.length > 0 ? initial[0].id : null)
+        // On a phone a selection opens the sheet, so nothing starts selected.
+        setSelectedId(!mobile && initial.length > 0 ? initial[0].id : null)
       })
       .catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
@@ -162,6 +190,7 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
 
   function selectPill(next: Pill) {
     setSearchParams(next === 'all' ? {} : { show: next }, { replace: true })
+    if (mobile) return
     const list = listFor(next)
     // Keep the current selection if it's still in the new list; otherwise
     // fall back to that list's first template.
@@ -171,15 +200,39 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     })
   }
 
-  async function handleFiles(files: FileList | null) {
+  function handleFiles(files: FileList | null) {
     const file = files?.[0]
     if (!file) return
+    void startUpload(file)
+  }
+
+  async function startUpload(file: File) {
+    uploadFileRef.current = file
     setUploading(true)
     setUploadError(null)
-    setIngestStage('uploading')
+    setUploadFailure(null)
     setUploadProgress(null)
+    progressRef.current = null
+    if (mobile && file.size > MAX_UPLOAD_BYTES) {
+      setUploadFailure('too_large')
+      setIngestStage('error')
+      setUploading(false)
+      return
+    }
+    setIngestStage('uploading')
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
+    uploadStalledRef.current = false
+    requestInFlightRef.current = true
     try {
-      const { job_id } = await uploadVideo(file, { onProgress: setUploadProgress })
+      const { job_id } = await uploadVideo(file, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          progressRef.current = progress
+          setUploadProgress(progress)
+        },
+      })
+      requestInFlightRef.current = false
       ingestUnsubscribeRef.current = subscribeIngestProgress(job_id, {
         onStage: (stage) => setIngestStage(stage),
         onComplete: (video) => {
@@ -190,15 +243,78 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
         onError: (message) => {
           setIngestStage('error')
           setUploadError(message)
+          if (mobile) setUploadFailure('unsupported')
           setUploading(false)
         },
       })
     } catch (err) {
-      setIngestStage('done')
-      setUploadError(err instanceof Error ? err.message : String(err))
+      requestInFlightRef.current = false
+      if (err instanceof UploadError && err.kind === 'aborted' && !uploadStalledRef.current) {
+        // Cancelled on purpose: back to a clean page, no error.
+        setIngestStage('done')
+        setUploading(false)
+        return
+      }
+      if (mobile) {
+        setUploadFailure(uploadStalledRef.current ? 'network' : classifyUploadError(err))
+        setIngestStage('error')
+      } else {
+        setIngestStage('done')
+        setUploadError(err instanceof Error ? err.message : String(err))
+      }
       setUploading(false)
     }
   }
+
+  function cancelUpload() {
+    const sent = progressRef.current
+    if (sent && sent.total > 0 && sent.loaded / sent.total > 0.5 && requestInFlightRef.current) {
+      if (!window.confirm('Cancel this upload? What has been sent so far will be lost.')) return
+    }
+    uploadAbortRef.current?.abort()
+    ingestUnsubscribeRef.current?.()
+    ingestUnsubscribeRef.current = null
+    setUploadFailure(null)
+    setUploadError(null)
+    setIngestStage('done')
+    setUploading(false)
+  }
+
+  function retryUpload() {
+    if (uploadFileRef.current) void startUpload(uploadFileRef.current)
+  }
+
+  function chooseAnotherVideo() {
+    setUploadFailure(null)
+    setIngestStage('done')
+    setUploading(false)
+    fileInputRef.current?.click()
+  }
+
+  // Phone browsers pause or kill an upload when the tab is backgrounded.
+  // On coming back, if the request is still "in flight" but not moving,
+  // treat it as dropped so the person gets Retry instead of a stuck bar.
+  useEffect(() => {
+    if (!mobile) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    function onVisibilityChange() {
+      if (document.visibilityState !== 'visible' || !requestInFlightRef.current) return
+      const before = progressRef.current?.loaded ?? -1
+      timer = setTimeout(() => {
+        const now = progressRef.current
+        if (!requestInFlightRef.current || (now && now.loaded >= now.total && now.total > 0)) return
+        if ((now?.loaded ?? -1) === before) {
+          uploadStalledRef.current = true
+          uploadAbortRef.current?.abort()
+        }
+      }, RESUME_STALL_MS)
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      clearTimeout(timer)
+    }
+  }, [mobile])
 
   function dismissIngestError() {
     setIngestStage('done')
@@ -254,6 +370,54 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     } finally {
       setDeleting(false)
     }
+  }
+
+  if (mobile) {
+    return (
+      <>
+        <MobileNewGif
+          pill={pill}
+          counts={{ all: all.length, mine: mine.length, shared: shared.length }}
+          onSelectPill={selectPill}
+          templates={templates}
+          loading={loading}
+          loadError={loadError}
+          uploadError={ingestStage === 'done' ? uploadError : null}
+          fileInputRef={fileInputRef}
+          onFiles={handleFiles}
+          onOpenTemplate={setSelectedId}
+          sheet={{
+            open: selectedId !== null,
+            detail,
+            loading: detailLoading,
+            error: detailError,
+            actionError,
+            renaming,
+            nameDraft,
+            renameInputRef,
+            togglingPublic,
+            deleting,
+            onClose: () => setSelectedId(null),
+            onStart: onStartFromTemplate,
+            onStartRename: startRename,
+            onNameDraftChange: setNameDraft,
+            onSaveRename: saveRename,
+            onCancelRename: () => setRenaming(false),
+            onTogglePublic: togglePublic,
+            onDelete: handleDelete,
+          }}
+        />
+        <UploadSheet
+          file={uploadFileRef.current}
+          stage={ingestStage}
+          progress={uploadProgress}
+          failure={uploadFailure}
+          onCancel={cancelUpload}
+          onRetry={retryUpload}
+          onChooseAnother={chooseAnotherVideo}
+        />
+      </>
+    )
   }
 
   return (

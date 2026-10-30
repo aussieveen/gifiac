@@ -19,7 +19,7 @@ import { PublicHomePage } from './PublicHomePage'
 import { consumeReturnTo, saveReturnTo } from './returnTo'
 import type { LibraryView } from './LibrarySidebar'
 import type { CurrentUser, FilmstripMeta, Gif, TemplateDetail, Video } from './types'
-import { useCanEdit } from './useCanEdit'
+import { useEditorLayout } from './useEditorLayout'
 import { useClickOutside } from './useClickOutside'
 import { useCurrentUser } from './useCurrentUser'
 import { useToast } from './useToast'
@@ -119,12 +119,13 @@ function ArchiveRoute({ refreshToken }: { refreshToken: number }) {
   )
 }
 
-function NewGifRoute() {
+function NewGifRoute({ user }: { user: CurrentUser }) {
   const navigate = useNavigate()
-  const canEdit = useCanEdit()
-  if (!canEdit) return <EditorUnavailable />
+  const layout = useEditorLayout(user)
+  if (layout === 'unavailable') return <EditorUnavailable />
   return (
     <NewGifPage
+      layout={layout}
       onUploaded={(video) => navigate(`/edit/${video.id}`)}
       onStartFromTemplate={(templateId) => navigate(`/from-template/${templateId}`)}
     />
@@ -136,10 +137,11 @@ function NewGifRoute() {
  * down from wherever the link was clicked — this route has to work the
  * same way whether it was reached from the video picker just now, or a
  * page refresh / shared link landed here directly. */
-function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
+function EditRoute({ user, onGifCreated }: { user: CurrentUser; onGifCreated: (gif: Gif) => void }) {
   const { videoId } = useParams<{ videoId: string }>()
   const navigate = useNavigate()
-  const canEdit = useCanEdit()
+  const layout = useEditorLayout(user)
+  const canEdit = layout !== 'unavailable'
   // Once the editor has actually mounted, shrinking the window shouldn't
   // unmount it and lose in-progress work — CaptionEditor shows a slim
   // banner instead. Only a direct link opened below the breakpoint (editor
@@ -213,6 +215,7 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
       filmstrip={filmstrip}
       onBack={backToPicker}
       onGifCreated={onGifCreated}
+      layout={layout}
       belowBreakpoint={!canEdit}
     />
   )
@@ -223,11 +226,12 @@ function EditRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
  * not video id: the template's own self-contained clip is what's loaded,
  * so this works even for a public template whose source video the
  * viewer has no access to. Same load/error/loading shape as `EditRoute`. */
-function FromTemplateRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void }) {
+function FromTemplateRoute({ user, onGifCreated }: { user: CurrentUser; onGifCreated: (gif: Gif) => void }) {
   const { templateId } = useParams<{ templateId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const canEdit = useCanEdit()
+  const layout = useEditorLayout(user)
+  const canEdit = layout !== 'unavailable'
   // Only set when this route was reached via a GIF's "Remix this GIF"
   // link (Archive.tsx/Library.tsx pass it as router state) — threaded
   // through to the editor so its header can read "Remix of: <name>"
@@ -300,6 +304,7 @@ function FromTemplateRoute({ onGifCreated }: { onGifCreated: (gif: Gif) => void 
       filmstrip={filmstrip}
       onBack={backToPicker}
       onGifCreated={onGifCreated}
+      layout={layout}
       belowBreakpoint={!canEdit}
     />
   )
@@ -406,7 +411,8 @@ function AuthenticatedApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const canEdit = useCanEdit()
+  const layout = useEditorLayout(user)
+  const canEdit = layout !== 'unavailable'
   const [showImportModal, setShowImportModal] = useState(false)
   const importButtonRef = useRef<HTMLButtonElement>(null)
   // Bumped on every successful import/removal so `Archive` (which this
@@ -441,9 +447,14 @@ function AuthenticatedApp({
         </Link>
         <div className="app-header-right">
           {canEdit && (
-            <Link to="/new" className="btn btn-primary">
+            <Link
+              to="/new"
+              className={`btn btn-primary app-header-new-gif ${location.pathname === '/new' ? 'is-current' : ''}`}
+              aria-label="New GIF"
+              aria-current={location.pathname === '/new' ? 'page' : undefined}
+            >
               <PlusIcon />
-              New GIF
+              <span className="app-header-new-gif-label">New GIF</span>
             </Link>
           )}
           <button
@@ -500,11 +511,11 @@ function AuthenticatedApp({
         <Route path="/library/:gifId" element={<ArchiveRoute refreshToken={libraryRefreshToken} />} />
         <Route path="/explore" element={<Navigate to="/" replace />} />
         <Route path="/preferences" element={<Preferences user={user} onUserChange={onUserChange} />} />
-        <Route path="/new" element={<NewGifRoute />} />
-        <Route path="/edit/:videoId" element={<EditRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />} />
+        <Route path="/new" element={<NewGifRoute user={user} />} />
+        <Route path="/edit/:videoId" element={<EditRoute user={user} onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />} />
         <Route
           path="/from-template/:templateId"
-          element={<FromTemplateRoute onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />}
+          element={<FromTemplateRoute user={user} onGifCreated={(gif) => navigate(`/library/${gif.id}`)} />}
         />
         {user.role === 'admin' && <Route path="/admin" element={<AdminPage currentUserId={user.id} />} />}
         <Route path="*" element={<Navigate to="/library" replace />} />
