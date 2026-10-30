@@ -166,10 +166,81 @@ export interface UploadAccepted {
   job_id: string
 }
 
-export function uploadVideo(file: File): Promise<UploadAccepted> {
+export interface UploadProgress {
+  loaded: number
+  total: number
+}
+
+export interface UploadOptions {
+  onProgress?: (progress: UploadProgress) => void
+  /** Aborting rejects with an `UploadError` of kind `'aborted'`. */
+  signal?: AbortSignal
+}
+
+/** `kind` lets callers tell "the connection dropped" or "the user cancelled"
+ * from a server rejection without parsing the message; `status` is set for
+ * `'http'` only. */
+export class UploadError extends Error {
+  kind: 'http' | 'network' | 'aborted'
+  status?: number
+
+  constructor(message: string, kind: 'http' | 'network' | 'aborted', status?: number) {
+    super(message)
+    this.name = 'UploadError'
+    this.kind = kind
+    this.status = status
+  }
+}
+
+// XHR rather than fetch: fetch can't report upload progress or be aborted
+// mid-body in every browser, and the upload UI needs both.
+export function uploadVideo(file: File, options: UploadOptions = {}): Promise<UploadAccepted> {
   const body = new FormData()
   body.append('file', file, file.name)
-  return request<UploadAccepted>('/api/videos', { method: 'POST', body })
+  const { onProgress, signal } = options
+
+  return new Promise<UploadAccepted>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new UploadError('Upload cancelled', 'aborted'))
+      return
+    }
+    const xhr = new XMLHttpRequest()
+    const onAbort = () => xhr.abort()
+    signal?.addEventListener('abort', onAbort)
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+
+    xhr.open('POST', '/api/videos')
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.({ loaded: e.loaded, total: e.total })
+    }
+    xhr.onload = () => {
+      cleanup()
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as UploadAccepted)
+        } catch {
+          reject(new UploadError('Upload response was not valid JSON', 'http', xhr.status))
+        }
+        return
+      }
+      reject(
+        new UploadError(
+          `Request failed (${xhr.status}): ${xhr.responseText || xhr.statusText}`,
+          'http',
+          xhr.status,
+        ),
+      )
+    }
+    xhr.onerror = () => {
+      cleanup()
+      reject(new UploadError('The upload stopped. Check your connection and try again.', 'network'))
+    }
+    xhr.onabort = () => {
+      cleanup()
+      reject(new UploadError('Upload cancelled', 'aborted'))
+    }
+    xhr.send(body)
+  })
 }
 
 // One of `ingest_jobs.stage`'s non-terminal values, relayed as-is from

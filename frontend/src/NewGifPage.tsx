@@ -10,6 +10,7 @@ import {
   subscribeIngestProgress,
   templateThumbnailUrl,
   uploadVideo,
+  type UploadProgress,
 } from './api'
 import { IngestLoadingModal, type IngestStage } from './IngestLoadingModal'
 import { PencilIcon, PlusIcon, TrashIcon, XIcon } from './icons'
@@ -67,6 +68,7 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [ingestStage, setIngestStage] = useState<IngestStage>('done')
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const ingestUnsubscribeRef = useRef<(() => void) | null>(null)
 
@@ -175,8 +177,9 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
     setUploading(true)
     setUploadError(null)
     setIngestStage('uploading')
+    setUploadProgress(null)
     try {
-      const { job_id } = await uploadVideo(file)
+      const { job_id } = await uploadVideo(file, { onProgress: setUploadProgress })
       ingestUnsubscribeRef.current = subscribeIngestProgress(job_id, {
         onStage: (stage) => setIngestStage(stage),
         onComplete: (video) => {
@@ -294,7 +297,10 @@ export function NewGifPage({ onUploaded, onStartFromTemplate }: Props) {
       {loading && <p className="va-hint">Loading templates…</p>}
       {loadError && <p className="export-error">{loadError}</p>}
       {uploadError && ingestStage === 'done' && <p className="export-error">{uploadError}</p>}
-      <IngestLoadingModal stage={ingestStage} errorMessage={uploadError ?? undefined} onDismissError={dismissIngestError} />
+      <IngestLoadingModal stage={ingestStage} errorMessage={uploadError ?? undefined}
+        onDismissError={dismissIngestError}
+        uploadProgress={uploadProgress}
+      />
 
       <div className="newgif-layout">
         <div className="newgif-grid">

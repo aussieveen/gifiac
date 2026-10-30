@@ -78,22 +78,108 @@ describe('listVideos', () => {
   })
 })
 
+class FakeXhr {
+  static last: FakeXhr
+  method = ''
+  url = ''
+  body: unknown = null
+  status = 0
+  statusText = ''
+  responseText = ''
+  aborted = false
+  upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = {
+    onprogress: null,
+  }
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onabort: (() => void) | null = null
+  constructor() {
+    FakeXhr.last = this
+  }
+  open(method: string, url: string) {
+    this.method = method
+    this.url = url
+  }
+  send(body: unknown) {
+    this.body = body
+  }
+  abort() {
+    this.aborted = true
+    this.onabort?.()
+  }
+  respond(status: number, text: string) {
+    this.status = status
+    this.responseText = text
+    this.onload?.()
+  }
+}
+
 describe('uploadVideo', () => {
+  beforeEach(() => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+  })
+
   it('POSTs the file as multipart form data under the "file" field', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'v1' }))
-    vi.stubGlobal('fetch', fetchMock)
     const file = new File(['bytes'], 'clip.mp4', { type: 'video/mp4' })
 
-    await uploadVideo(file)
+    const promise = uploadVideo(file)
+    const xhr = FakeXhr.last
+    xhr.respond(202, JSON.stringify({ video_id: 'v1', job_id: 'j1' }))
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('/api/videos')
-    expect(init.method).toBe('POST')
-    expect(init.body).toBeInstanceOf(FormData)
-    const submitted = (init.body as FormData).get('file') as File
+    await expect(promise).resolves.toEqual({ video_id: 'v1', job_id: 'j1' })
+    expect(xhr.url).toBe('/api/videos')
+    expect(xhr.method).toBe('POST')
+    expect(xhr.body).toBeInstanceOf(FormData)
+    const submitted = (xhr.body as FormData).get('file') as File
     expect(submitted.name).toBe('clip.mp4')
     expect(submitted.type).toBe('video/mp4')
+  })
+
+  it('reports byte progress while uploading', async () => {
+    const onProgress = vi.fn()
+    const promise = uploadVideo(new File(['x'], 'a.mp4'), { onProgress })
+    const xhr = FakeXhr.last
+
+    xhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 200 })
+    xhr.upload.onprogress?.({ lengthComputable: false, loaded: 0, total: 0 })
+    xhr.respond(202, '{"video_id":"v","job_id":"j"}')
+    await promise
+
+    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 50, total: 200 })
+  })
+
+  it('rejects with the status for a server rejection', async () => {
+    const promise = uploadVideo(new File(['x'], 'a.mp4'))
+    FakeXhr.last.respond(413, 'too big')
+
+    await expect(promise).rejects.toMatchObject({ kind: 'http', status: 413 })
+    await expect(promise).rejects.toThrow(/413/)
+  })
+
+  it('rejects with a network error when the connection drops', async () => {
+    const promise = uploadVideo(new File(['x'], 'a.mp4'))
+    FakeXhr.last.onerror?.()
+
+    await expect(promise).rejects.toMatchObject({ kind: 'network' })
+  })
+
+  it('aborts the request when the signal fires', async () => {
+    const controller = new AbortController()
+    const promise = uploadVideo(new File(['x'], 'a.mp4'), { signal: controller.signal })
+    controller.abort()
+
+    await expect(promise).rejects.toMatchObject({ kind: 'aborted' })
+    expect(FakeXhr.last.aborted).toBe(true)
+  })
+
+  it('rejects immediately when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(uploadVideo(new File(['x'], 'a.mp4'), { signal: controller.signal })).rejects.toMatchObject({
+      kind: 'aborted',
+    })
   })
 })
 

@@ -4286,6 +4286,40 @@ h1.profile-handle {
   flex-shrink: 0;
 }
 
+.ingest-modal-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ingest-modal-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ingest-modal-upload-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.ingest-modal-upload-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.ingest-modal-upload-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
 .ingest-modal-error {
   font-size: 13px;
   color: var(--danger);
