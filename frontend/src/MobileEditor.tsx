@@ -99,7 +99,6 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
     activeCaptions,
     addCaption,
     deleteCaption,
-    duplicateCaption,
     updateCaption,
     patchStyle,
     seekTo,
@@ -385,18 +384,6 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
                   }}
                 >
                   Add caption at playhead
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="m-menu-item"
-                  disabled={!selected}
-                  onClick={() => {
-                    setMenuOpen(false)
-                    if (selected) duplicateCaption(selected.id)
-                  }}
-                >
-                  Duplicate caption
                 </button>
                 <button
                   type="button"

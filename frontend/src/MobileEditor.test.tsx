@@ -148,7 +148,7 @@ describe('MobileEditor', () => {
     expect(screen.getAllByRole('option')[0]).toHaveTextContent('Hello')
   })
 
-  it('adds, duplicates and deletes captions from the ⋯ menu', async () => {
+  it('adds and deletes captions from the ⋯ menu', async () => {
     const user = userEvent.setup()
     renderVideoEditor()
     expect(screen.queryAllByRole('option')).toHaveLength(0)
@@ -159,12 +159,9 @@ describe('MobileEditor', () => {
     expect(screen.getByLabelText('Caption text')).toHaveValue('New caption')
 
     await user.click(screen.getByRole('button', { name: 'Caption options' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Duplicate caption' }))
-    expect(screen.getAllByRole('option')).toHaveLength(2)
-
-    await user.click(screen.getByRole('button', { name: 'Caption options' }))
+    expect(screen.queryByRole('menuitem', { name: /duplicate/i })).not.toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', { name: 'Delete caption' }))
-    expect(screen.getAllByRole('option')).toHaveLength(1)
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
   })
 
   it('Timing steppers change the in/out times by 0.01s, Set to playhead jumps to the playhead', async () => {

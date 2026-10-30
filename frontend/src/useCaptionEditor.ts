@@ -435,18 +435,6 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     setSelectedId((current) => (current === id ? null : current))
   }
 
-  /** Copies a caption to just after the original, selecting the copy. */
-  function duplicateCaption(id: string) {
-    const original = captions.find((c) => c.id === id)
-    if (!original) return
-    const copyId = newCaptionId()
-    const length = original.endTime - original.startTime
-    const start = clamp(original.endTime, 0, Math.max(0, duration - MIN_CAPTION_DURATION))
-    const end = clamp(start + length, start + MIN_CAPTION_DURATION, duration)
-    setCaptions((cs) => [...cs, { ...original, id: copyId, startTime: start, endTime: end }])
-    setSelectedId(copyId)
-  }
-
   function patchStyle(patch: Partial<Caption>) {
     if (!selected) return
     if (applyToAll) {
@@ -1096,7 +1084,6 @@ export function useCaptionEditor({ source, filmstrip, onBack, onGifCreated, belo
     selected,
     addCaption,
     deleteCaption,
-    duplicateCaption,
     updateCaption,
     seekTo,
     setGifRange,
