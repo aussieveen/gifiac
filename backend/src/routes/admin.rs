@@ -60,6 +60,40 @@ pub async fn set_user_disabled(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetUserRoleRequest {
+    role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserRoleResponse {
+    id: String,
+    role: String,
+}
+
+/// Toggles a user between `user` and `insider` (people with early access
+/// to features not yet public). `admin` can't be granted or revoked here.
+pub async fn set_user_role(
+    State(state): State<Arc<AppState>>,
+    AdminUser(admin): AdminUser,
+    AxPath(id): AxPath<String>,
+    Json(body): Json<SetUserRoleRequest>,
+) -> Result<Json<UserRoleResponse>, AppError> {
+    if body.role != "user" && body.role != "insider" {
+        return Err(AppError::BadRequest("role must be 'user' or 'insider'".to_string()));
+    }
+    let target = db::get_user(&state.pool, &id).await?.ok_or(AppError::NotFound)?;
+    if target.role == "admin" {
+        return Err(AppError::Conflict("cannot change an admin's role here".to_string()));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let updated = db::admin_set_user_role(&state.pool, &target, &body.role, &admin.id, &now).await?;
+    Ok(Json(UserRoleResponse {
+        id: updated.id,
+        role: updated.role,
+    }))
+}
+
 pub async fn list_user_gifs(
     State(state): State<Arc<AppState>>,
     AdminUser(_admin): AdminUser,

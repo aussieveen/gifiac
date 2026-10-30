@@ -97,6 +97,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/preferences", put(preferences::update_preferences))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::set_user_disabled).delete(admin::delete_user))
+        .route("/admin/users/{id}/role", patch(admin::set_user_role))
         .route("/admin/users/{id}/gifs", get(admin::list_user_gifs))
         .route("/admin/users/{id}/templates", get(admin::list_user_templates))
         .route("/admin/gifs/{id}", delete(admin::delete_gif))

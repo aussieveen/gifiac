@@ -893,6 +893,48 @@ pub async fn set_user_disabled(pool: &PgPool, id: &str, disabled: bool) -> Resul
         .map_err(Into::into)
 }
 
+/// Flips a non-admin between `user` and `insider` and writes the
+/// `admin_actions` audit row in the same transaction. Promoting anyone to
+/// (or demoting anyone from) `admin` is deliberately not reachable here —
+/// that stays a manual SQL change. The caller has already rejected
+/// admin targets and unknown roles.
+pub async fn admin_set_user_role(
+    pool: &PgPool,
+    target: &User,
+    new_role: &str,
+    admin_id: &str,
+    now: &str,
+) -> Result<User> {
+    let mut tx = pool.begin().await?;
+
+    let sql = format!("UPDATE users SET role = $1 WHERE id = $2 RETURNING {USER_COLUMNS}");
+    let updated = sqlx::query_as::<_, User>(sqlx::AssertSqlSafe(sql))
+        .bind(new_role)
+        .bind(&target.id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let details = serde_json::to_string(&serde_json::json!({
+        "handle": target.handle,
+        "from": target.role,
+        "to": new_role,
+    }))?;
+    sqlx::query(
+        "INSERT INTO admin_actions (id, admin_user_id, action_type, target_id, details, created_at) \
+         VALUES ($1, $2, 'set_role', $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(admin_id)
+    .bind(&target.id)
+    .bind(&details)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(updated)
+}
+
 /// The actual mechanism behind "disable revokes the user's sessions"
 /// (SPEC-CLOUD.md §7) — `CurrentUser`'s existing session-lookup-fails-401
 /// behavior does the rest, immediately, on the next request.

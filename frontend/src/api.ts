@@ -646,6 +646,14 @@ export function setUserDisabled(id: string, disabled: boolean): Promise<{ id: st
   })
 }
 
+export function setUserRole(id: string, role: 'user' | 'insider'): Promise<{ id: string; role: string }> {
+  return request<{ id: string; role: string }>(`/api/admin/users/${id}/role`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+}
+
 // Admin-scoped equivalent of `deleteGif` — no ownership check, so an admin
 // can remove any user's gif (design brief §5: the Global Library's Delete
 // action, admin-only).

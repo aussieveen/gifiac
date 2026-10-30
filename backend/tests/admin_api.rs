@@ -671,3 +671,100 @@ async fn deleting_an_unknown_gif_as_admin_returns_404() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+async fn patch_role(
+    test_app: &common::TestApp,
+    cookie: &str,
+    user_id: &str,
+    role: &str,
+) -> (StatusCode, serde_json::Value) {
+    let response = test_app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/admin/users/{user_id}/role"))
+                .header("content-type", "application/json")
+                .header("cookie", cookie)
+                .body(Body::from(json!({ "role": role }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+#[tokio::test]
+async fn admin_can_toggle_a_user_to_insider_and_back_with_an_audit_row() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+    let _target_cookie = login_as(&test_app, "target@example.com").await;
+    let target_id = find_user_id(&test_app, &admin_cookie, "target@example.com").await;
+
+    for role in ["insider", "user"] {
+        let (status, body) = patch_role(&test_app, &admin_cookie, &target_id, role).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["role"], role);
+        let stored: String = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+            .bind(&target_id)
+            .fetch_one(&test_app.pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, role);
+    }
+
+    let audit_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM admin_actions WHERE action_type = 'set_role' AND target_id = $1",
+    )
+    .bind(&target_id)
+    .fetch_one(&test_app.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_rows, 2);
+}
+
+#[tokio::test]
+async fn role_endpoint_only_accepts_user_or_insider() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+    let _target_cookie = login_as(&test_app, "target@example.com").await;
+    let target_id = find_user_id(&test_app, &admin_cookie, "target@example.com").await;
+
+    let (status, _) = patch_role(&test_app, &admin_cookie, &target_id, "admin").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn role_endpoint_refuses_to_change_an_admin() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+    let _other_cookie = login_as_admin(&test_app, "other-admin@example.com").await;
+    let other_id = find_user_id(&test_app, &admin_cookie, "other-admin@example.com").await;
+
+    let (status, _) = patch_role(&test_app, &admin_cookie, &other_id, "user").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn role_endpoint_is_admin_only_and_404s_for_unknown_users() {
+    let test_app = spawn_app().await;
+    let admin_cookie = login_as_admin(&test_app, "admin@example.com").await;
+    let user_cookie = login_as(&test_app, "user@example.com").await;
+    let user_id = find_user_id(&test_app, &admin_cookie, "user@example.com").await;
+
+    let (status, _) = patch_role(&test_app, &user_cookie, &user_id, "insider").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = patch_role(
+        &test_app,
+        &admin_cookie,
+        "00000000-0000-0000-0000-000000000000",
+        "insider",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

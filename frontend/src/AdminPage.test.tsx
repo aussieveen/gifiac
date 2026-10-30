@@ -7,11 +7,12 @@ import type { AdminActionView, AdminUserView } from './types'
 vi.mock('./api', () => ({
   listAdminUsers: vi.fn(),
   setUserDisabled: vi.fn(),
+  setUserRole: vi.fn(),
   deleteUser: vi.fn(),
   listAdminActions: vi.fn(),
 }))
 
-import { deleteUser, listAdminActions, listAdminUsers, setUserDisabled } from './api'
+import { deleteUser, listAdminActions, listAdminUsers, setUserDisabled, setUserRole } from './api'
 
 const activeUser: AdminUserView = {
   id: 'u1',
@@ -49,6 +50,7 @@ const sampleAction: AdminActionView = {
 beforeEach(() => {
   vi.mocked(listAdminUsers).mockReset()
   vi.mocked(setUserDisabled).mockReset()
+  vi.mocked(setUserRole).mockReset()
   vi.mocked(deleteUser).mockReset()
   vi.mocked(listAdminActions).mockReset()
   vi.mocked(listAdminActions).mockResolvedValue([])
@@ -65,6 +67,23 @@ describe('AdminPage', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getByText('(no handle)')).toBeInTheDocument()
     expect(screen.getByText('newbie@example.com')).toBeInTheDocument()
+  })
+
+  it('toggles a user to insider and back, and never offers it for admins', async () => {
+    vi.mocked(listAdminUsers).mockResolvedValue([activeUser, noHandleUser])
+    vi.mocked(setUserRole).mockResolvedValueOnce({ id: 'u2', role: 'insider' })
+    vi.mocked(setUserRole).mockResolvedValueOnce({ id: 'u2', role: 'user' })
+
+    render(<AdminPage currentUserId="u1" />)
+
+    await screen.findByText('newbie@example.com')
+    expect(screen.getAllByRole('button', { name: /insider/i })).toHaveLength(1)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Make insider' }))
+    expect(setUserRole).toHaveBeenLastCalledWith('u2', 'insider')
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove insider' }))
+    expect(setUserRole).toHaveBeenLastCalledWith('u2', 'user')
+    await screen.findByRole('button', { name: 'Make insider' })
   })
 
   it('shows a load error when the users request fails', async () => {

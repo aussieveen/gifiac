@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { deleteUser, listAdminActions, listAdminUsers, setUserDisabled } from './api'
+import { deleteUser, listAdminActions, listAdminUsers, setUserDisabled, setUserRole } from './api'
 import type { AdminActionView, AdminUserView } from './types'
 
 // SPEC-CLOUD.md §7: owner-only admin area. Deliberately minimal — a
@@ -44,6 +44,18 @@ export function AdminPage({ currentUserId }: { currentUserId: string }) {
     try {
       const updated = await setUserDisabled(user.id, !user.disabled)
       setUsers((us) => us.map((u) => (u.id === updated.id ? { ...u, disabled: updated.disabled } : u)))
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  async function toggleInsider(user: AdminUserView) {
+    setPendingId(user.id)
+    try {
+      const updated = await setUserRole(user.id, user.role === 'insider' ? 'user' : 'insider')
+      setUsers((us) => us.map((u) => (u.id === updated.id ? { ...u, role: updated.role } : u)))
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -108,6 +120,11 @@ export function AdminPage({ currentUserId }: { currentUserId: string }) {
               <td>{user.latest_gif_at ? new Date(user.latest_gif_at).toLocaleDateString() : '—'}</td>
               <td>{new Date(user.created_at).toLocaleDateString()}</td>
               <td>
+                {user.role !== 'admin' && (
+                  <button className="btn btn-secondary" onClick={() => toggleInsider(user)} disabled={pendingId === user.id}>
+                    {user.role === 'insider' ? 'Remove insider' : 'Make insider'}
+                  </button>
+                )}
                 <button className="btn btn-secondary" onClick={() => toggleDisabled(user)} disabled={pendingId === user.id}>
                   {user.disabled ? 'Enable' : 'Disable'}
                 </button>
