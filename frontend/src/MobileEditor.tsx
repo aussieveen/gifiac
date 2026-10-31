@@ -22,7 +22,9 @@ import {
   type CaptionEditorState,
   formatTimecode,
   FONTS,
+  MAX_CAPTION_WIDTH,
   MIN_CAPTION_DURATION,
+  MIN_CAPTION_WIDTH,
 } from './useCaptionEditor'
 
 type Tab = 'text' | 'style' | 'timing'
@@ -59,6 +61,13 @@ interface PositionDrag {
   startY: number
   origX: number
   origY: number
+}
+
+interface WidthDrag {
+  id: string
+  edge: 'left' | 'right'
+  startX: number
+  origWidth: number
 }
 
 /**
@@ -167,6 +176,30 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
     positionDragRef.current = null
   }
 
+  // ----- resizing the selected caption from its edge handles. Symmetric
+  // around the centre (the box is always centred on x), so a delta on one
+  // edge changes the total width by twice that delta — same as desktop.
+  const widthDragRef = useRef<WidthDrag | null>(null)
+  function onWidthPointerDown(e: React.PointerEvent, c: Caption, edge: 'left' | 'right') {
+    e.stopPropagation()
+    setSelectedId(c.id)
+    widthDragRef.current = { id: c.id, edge, startX: e.clientX, origWidth: c.width }
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  function onWidthPointerMove(e: React.PointerEvent) {
+    const drag = widthDragRef.current
+    const rect = previewRef.current?.getBoundingClientRect()
+    if (!drag || !rect || rect.width === 0) return
+    const sign = drag.edge === 'right' ? 1 : -1
+    const fraction = (e.clientX - drag.startX) / rect.width
+    updateCaption(drag.id, {
+      width: clamp(drag.origWidth + sign * fraction * 2, MIN_CAPTION_WIDTH, MAX_CAPTION_WIDTH),
+    })
+  }
+  function onWidthPointerEnd() {
+    widthDragRef.current = null
+  }
+
   // ----- collapsing the trim strip while the panel is scrolled
   const [collapsed, setCollapsed] = useState(false)
   const lastToggleRef = useRef(0)
@@ -268,6 +301,22 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
               }}
             >
               {c.text}
+              {selectedId === c.id &&
+                (['left', 'right'] as const).map((edge) => (
+                  <span
+                    key={edge}
+                    role="slider"
+                    aria-label={`Caption width, ${edge} edge`}
+                    aria-valuemin={MIN_CAPTION_WIDTH}
+                    aria-valuemax={MAX_CAPTION_WIDTH}
+                    aria-valuenow={Number(c.width.toFixed(2))}
+                    className={`m-caption-handle ${edge}`}
+                    onPointerDown={(e) => onWidthPointerDown(e, c, edge)}
+                    onPointerMove={onWidthPointerMove}
+                    onPointerUp={onWidthPointerEnd}
+                    onPointerCancel={onWidthPointerEnd}
+                  />
+                ))}
             </div>
           ))}
         </div>
@@ -412,7 +461,7 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
               value={selected.text}
               onChange={(e) => updateCaption(selected.id, { text: e.target.value })}
             />
-            <p className="m-hint">Drag the caption on the video to move it.</p>
+            <p className="m-hint">Drag the caption on the video to move it, or its edges to resize it.</p>
           </div>
         ) : tab === 'style' ? (
           <div className="m-panel-body">

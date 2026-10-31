@@ -49,8 +49,8 @@ export const FONTS = ['Anton, sans-serif', 'Impact, sans-serif', 'Georgia, serif
 export const MIN_CAPTION_DURATION = 0.25
 export const MIN_GIF_RANGE = 0.1
 const DEFAULT_CAPTION_WIDTH = 0.6
-const MIN_CAPTION_WIDTH = 0.05
-const MAX_CAPTION_WIDTH = 1
+export const MIN_CAPTION_WIDTH = 0.05
+export const MAX_CAPTION_WIDTH = 1
 // Matches the backend default (models.rs `default_line_height`) — ASS has
 // no line-spacing control independent of font size, so the backend lays
 // multi-line captions out line-by-line using this same multiplier. It only

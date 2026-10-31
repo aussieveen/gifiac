@@ -6453,3 +6453,40 @@ h1.profile-handle {
   font-size: 14px;
   font-weight: 700;
 }
+
+/* Edge handles for resizing the selected caption's width. Inside the box so
+   they aren't clipped by the video frame; the pseudo-element widens the
+   touch target to 44px. */
+.m-caption-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  background: rgba(245, 197, 24, 0.6);
+  touch-action: none;
+}
+
+.m-caption-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 44px;
+  height: max(100%, 44px);
+  transform: translateY(-50%);
+}
+
+.m-caption-handle.left {
+  left: 0;
+}
+
+.m-caption-handle.left::after {
+  left: 0;
+}
+
+.m-caption-handle.right {
+  right: 0;
+}
+
+.m-caption-handle.right::after {
+  right: 0;
+}

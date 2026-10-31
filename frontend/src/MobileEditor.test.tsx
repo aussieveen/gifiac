@@ -317,6 +317,52 @@ describe('MobileEditor', () => {
     expect(screen.getByRole('button', { name: 'Text colour #00ff99' })).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('resizes the selected caption from its edge handles, symmetrically and within limits', () => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 400, bottom: 225, width: 400, height: 225, x: 0, y: 0, toJSON: () => ({}),
+    })
+    renderTemplateEditor()
+    fireEvent.click(screen.getAllByRole('option')[0]) // selects caption 1 and moves the playhead to it
+    const right = screen.getByRole('slider', { name: 'Caption width, right edge' })
+    expect(right).toHaveAttribute('aria-valuenow', '0.6')
+
+    fireEvent.pointerDown(right, { clientX: 300, pointerId: 1 })
+    fireEvent.pointerMove(right, { clientX: 340, pointerId: 1 }) // +10% of the frame, x2
+    fireEvent.pointerUp(right, { pointerId: 1 })
+    expect(right).toHaveAttribute('aria-valuenow', '0.8')
+
+    const left = screen.getByRole('slider', { name: 'Caption width, left edge' })
+    fireEvent.pointerDown(left, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(left, { clientX: 300, pointerId: 1 }) // far inward: clamps to the minimum
+    fireEvent.pointerUp(left, { pointerId: 1 })
+    expect(left).toHaveAttribute('aria-valuenow', '0.05')
+
+    fireEvent.pointerDown(right, { clientX: 0, pointerId: 1 })
+    fireEvent.pointerMove(right, { clientX: 4000, pointerId: 1 }) // far outward: clamps to full width
+    fireEvent.pointerUp(right, { pointerId: 1 })
+    expect(right).toHaveAttribute('aria-valuenow', '1')
+  })
+
+  it('shows width handles only on the selected caption, and dragging them does not move it', () => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 400, bottom: 225, width: 400, height: 225, x: 0, y: 0, toJSON: () => ({}),
+    })
+    renderTemplateEditor()
+    expect(screen.queryAllByRole('slider', { name: /caption width/i })).toHaveLength(0) // no caption is active at 0s
+
+    fireEvent.click(screen.getAllByRole('option')[0])
+    expect(screen.getAllByRole('slider', { name: /caption width/i })).toHaveLength(2)
+    const caption = screen.getByRole('slider', { name: 'Caption width, right edge' }).parentElement!
+    const before = caption.style.left
+
+    const right = screen.getByRole('slider', { name: 'Caption width, right edge' })
+    fireEvent.pointerDown(right, { clientX: 300, pointerId: 1 })
+    fireEvent.pointerMove(right, { clientX: 350, pointerId: 1 })
+    fireEvent.pointerUp(right, { pointerId: 1 })
+
+    expect(caption.style.left).toBe(before)
+  })
+
   it('keeps font size within 12–72', async () => {
     const user = userEvent.setup()
     renderTemplateEditor()
