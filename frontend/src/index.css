@@ -5811,6 +5811,39 @@ h1.profile-handle {
   opacity: 1;
 }
 
+/* Collapse chevron under the expanded strip — the mirror of the mini
+   strip's expand chevron. */
+.m-strip-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  max-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  opacity: 0;
+  transition:
+    max-height 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.m-strip-collapse.shown {
+  max-height: 32px;
+  height: 32px;
+  opacity: 1;
+}
+
+.m-strip-collapse svg {
+  transform: rotate(180deg);
+}
+
+.m-strip-mini svg {
+  color: var(--accent);
+}
+
 .m-strip-mini-bar {
   position: relative;
   flex: 1;
@@ -5845,6 +5878,7 @@ h1.profile-handle {
 
 @media (prefers-reduced-motion: reduce) {
   .m-strip-wrap,
+  .m-strip-collapse,
   .m-strip-mini {
     transition: none;
   }

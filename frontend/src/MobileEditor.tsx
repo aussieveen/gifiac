@@ -356,6 +356,16 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
       </div>
       <button
         type="button"
+        className={`m-strip-collapse ${collapsed ? '' : 'shown'}`}
+        aria-label="Hide trim strip"
+        tabIndex={collapsed ? -1 : 0}
+        aria-hidden={collapsed || undefined}
+        onClick={() => changeCollapsed(true)}
+      >
+        <ChevronDownIcon size={14} />
+      </button>
+      <button
+        type="button"
         className={`m-strip-mini ${collapsed ? 'shown' : ''}`}
         aria-label="Show trim strip"
         tabIndex={collapsed ? 0 : -1}
