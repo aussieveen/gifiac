@@ -341,21 +341,37 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
       </div>
 
       <div className="m-strip-head">
-        <div
-          className={`m-strip-mini ${collapsed ? 'shown' : ''}`}
-          aria-hidden="true"
-          onClick={() => changeCollapsed(false)}
-        >
-          <span className="m-strip-mini-bar">
-            <span
-              className="m-strip-mini-range"
-              style={{ left: pctOfClip(gifRange.start), width: pctOfClip(gifRange.end - gifRange.start) }}
+        <div className="m-strip-slot">
+          <div className={`m-strip-wrap ${collapsed ? 'collapsed' : ''}`} aria-hidden={collapsed || undefined}>
+            <MobileTrimStrip
+              duration={duration}
+              filmstrip={filmstrip}
+              gifRange={gifRange}
+              setGifRange={setGifRange}
+              currentTime={currentTime}
+              seekTo={seekTo}
+              pauseVideo={() => videoRef.current?.pause()}
+              captions={ordered}
+              selectedId={selectedId}
+              locked={isTemplateSource}
             />
-            {ordered.map((c) => (
-              <span key={c.id} className="m-strip-mini-tick" style={{ left: pctOfClip(c.startTime) }} />
-            ))}
-            <span className="m-strip-mini-playhead" style={{ left: pctOfClip(currentTime) }} />
-          </span>
+          </div>
+          <div
+            className={`m-strip-mini ${collapsed ? 'shown' : ''}`}
+            aria-hidden="true"
+            onClick={() => changeCollapsed(false)}
+          >
+            <span className="m-strip-mini-bar">
+              <span
+                className="m-strip-mini-range"
+                style={{ left: pctOfClip(gifRange.start), width: pctOfClip(gifRange.end - gifRange.start) }}
+              />
+              {ordered.map((c) => (
+                <span key={c.id} className="m-strip-mini-tick" style={{ left: pctOfClip(c.startTime) }} />
+              ))}
+              <span className="m-strip-mini-playhead" style={{ left: pctOfClip(currentTime) }} />
+            </span>
+          </div>
         </div>
         <button
           type="button"
@@ -366,20 +382,6 @@ export function MobileEditor({ editor }: { editor: CaptionEditorState }) {
         >
           <ChevronDownIcon size={14} />
         </button>
-      </div>
-      <div className={`m-strip-wrap ${collapsed ? 'collapsed' : ''}`} aria-hidden={collapsed || undefined}>
-        <MobileTrimStrip
-          duration={duration}
-          filmstrip={filmstrip}
-          gifRange={gifRange}
-          setGifRange={setGifRange}
-          currentTime={currentTime}
-          seekTo={seekTo}
-          pauseVideo={() => videoRef.current?.pause()}
-          captions={ordered}
-          selectedId={selectedId}
-          locked={isTemplateSource}
-        />
       </div>
 
       <div className="m-chips" role="listbox" aria-label="Captions">

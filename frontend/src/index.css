@@ -5654,7 +5654,7 @@ h1.profile-handle {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 16px 6px;
+  padding: 10px 14px 6px;
 }
 
 .m-strip-hint {
@@ -5788,27 +5788,32 @@ h1.profile-handle {
 
 .m-strip-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
   flex-shrink: 0;
-  height: 44px;
-  margin: 0 16px;
+  min-height: 44px;
+  margin: 0 16px 0 2px;
 }
 
-/* Only visible while the strip is collapsed; the toggle at its right edge
-   stays put either way. */
+/* Holds the full strip while expanded and the mini bar while collapsed, to
+   the left of the toggle, which stays put either way. */
+.m-strip-slot {
+  flex: 1;
+  min-width: 0;
+}
+
 .m-strip-mini {
   display: flex;
-  flex: 1;
   align-items: center;
+  height: 0;
+  padding: 0 0 0 14px;
+  overflow: hidden;
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
 .m-strip-mini.shown {
+  height: 44px;
   opacity: 1;
-  pointer-events: auto;
 }
 
 .m-strip-toggle {
@@ -5817,7 +5822,7 @@ h1.profile-handle {
   justify-content: center;
   width: 44px;
   height: 44px;
-  margin: 0 -14px 0 auto;
+  margin: 0 -14px 0 8px;
   padding: 0;
   flex-shrink: 0;
   border: none;
