@@ -4117,6 +4117,12 @@ h1.profile-handle {
     border: none;
     border-radius: 0;
     max-height: 100vh;
+    max-height: 100dvh;
+    /* The panel is a fixed overlay, so it has to scroll itself — the page
+       behind it can't. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding: 0 16px calc(84px + env(safe-area-inset-bottom));
     gap: 16px;
   }
