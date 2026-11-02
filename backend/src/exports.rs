@@ -96,9 +96,17 @@ pub async fn finalize_gif(state: &AppState, job: &ExportJob) -> anyhow::Result<G
 /// export, which has no source video of its own.
 pub async fn cleanup_after_all_formats(state: &AppState, job: &ExportJob) -> anyhow::Result<()> {
     let context: ExportJobContext = serde_json::from_str(&job.request_json)?;
-    let ExportJobContext::Video { video_id, owner_id, .. } = context else {
+    let ExportJobContext::Video { video_id, owner_id, request } = context else {
         return Ok(());
     };
+
+    // A template-saving export hands the video's fate to `finalize_video_gif`
+    // (keeps it if the template saved, deletes it if not). Deleting it here
+    // would race that save: mp4/webm callbacks land while the gif callback is
+    // still clipping/uploading, and the `templates.video_id` FK then fails.
+    if request.save_as_template {
+        return Ok(());
+    }
 
     // A video that was never turned into a template is scratch space —
     // see `routes::videos::delete_video_and_its_assets`'s call site
@@ -200,6 +208,11 @@ async fn finalize_video_gif(
         .await
         {
             tracing::warn!(video_id = %video.id, error = ?err, "failed to save template requested alongside export");
+            // `cleanup_after_all_formats` skips template-saving exports, so
+            // a failed save would otherwise orphan the source video.
+            if let Err(err) = crate::routes::videos::delete_video_and_its_assets(state, &video.id, owner_id).await {
+                tracing::warn!(video_id = %video.id, error = ?err, "failed to clean up source video after failed template save");
+            }
         } else if let Some(template_id) = db::get_template_id(&state.pool, &video.id).await? {
             db::set_gif_template_id(&state.pool, &gif.id, &template_id).await?;
             gif.template_id = Some(template_id);
