@@ -263,7 +263,7 @@ describe('Library', () => {
 
     await user.click(screen.getByRole('button', { name: 'Embed' }))
 
-    expect(writeText).toHaveBeenCalledWith(`<img src="${entryA.gif_url}" alt="cat jumping">`)
+    expect(writeText).toHaveBeenCalledWith(`<img src="${entryA.gif_url}" alt="cat jumping" width="480" height="270">`)
     await screen.findByText(/embed copied/i)
   })
 

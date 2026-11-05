@@ -518,7 +518,9 @@ export function Archive({ view, initialSelectedId, onSelectGif, refreshToken }: 
   // so we only emit `src`/`alt`.
   async function copyEmbed() {
     if (!selected?.gif_url) return
-    const tag = `<img src="${selected.gif_url}" alt="${escapeHtml(selected.name)}">`
+    // Linked GIFs have no stored dimensions, so the attributes are omitted.
+    const size = selected.width && selected.height ? ` width="${selected.width}" height="${selected.height}"` : ''
+    const tag = `<img src="${selected.gif_url}" alt="${escapeHtml(selected.name)}"${size}>`
     try {
       await copyToClipboard(tag)
       recordUse(selected.id)

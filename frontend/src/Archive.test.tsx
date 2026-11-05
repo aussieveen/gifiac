@@ -363,7 +363,7 @@ describe('Archive', () => {
     })
     await user.click(screen.getByRole('button', { name: 'Embed' }))
 
-    expect(writeText).toHaveBeenCalledWith(`<img src="${gifA.gif_url}" alt="cat jumping">`)
+    expect(writeText).toHaveBeenCalledWith(`<img src="${gifA.gif_url}" alt="cat jumping" width="480" height="270">`)
     await screen.findByText(/embed copied/i)
   })
 
@@ -403,7 +403,7 @@ describe('Archive', () => {
     await user.click(screen.getByRole('button', { name: 'Embed' }))
 
     expect(writeText).toHaveBeenCalledWith(
-      `<img src="${gifA.gif_url}" alt="cat &amp; dog &lt;&quot;jumping&quot;&gt;">`,
+      `<img src="${gifA.gif_url}" alt="cat &amp; dog &lt;&quot;jumping&quot;&gt;" width="480" height="270">`,
     )
   })
 
