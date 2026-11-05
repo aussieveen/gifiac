@@ -67,6 +67,11 @@ resource "aws_iam_role_policy" "lambda_source_videos" {
       Resource = [
         "${aws_s3_bucket.source_videos.arn}/*",
       ]
+      }, {
+      Sid      = "TemplateAssetsBucketRead"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = ["${aws_s3_bucket.template_assets.arn}/*"]
     }]
   })
 }
@@ -120,11 +125,14 @@ resource "aws_lambda_function" "export" {
     variables = {
       SOURCE_VIDEOS_S3_BUCKET = aws_s3_bucket.source_videos.bucket
       SOURCE_VIDEOS_S3_REGION = var.aws_region
-      R2_ACCOUNT_ID           = var.r2_account_id
-      R2_ACCESS_KEY_ID        = var.r2_access_key_id
-      R2_SECRET_ACCESS_KEY    = var.r2_secret_access_key
-      R2_BUCKET_NAME          = var.r2_bucket_name
-      R2_PUBLIC_BASE_URL      = var.r2_public_base_url
+      # Template exports read the template's clip from this bucket.
+      TEMPLATE_ASSETS_S3_BUCKET = aws_s3_bucket.template_assets.bucket
+      TEMPLATE_ASSETS_S3_REGION = var.aws_region
+      R2_ACCOUNT_ID             = var.r2_account_id
+      R2_ACCESS_KEY_ID          = var.r2_access_key_id
+      R2_SECRET_ACCESS_KEY      = var.r2_secret_access_key
+      R2_BUCKET_NAME            = var.r2_bucket_name
+      R2_PUBLIC_BASE_URL        = var.r2_public_base_url
     }
   }
 

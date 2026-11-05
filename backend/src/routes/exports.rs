@@ -80,7 +80,7 @@ pub async fn create_export(
         owner_id: user.id.clone(),
         request: request.clone(),
     };
-    start_export_job(&state, export_id, &context, &source_key, &ass_content, request.gif_range_start, clip_duration).await?;
+    start_export_job(&state, export_id, &context, &source_key, false, &ass_content, request.gif_range_start, clip_duration).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -125,7 +125,7 @@ pub async fn create_template_export(
         owner_id: user.id.clone(),
         request: request.clone(),
     };
-    start_export_job(&state, export_id, &context, &source_key, &ass_content, 0.0, clip_duration).await?;
+    start_export_job(&state, export_id, &context, &source_key, true, &ass_content, 0.0, clip_duration).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -146,6 +146,7 @@ async fn start_export_job(
     export_id: Uuid,
     context: &ExportJobContext,
     source_key: &str,
+    source_in_template_assets: bool,
     ass_content: &str,
     range_start: f64,
     clip_duration: f64,
@@ -163,7 +164,7 @@ async fn start_export_job(
             ExportFormat::Mp4 => paths::mp4_object_key(&export_id),
             ExportFormat::Webm => paths::webm_object_key(&export_id),
         };
-        if let Err(err) = lambda_jobs::invoke_export(state, export_id, format, source_key, ass_content, range_start, clip_duration, &output_key).await
+        if let Err(err) = lambda_jobs::invoke_export(state, export_id, format, source_key, source_in_template_assets, ass_content, range_start, clip_duration, &output_key).await
         {
             tracing::error!(export_id = %export_id, format = format.as_str(), error = ?err, "failed to invoke export lambda");
         }

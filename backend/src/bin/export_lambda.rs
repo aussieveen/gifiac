@@ -19,6 +19,10 @@ struct ExportRequest {
     job_id: String,
     format: String, // "gif" | "mp4" | "webm"
     source_key: String,
+    /// A template's clip lives in the template-assets bucket, not the
+    /// source-videos one `source_key` otherwise names.
+    #[serde(default)]
+    source_in_template_assets: bool,
     /// Caption .ass content, inlined — the Lambda has no disk shared
     /// with the backend to read a file path from.
     ass_content: String,
@@ -98,8 +102,13 @@ async fn handler(event: LambdaEvent<ExportRequest>) -> Result<ExportResponse, Er
 }
 
 async fn run_export(req: &ExportRequest, http_client: &reqwest::Client) -> Result<()> {
-    let source_videos = storage::SourceStorageConfig::from_env()?;
-    let source_storage = storage::Storage::new_for_source_bucket(&source_videos).await;
+    let source_storage = if req.source_in_template_assets {
+        let template_assets = storage::TemplateAssetsConfig::from_env()?;
+        storage::Storage::new_for_template_assets_bucket(&template_assets).await
+    } else {
+        let source_videos = storage::SourceStorageConfig::from_env()?;
+        storage::Storage::new_for_source_bucket(&source_videos).await
+    };
     // R2 is not an AWS-native resource — no instance/execution-role IMDS
     // chain reaches it, so credentials come from Lambda env vars
     // (terraform piece 5), same explicit-credentials path the EC2 app
